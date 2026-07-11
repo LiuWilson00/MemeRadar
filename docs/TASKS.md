@@ -62,8 +62,10 @@
 - [ ] **P3-1** Adapter 框架 + Reddit adapter（PRAW、水位增量、候選 schema）— **M**（依賴 P0-4）
   - 進度：已實作並通過測試 ✅（`ingestion/base.py` 統一候選 schema + SourceAdapter 介面；`crawl_state` 水位表；`ingestion/reddit.py`：水位增量、min_score 門檻先過再抓留言、gallery 多圖、PRAW 與公開 JSON 雙客戶端、CLI）；真實抓取 ⏳ 被 Reddit 403 擋（免憑證端點已封鎖）——**需在 reddit.com/prefs/apps 建 script app 並填 .env 的 REDDIT_CLIENT_ID/SECRET 後以 `--client praw` 驗證**（praw 已裝好）
 - [ ] **P3-2** Dcard adapter（節流、UA、失敗告警）— **M**（依賴 P3-1 框架）
-- [ ] **P3-3** 去重三層漏斗：SHA256 / pHash / CLIP + 人工佇列 + 熱度累加（02 文件 §4）— **L**（依賴 P3-1）
-  - 驗收：02 文件 §8 測試組全過；「同模板不同字」不誤殺
+- [x] **P3-3** 去重三層漏斗：SHA256 / pHash / CLIP + 佇列 + 熱度累加（02 文件 §4，判定策略依實證修訂）— **L**（依賴 P3-1）
+  - 驗收：02 文件 §8 測試組全過 ✅（單元 15 項 + 真 CLIP 煙霧）；「同模板不同字」不誤殺 ✅——真實驗證曾抓到原規格會誤殺（pHash 距離 0、CLIP 0.993），已修訂為「僅 SHA256 自動判重；L2/L3 進佇列，標註後以 OCR 比對自動裁決」，修訂已寫回 02 文件 §4
+  - 交付：`ingestion/dedup.py`（Deduplicator + ClipImageEmbedder + absorb_duplicate + maybe_upgrade_image + resolve_pending_reviews）、migration 0003 dedup_reviews、hotness_gain = 1 + log10(1+upvotes)
+  - 已知限制：加大框＋裁切等激烈改造可能掉出 L3 偵測帶（小浮水印 L2 可攔）
 - [ ] **P3-4** 規則引擎價值過濾 + 批次報表（02 文件 §5–6）— **S**（依賴 P3-1）
 - [ ] **P3-5** 排程整合：cron 觸發「抓取 → 去重 → 過濾 → Batch 標註 → 入索引」全自動管線 — **M**（依賴 P3-2, P3-3, P3-4, P1-2）
   - 驗收：連續 7 天無人工介入，批次報表數字對帳

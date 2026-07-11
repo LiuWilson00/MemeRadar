@@ -15,6 +15,7 @@ from memeradar.shared.models import (
     MemeAnnotation,
     MemeSource,
     RecommendationLog,
+    new_id,
 )
 
 
@@ -314,6 +315,91 @@ def annotation_from_row(row: sqlite3.Row) -> MemeAnnotation:
         confidence=row["confidence"],
         annotated_at=row["annotated_at"],
     )
+
+
+def set_phash(conn: sqlite3.Connection, meme_id: str, phash: str) -> None:
+    conn.execute("UPDATE memes SET phash = ? WHERE meme_id = ?", (phash, meme_id))
+    conn.commit()
+
+
+def list_phashes(conn: sqlite3.Connection) -> list[tuple[str, str]]:
+    """所有已知 pHash（去重 L2 比對用）。"""
+    rows = conn.execute("SELECT meme_id, phash FROM memes WHERE phash IS NOT NULL").fetchall()
+    return [(r["meme_id"], r["phash"]) for r in rows]
+
+
+def update_meme_image(
+    conn: sqlite3.Connection,
+    meme_id: str,
+    *,
+    image_uri: str,
+    sha256: str,
+    width: int,
+    height: int,
+) -> None:
+    """以較高解析度版本替換主圖（docs/02 §4）。"""
+    conn.execute(
+        "UPDATE memes SET image_uri = ?, sha256 = ?, width = ?, height = ? WHERE meme_id = ?",
+        (image_uri, sha256, width, height, meme_id),
+    )
+    conn.commit()
+
+
+def list_embeddings_by_kind(
+    conn: sqlite3.Connection, *, kind: str, model: str
+) -> dict[str, list[float]]:
+    """指定簽名的全部向量（去重 L3 比對用；量級 <10 萬列可全載）。"""
+    rows = conn.execute(
+        "SELECT meme_id, vector FROM embeddings WHERE kind = ? AND model = ?", (kind, model)
+    ).fetchall()
+    return {r["meme_id"]: _loads(r["vector"]) for r in rows}
+
+
+# ── dedup_reviews（去重人工佇列）────────────────────────────────────
+
+
+def add_dedup_review(
+    conn: sqlite3.Connection,
+    *,
+    meme_id: str,
+    matched_meme_id: str,
+    layer: str,
+    score: float | None,
+) -> str:
+    review_id = new_id("dr")
+    conn.execute(
+        """
+        INSERT INTO dedup_reviews (review_id, meme_id, matched_meme_id, layer, score)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (review_id, meme_id, matched_meme_id, layer, score),
+    )
+    conn.commit()
+    return review_id
+
+
+def list_dedup_reviews(conn: sqlite3.Connection, resolution: str = "pending") -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM dedup_reviews WHERE resolution = ? ORDER BY created_at", (resolution,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_dedup_review_resolution(
+    conn: sqlite3.Connection, review_id: str, resolution: str
+) -> None:
+    conn.execute(
+        "UPDATE dedup_reviews SET resolution = ? WHERE review_id = ?", (resolution, review_id)
+    )
+    conn.commit()
+
+
+def move_sources(conn: sqlite3.Connection, *, from_meme_id: str, to_meme_id: str) -> None:
+    """把重複梗圖的來源 metadata 併入保留的主圖（docs/02 §4 合併）。"""
+    conn.execute(
+        "UPDATE meme_sources SET meme_id = ? WHERE meme_id = ?", (to_meme_id, from_meme_id)
+    )
+    conn.commit()
 
 
 # ── crawl_state（爬蟲水位）──────────────────────────────────────────
