@@ -53,3 +53,15 @@ cp .env.example .env  # 再填入 ANTHROPIC_API_KEY 等
 ```bash
 python -m memeradar.shared.db
 ```
+
+匯入人工 seed 梗圖（可依主題建子資料夾，資料夾名會成為標註時的上下文提示；重跑冪等）：
+
+```bash
+python -m memeradar.ingestion.seed_import <資料夾>
+```
+
+批次標註尚未標註的梗圖（需先在 `.env` 設定 `ANTHROPIC_API_KEY`）：
+
+```bash
+python -m memeradar.understanding.annotator [--limit N]
+```

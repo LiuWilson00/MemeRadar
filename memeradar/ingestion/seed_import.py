@@ -1,0 +1,143 @@
+"""人工 seed 梗圖匯入（docs/02 §2 資料源 P0：人工匯入）。
+
+用法：把精選圖片放進資料夾（可依主題建子資料夾，如 ``seed/海綿寶寶/``），
+執行 ``python -m memeradar.ingestion.seed_import <folder>``。
+
+- 以 sha256 去重：重跑冪等，已入庫的圖直接跳過。
+- 圖檔複製到 ``{data_dir}/images/{meme_id}{ext}``，DB 只存相對路徑。
+- 子資料夾名記為 manual source 的 ``post_title``，供標註時當作上下文提示。
+- 人工精選集不套用爬蟲的尺寸門檻（策展人已把關），過小僅警告。
+- 報表含每資料夾張數，輔助 P0-3 的策略錨點配平檢查。
+"""
+
+from __future__ import annotations
+
+import hashlib
+import shutil
+import sqlite3
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from PIL import Image, UnidentifiedImageError
+
+from memeradar.shared import repository as repo
+from memeradar.shared.config import get_settings
+from memeradar.shared.db import connect, migrate
+from memeradar.shared.models import Meme, MemeSource, new_id
+
+SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+MIN_SHORT_SIDE = 200  # docs/02 §5 規則門檻；seed 僅警告
+
+
+@dataclass
+class ImportReport:
+    imported: int = 0
+    skipped_duplicate: int = 0
+    skipped_unsupported: int = 0
+    errors: int = 0
+    warnings: list[str] = field(default_factory=list)
+    per_folder: dict[str, int] = field(default_factory=dict)
+
+
+def _normalized_ext(path: Path) -> str:
+    ext = path.suffix.lower()
+    return ".jpg" if ext == ".jpeg" else ext
+
+
+def import_seed_folder(
+    conn: sqlite3.Connection, folder: Path, data_dir: Path | None = None
+) -> ImportReport:
+    folder = Path(folder)
+    data_dir = Path(data_dir) if data_dir is not None else get_settings().memeradar_data_dir
+    images_dir = data_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    report = ImportReport()
+    for path in sorted(p for p in folder.rglob("*") if p.is_file()):
+        if _normalized_ext(path) not in SUPPORTED_EXTENSIONS:
+            report.skipped_unsupported += 1
+            continue
+
+        content = path.read_bytes()
+        sha256 = hashlib.sha256(content).hexdigest()
+        if repo.find_meme_by_sha256(conn, sha256) is not None:
+            report.skipped_duplicate += 1
+            continue
+
+        try:
+            with Image.open(path) as img:
+                width, height = img.size
+        except (UnidentifiedImageError, OSError):
+            report.errors += 1
+            report.warnings.append(f"無法讀取圖片，已跳過：{path}")
+            continue
+
+        if min(width, height) < MIN_SHORT_SIDE:
+            report.warnings.append(f"尺寸過小（{width}x{height}）仍匯入：{path.name}")
+
+        meme_id = new_id("m")
+        ext = _normalized_ext(path)
+        dest = images_dir / f"{meme_id}{ext}"
+        shutil.copyfile(path, dest)
+
+        rel_dir = path.parent.relative_to(folder)
+        folder_hint = None if str(rel_dir) == "." else str(rel_dir).replace("\\", "/")
+
+        repo.insert_meme(
+            conn,
+            Meme(
+                meme_id=meme_id,
+                image_uri=f"images/{meme_id}{ext}",
+                sha256=sha256,
+                width=width,
+                height=height,
+            ),
+        )
+        repo.add_source(
+            conn,
+            MemeSource(
+                source_id=new_id("s"),
+                meme_id=meme_id,
+                platform="manual",
+                post_title=folder_hint,
+            ),
+        )
+        report.imported += 1
+        key = folder_hint or "."
+        report.per_folder[key] = report.per_folder.get(key, 0) + 1
+
+    return report
+
+
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+
+    if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+        sys.stdout.reconfigure(encoding="utf-8")
+
+    parser = argparse.ArgumentParser(description="匯入人工 seed 梗圖資料夾")
+    parser.add_argument("folder", type=Path, help="含圖片的資料夾（可含主題子資料夾）")
+    args = parser.parse_args(argv)
+
+    conn = connect()
+    try:
+        migrate(conn)
+        report = import_seed_folder(conn, args.folder)
+    finally:
+        conn.close()
+
+    print(
+        f"匯入 {report.imported} 張；重複跳過 {report.skipped_duplicate}；"
+        f"不支援格式 {report.skipped_unsupported}；讀取失敗 {report.errors}"
+    )
+    if report.per_folder:
+        print("各資料夾張數（配平參考）：")
+        for name, count in sorted(report.per_folder.items()):
+            print(f"  {name}: {count}")
+    for warning in report.warnings:
+        print(f"[警告] {warning}")
+
+
+if __name__ == "__main__":
+    main()

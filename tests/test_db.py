@@ -169,6 +169,30 @@ class TestSeedRoundtrip:
             repo.set_status(conn, meme.meme_id, "not-a-status")
 
 
+class TestMissingAnnotationQuery:
+    def test_lists_only_unannotated_non_removed(self, conn):
+        meme_a, ann_a, *_ = make_seed_meme()
+        repo.insert_meme(conn, meme_a)
+        repo.upsert_annotation(conn, ann_a)  # 已標註 → 不應列出
+
+        meme_b = Meme(meme_id=new_id("m"), image_uri="b.png", sha256="b" * 64)
+        repo.insert_meme(conn, meme_b)  # 未標註 → 應列出
+
+        meme_c = Meme(meme_id=new_id("m"), image_uri="c.png", sha256="c" * 64)
+        repo.insert_meme(conn, meme_c)
+        repo.set_status(conn, meme_c.meme_id, "removed")  # 已下架 → 不應列出
+
+        pending = repo.list_memes_missing_annotation(conn)
+        assert [m.meme_id for m in pending] == [meme_b.meme_id]
+
+    def test_respects_limit(self, conn):
+        for i in range(3):
+            repo.insert_meme(
+                conn, Meme(meme_id=new_id("m"), image_uri=f"{i}.png", sha256=str(i) * 64)
+            )
+        assert len(repo.list_memes_missing_annotation(conn, limit=2)) == 2
+
+
 class TestRecommendationAndFeedback:
     def _seed_log(self, conn, meme_id: str) -> RecommendationLog:
         log = RecommendationLog(

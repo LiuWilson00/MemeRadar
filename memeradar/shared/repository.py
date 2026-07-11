@@ -93,6 +93,21 @@ def count_memes(conn: sqlite3.Connection, status: str | None = None) -> int:
     return row["n"]
 
 
+def list_memes_missing_annotation(conn: sqlite3.Connection, limit: int | None = None) -> list[Meme]:
+    """列出尚未標註且未下架的梗圖（標註管線的工作佇列）。"""
+    sql = """
+        SELECT m.* FROM memes m
+        LEFT JOIN meme_annotations a ON a.meme_id = m.meme_id
+        WHERE a.meme_id IS NULL AND m.status != 'removed'
+        ORDER BY m.first_seen_at
+    """
+    params: tuple = ()
+    if limit is not None:
+        sql += " LIMIT ?"
+        params = (limit,)
+    return [_row_to_meme(r) for r in conn.execute(sql, params).fetchall()]
+
+
 # ── meme_annotations ─────────────────────────────────────────────────
 
 
