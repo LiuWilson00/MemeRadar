@@ -26,6 +26,8 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str = ""
     voyage_api_key: str = ""
+    reddit_client_id: str = ""
+    reddit_client_secret: str = ""
     memeradar_data_dir: Path = Path("./data")
 
     def require(self, field_name: str) -> str:

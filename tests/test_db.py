@@ -86,6 +86,7 @@ class TestMigration:
             "embeddings",
             "recommendation_logs",
             "feedback_events",
+            "crawl_state",
             "schema_migrations",
         } <= names
 

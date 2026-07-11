@@ -78,6 +78,12 @@ python -m memeradar.understanding.embedding [--limit N]
 python -m memeradar.matching.cli "被老闆罵了想擺爛" --top 10 [--franchise 海綿寶寶] [--category 卡通動畫] [--min-similarity 0.35] [--show-doc]
 ```
 
+抓取 Reddit 梗圖候選（需先在 `.env` 填 `REDDIT_CLIENT_ID/SECRET`，於 reddit.com/prefs/apps 建立 script app）：
+
+```bash
+python -m memeradar.ingestion.reddit --client praw --subreddit memes --limit 25 [--update-watermark] [--json]
+```
+
 意圖分析驗證：對話 → 意圖 JSON（需 `ANTHROPIC_API_KEY`；每個參數一則訊息）：
 
 ```bash

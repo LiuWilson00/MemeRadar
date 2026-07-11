@@ -316,6 +316,29 @@ def annotation_from_row(row: sqlite3.Row) -> MemeAnnotation:
     )
 
 
+# ── crawl_state（爬蟲水位）──────────────────────────────────────────
+
+
+def get_watermark(conn: sqlite3.Connection, source: str) -> str | None:
+    row = conn.execute(
+        "SELECT watermark FROM crawl_state WHERE source = ?", (source,)
+    ).fetchone()
+    return row["watermark"] if row else None
+
+
+def set_watermark(conn: sqlite3.Connection, source: str, watermark: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO crawl_state (source, watermark, updated_at) VALUES (?, ?, datetime('now'))
+        ON CONFLICT (source) DO UPDATE SET
+            watermark = excluded.watermark,
+            updated_at = excluded.updated_at
+        """,
+        (source, watermark),
+    )
+    conn.commit()
+
+
 # ── meme_sources ─────────────────────────────────────────────────────
 
 

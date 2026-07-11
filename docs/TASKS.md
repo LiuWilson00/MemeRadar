@@ -60,6 +60,7 @@
 ## Phase 3 — 爬蟲自動化（目標：庫規模 ≥ 3,000 張且品質不降）
 
 - [ ] **P3-1** Adapter 框架 + Reddit adapter（PRAW、水位增量、候選 schema）— **M**（依賴 P0-4）
+  - 進度：已實作並通過測試 ✅（`ingestion/base.py` 統一候選 schema + SourceAdapter 介面；`crawl_state` 水位表；`ingestion/reddit.py`：水位增量、min_score 門檻先過再抓留言、gallery 多圖、PRAW 與公開 JSON 雙客戶端、CLI）；真實抓取 ⏳ 被 Reddit 403 擋（免憑證端點已封鎖）——**需在 reddit.com/prefs/apps 建 script app 並填 .env 的 REDDIT_CLIENT_ID/SECRET 後以 `--client praw` 驗證**（praw 已裝好）
 - [ ] **P3-2** Dcard adapter（節流、UA、失敗告警）— **M**（依賴 P3-1 框架）
 - [ ] **P3-3** 去重三層漏斗：SHA256 / pHash / CLIP + 人工佇列 + 熱度累加（02 文件 §4）— **L**（依賴 P3-1）
   - 驗收：02 文件 §8 測試組全過；「同模板不同字」不誤殺
