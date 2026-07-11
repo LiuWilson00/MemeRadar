@@ -11,6 +11,11 @@
   --color-amber-soft: #f5a52426;
   --color-signal: #2fd6a3;
   --color-danger: #f76f72;
+  /* 圖表標記色（dataviz 驗證通過：亮度帶 L0.48–0.67、CVD ΔE18.9、對比 ≥3:1 對 #0d1321）
+     比 UI 強調色深一階——文字仍用文字 token，色塊只載識別 */
+  --color-chart-up: #1fa87e;
+  --color-chart-down: #e4484e;
+  --color-chart-rate: #c9840f;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
   --font-sans: "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
 }

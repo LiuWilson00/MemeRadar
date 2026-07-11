@@ -16,6 +16,8 @@ export default defineConfig({
       "/meta": API,
       "/health": API,
       "/history": API,
+      "/review": API,
+      "/report": API,
     },
   },
   test: {

@@ -1,6 +1,7 @@
 import type {
   AnnotationPatch,
   DedupReviewItem,
+  FeedbackReport,
   Filters,
   HistoryDetail,
   HistoryItem,
@@ -108,6 +109,10 @@ export async function uploadMeme(imageBase64: string, titleHint: string): Promis
     body: JSON.stringify({ image: imageBase64, title_hint: titleHint || null }),
   });
   return unwrap<UploadResult>(response);
+}
+
+export async function fetchFeedbackReport(): Promise<FeedbackReport> {
+  return unwrap<FeedbackReport>(await fetch("/report/feedback"));
 }
 
 /** 標註複核：通過（可帶標籤修補，後端會重建向量）或淘汰。 */

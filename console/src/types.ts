@@ -132,6 +132,33 @@ export interface Meta {
   emotions: string[];
 }
 
+export interface GroupRow {
+  key: string | number;
+  ups: number;
+  downs: number;
+  up_rate: number | null;
+}
+
+export interface FeedbackReport {
+  totals: { ups: number; downs: number; total: number; up_rate: number | null };
+  queries_with_feedback: number;
+  daily: Array<{ date: string; ups: number; downs: number }>;
+  by_strategy: GroupRow[];
+  by_franchise: GroupRow[];
+  by_rank: GroupRow[];
+  by_params: GroupRow[];
+  down_notes: Array<{
+    created_at: string;
+    query_id: string;
+    note: string;
+    meme_id: string;
+    meme_ocr: string;
+    rank: number;
+    matched_strategy: string;
+    intent_summary: string;
+  }>;
+}
+
 export interface DedupReviewItem {
   review_id: string;
   layer: string;

@@ -286,6 +286,12 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         repo.set_dedup_review_resolution(conn, review_id, request.resolution)
         return {"review_id": review_id, "resolution": request.resolution}
 
+    @app.get("/report/feedback")
+    def feedback_report(conn: sqlite3.Connection = Depends(get_conn)):
+        from memeradar.shared.reporting import build_feedback_report
+
+        return build_feedback_report(conn)
+
     @app.get("/memes/{meme_id}/image")
     def meme_image(meme_id: str, conn: sqlite3.Connection = Depends(get_conn)):
         meme = repo.get_meme(conn, meme_id)

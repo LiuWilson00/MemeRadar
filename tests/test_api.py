@@ -518,6 +518,24 @@ class TestDedupReviewQueue:
         ).status_code == 404
 
 
+class TestFeedbackReportEndpoint:
+    def test_report_shape(self, env):
+        client, *_ = env
+        body = client.post("/recommend", json=BASE_REQUEST).json()
+        client.post("/feedback", json={
+            "query_id": body["query_id"], "meme_id": body["results"][0]["meme_id"],
+            "rank": 1, "rating": "down", "note": "梗太老了",
+        })
+
+        report = client.get("/report/feedback").json()
+
+        assert report["totals"]["total"] == 1
+        assert report["totals"]["up_rate"] == 0.0
+        assert report["by_strategy"][0]["key"] == "滑跪求饒"
+        assert report["down_notes"][0]["note"] == "梗太老了"
+        assert report["daily"][0]["downs"] == 1
+
+
 class TestImagesAndMeta:
     def test_image_served(self, env):
         client, _, memes, _ = env
