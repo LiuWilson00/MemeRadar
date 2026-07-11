@@ -274,7 +274,7 @@ erDiagram
 | 爬蟲框架 | `httpx` + `PRAW`（Reddit 官方 API）+ `Playwright`（動態頁面） | 見 02 文件 |
 | 批次排程 | 先 cron / APScheduler，量大再上 Prefect | Demo 階段不需要重型 workflow 引擎 |
 | 後端 API | FastAPI（候選） | async、pydantic schema 與本設計高度契合 |
-| Metadata DB + 向量索引 | 候選：PostgreSQL + pgvector（單庫搞定 metadata filter + 向量）；或 Qdrant（過濾語法與量級擴展較佳） | **暫不定案**；Demo 量級（<10 萬張）兩者皆遠遠夠用 |
+| Metadata DB + 向量索引 | ✅ 已定案（2026-07-11）：**SQLite 單庫 + 程式內餘弦**（`VectorSearcher` 薄介面） | Demo 量級零新依賴；P3-7 規模化驗證若延遲超標，換 pgvector / Qdrant 只需替換 searcher 實作 |
 | 物件儲存 | 本機磁碟 →（未來）S3 相容儲存 | Demo 階段本機即可 |
 | 前端 Console | React + Vite + Tailwind（候選）；最速備選 Streamlit | 見 05 文件的取捨分析 |
 

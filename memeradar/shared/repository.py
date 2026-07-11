@@ -177,8 +177,11 @@ def get_annotation(conn: sqlite3.Connection, meme_id: str) -> MemeAnnotation | N
     row = conn.execute(
         "SELECT * FROM meme_annotations WHERE meme_id = ?", (meme_id,)
     ).fetchone()
-    if row is None:
-        return None
+    return annotation_from_row(row) if row else None
+
+
+def annotation_from_row(row: sqlite3.Row) -> MemeAnnotation:
+    """由含 meme_annotations 欄位的查詢列建構標註（供 JOIN 查詢共用）。"""
     return MemeAnnotation(
         meme_id=row["meme_id"],
         model_version=row["model_version"],

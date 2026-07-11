@@ -26,8 +26,8 @@
   - 驗收：03 文件 §7 門檻達標；一鍵重跑
 - [x] **P1-4** 檢索文件組裝 + embedding 介面封裝（✅ 已定案 BGE-M3 本地為主；介面保留可換 Voyage）— **M**（依賴 P1-1）
   - 驗收：`embed()` 可切換後端 ✅（Embedder 介面 + 後端註冊表，測試以雙後端驗證並存）；模板與模型版本入庫 ✅（簽名 `bge-m3|doc-v1` 寫入 embeddings.model；真實 BGE-M3 煙霧測試通過，1024 維、語意方向正確）
-- [ ] **P1-5** 向量索引 + metadata 過濾（pgvector / Qdrant 擇一，決策 Q1、Q2 在此定案）— **M**（依賴 P1-4）
-  - 驗收：Top-K + franchise/category/nsfw 過濾查詢通過整合測試
+- [x] **P1-5** 向量索引 + metadata 過濾（✅ Q1 定案：SQLite 單庫 + 程式內餘弦，`VectorSearcher` 介面保留升級路徑）— **M**（依賴 P1-4）
+  - 驗收：Top-K + franchise/category/nsfw 過濾查詢通過整合測試 ✅（`memeradar/matching/search.py`，12 項整合測試：Top-K 排序、閾值、別名正規化過濾、JSON 分類過濾、NSFW 開關、組合過濾、下架/待審/非梗圖/異簽名排除、維度檢查）
 - [ ] **P1-6** CLI 檢索驗證工具：一句話 query → Top-10（含分數與標籤）— **S**（依賴 P1-5）
   - 驗收：團隊肉眼驗證 20 組 query 合理；embedding A/B 結論記錄於 docs
 

@@ -79,7 +79,7 @@ hotness = Σ(來源互動分) × e^(−λ · 距最後一次被轉貼的天數)
 
 | # | 問題 | 影響 | 建議時點 |
 |---|------|------|---------|
-| Q1 | Metadata DB + 向量索引最終選型（pgvector vs Qdrant） | Phase 1 索引實作 | Phase 1 開工前，以 seed 集實測過濾語法與部署成本後定 |
+| Q1 | ~~Metadata DB + 向量索引最終選型（pgvector vs Qdrant）~~ ✅ 已定案：Demo 量級用 SQLite 單庫 + 程式內餘弦（2026-07-11）；`VectorSearcher` 介面保留，P3-7 規模化驗證若延遲超標再換 pgvector / Qdrant | Phase 1 索引實作 | 已決 |
 | Q2 | ~~Text embedding 定案（Voyage vs BGE-M3）~~ ✅ 已定案：BGE-M3 本地自架（2026-07-11，成本考量）；介面保留可換 | 檢索品質、API 依賴 | 已決；P1-6 仍需驗證簡繁跨檢索品質 |
 | Q3 | Rerank 走 LLM listwise 或 Voyage rerank | 延遲 vs 理由生成 | Phase 2 延遲實測後定 |
 | Q4 | FB 內容的人工匯入流程要不要做工具化 | 資料覆蓋 | Phase 3 |
