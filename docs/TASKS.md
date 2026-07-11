@@ -60,7 +60,8 @@
 ## Phase 3 — 爬蟲自動化（目標：庫規模 ≥ 3,000 張且品質不降）
 
 - [ ] **P3-1** Adapter 框架 + Reddit adapter（PRAW、水位增量、候選 schema）— **M**（依賴 P0-4）
-  - 進度：已實作並通過測試 ✅（`ingestion/base.py` 統一候選 schema + SourceAdapter 介面；`crawl_state` 水位表；`ingestion/reddit.py`：水位增量、min_score 門檻先過再抓留言、gallery 多圖、PRAW 與公開 JSON 雙客戶端、CLI）；真實抓取 ⏳ 被 Reddit 403 擋（免憑證端點已封鎖）——**需在 reddit.com/prefs/apps 建 script app 並填 .env 的 REDDIT_CLIENT_ID/SECRET 後以 `--client praw` 驗證**（praw 已裝好）
+  - 進度：已實作並通過測試 ✅（`ingestion/base.py` 統一候選 schema + SourceAdapter 介面；`crawl_state` 水位表；`ingestion/reddit.py`：水位增量、min_score 門檻先過再抓留言、gallery 多圖、PRAW 與公開 JSON 雙客戶端、CLI）
+  - ⛔ **合規暫停（2026-07-12）**：Reddit Responsible Builder Policy 要求 API 存取事先核准、mining 不論商業與否皆需書面核准——**adapter 封存，取得核准前不得執行**（風險評估已修正於 02/06 文件）；申請走 Reddit 官方 ticket / 商業聯絡表單
 - [ ] **P3-2** Dcard adapter（節流、UA、失敗告警）— **M**（依賴 P3-1 框架）
 - [x] **P3-3** 去重三層漏斗：SHA256 / pHash / CLIP + 佇列 + 熱度累加（02 文件 §4，判定策略依實證修訂）— **L**（依賴 P3-1）
   - 驗收：02 文件 §8 測試組全過 ✅（單元 15 項 + 真 CLIP 煙霧）；「同模板不同字」不誤殺 ✅——真實驗證曾抓到原規格會誤殺（pHash 距離 0、CLIP 0.993），已修訂為「僅 SHA256 自動判重；L2/L3 進佇列，標註後以 OCR 比對自動裁決」，修訂已寫回 02 文件 §4
@@ -70,7 +71,7 @@
   - 驗收 ✅（`ingestion/rules.py`：互動門檻按平台 / URL 黑名單 / 格式 / 短邊≥200 / 長寬比≤4，下載前後分段檢查省頻寬；報表整合於 P3-5 管線）
 - [ ] **P3-5** 排程整合：cron 觸發「抓取 → 去重 → 過濾 → 標註 → 入索引」全自動管線 — **M**（依賴 P3-2, P3-3, P3-4, P1-2）
   - 驗收：連續 7 天無人工介入，批次報表數字對帳
-  - 進度：管線已實作並通過測試 ✅（`ingestion/pipeline.py`：抓取 → 規則過濾 → 下載（重試 2 次）→ 去重（吸收 / 佇列 / 入庫）→ 標註 → 佇列 OCR 裁決 → 向量化；單來源失敗隔離 + crawl_health 連續 3 次告警（migration 0004）；報表對帳由測試保證；CLI 供 cron 觸發）；「連續 7 天」⏳ 待 Reddit 憑證填入後排程實跑；標註走同步版，Batch API 半價（P1-2）為後續成本優化；Dcard adapter（P3-2）未接
+  - 進度：管線已實作並通過測試 ✅（`ingestion/pipeline.py`：抓取 → 規則過濾 → 下載（重試 2 次）→ 去重（吸收 / 佇列 / 入庫）→ 標註 → 佇列 OCR 裁決 → 向量化；單來源失敗隔離 + crawl_health 連續 3 次告警（migration 0004）；報表對帳由測試保證；CLI 供 cron 觸發）；「連續 7 天」⏳ **待任一合規來源就緒**（Reddit 需先取得書面核准，見 P3-1 合規暫停註記；或改接其他來源）；標註走同步版，Batch API 半價（P1-2）為後續成本優化；Dcard adapter（P3-2）未接、做之前先查其現行條款
 - [ ] **P3-6** KnowYourMeme / memes.tw adapter（模板知識補充，選做）— **M**
 - [ ] **P3-7** 規模化驗證：庫達 3,000 張後重跑匹配 golden set，確認 Recall 不降、延遲不爆 — **S**（依賴 P3-5, P2-8）
 

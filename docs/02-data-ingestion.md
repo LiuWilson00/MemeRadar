@@ -15,7 +15,7 @@
 | 優先序 | 來源 | 取得方式 | 純度 | 合規風險 | 備註 |
 |--------|------|---------|------|---------|------|
 | P0 | 人工匯入（seed） | Console / 腳本上傳 | 極高 | 無 | Phase 0 起步用，150–300 張精選（含海綿寶寶、甄嬛傳等指定主題） |
-| P1 | Reddit（r/memes、r/dankmemes 等） | 官方 API（PRAW），OAuth | 高 | 低（官方 API、遵守 rate limit） | 英文為主；帶 upvote / 留言，metadata 品質最好 |
+| ~~P1~~ 待核准 | Reddit（r/memes、r/dankmemes 等） | 官方 API（PRAW），OAuth | 高 | **高（2026-07 修訂）**：Responsible Builder Policy 明定 API 存取需**事先申請核准**，且 mining／AI 訓練用途「不論商業與否」皆需書面核准——**未核准前不得執行爬蟲**。adapter 已完成封存待核准 | 英文為主；帶 upvote / 留言，metadata 品質最好 |
 | P1 | Dcard 梗圖板 | 非官方 API / 網頁抓取 | 高 | 中（無官方 API，需節流 + UA 表明身份） | 繁中梗最重要來源 |
 | P2 | KnowYourMeme / memes.tw 等梗圖資料站 | 網頁抓取 | 高 | 中 | KYM 附「梗的解釋」，對建立模板（template）知識特別有用 |
 | P2 | PTT（joke 板等） | 官方網頁版抓取 | 中 | 低–中 | 文字梗多、圖為外連，需解析 imgur 等外部圖床 |
