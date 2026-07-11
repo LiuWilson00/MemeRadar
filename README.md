@@ -65,3 +65,9 @@ python -m memeradar.ingestion.seed_import <資料夾>
 ```bash
 python -m memeradar.understanding.annotator [--limit N]
 ```
+
+批次向量化已標註的梗圖（BGE-M3 本地推論；需先 `pip install -e ".[local-embedding]"`，首次執行會自動下載約 2.3GB 模型權重）：
+
+```bash
+python -m memeradar.understanding.embedding [--limit N]
+```

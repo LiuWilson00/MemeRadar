@@ -108,6 +108,25 @@ def list_memes_missing_annotation(conn: sqlite3.Connection, limit: int | None = 
     return [_row_to_meme(r) for r in conn.execute(sql, params).fetchall()]
 
 
+def list_memes_missing_embedding(
+    conn: sqlite3.Connection, kind: str, model: str, limit: int | None = None
+) -> list[Meme]:
+    """列出已標註為梗圖、狀態 active、但缺少指定簽名向量的梗圖（向量化工作佇列）。"""
+    sql = """
+        SELECT m.* FROM memes m
+        JOIN meme_annotations a ON a.meme_id = m.meme_id
+        LEFT JOIN embeddings e
+            ON e.meme_id = m.meme_id AND e.kind = ? AND e.model = ?
+        WHERE e.meme_id IS NULL AND m.status = 'active' AND a.is_meme = 1
+        ORDER BY m.first_seen_at
+    """
+    params: tuple = (kind, model)
+    if limit is not None:
+        sql += " LIMIT ?"
+        params = (kind, model, limit)
+    return [_row_to_meme(r) for r in conn.execute(sql, params).fetchall()]
+
+
 # ── meme_annotations ─────────────────────────────────────────────────
 
 

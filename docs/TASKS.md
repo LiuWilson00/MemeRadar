@@ -24,8 +24,8 @@
   - 驗收：中斷後重啟不重複送件；成本記錄輸出
 - [ ] **P1-3** 標註 Golden Set：人工精標 100 張 + 回歸評估腳本（is_meme 準確率 / 情緒 F1 / OCR 錯字率 / usage_hint 抽評）— **M**（依賴 P0-3）
   - 驗收：03 文件 §7 門檻達標；一鍵重跑
-- [ ] **P1-4** 檢索文件組裝 + embedding 介面封裝（✅ 已定案 BGE-M3 本地為主；介面保留可換 Voyage）— **M**（依賴 P1-1）
-  - 驗收：`embed()` 可切換後端；模板與模型版本入庫
+- [x] **P1-4** 檢索文件組裝 + embedding 介面封裝（✅ 已定案 BGE-M3 本地為主；介面保留可換 Voyage）— **M**（依賴 P1-1）
+  - 驗收：`embed()` 可切換後端 ✅（Embedder 介面 + 後端註冊表，測試以雙後端驗證並存）；模板與模型版本入庫 ✅（簽名 `bge-m3|doc-v1` 寫入 embeddings.model；真實 BGE-M3 煙霧測試通過，1024 維、語意方向正確）
 - [ ] **P1-5** 向量索引 + metadata 過濾（pgvector / Qdrant 擇一，決策 Q1、Q2 在此定案）— **M**（依賴 P1-4）
   - 驗收：Top-K + franchise/category/nsfw 過濾查詢通過整合測試
 - [ ] **P1-6** CLI 檢索驗證工具：一句話 query → Top-10（含分數與標籤）— **S**（依賴 P1-5）

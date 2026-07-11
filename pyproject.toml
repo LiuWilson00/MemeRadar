@@ -21,6 +21,10 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.4",
 ]
+# 本地 embedding（BGE-M3）：含 torch 等重依賴，首次載入模型另需下載約 2.3GB 權重
+local-embedding = [
+    "sentence-transformers>=3.0",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["memeradar"]
