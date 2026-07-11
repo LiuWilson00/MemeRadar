@@ -43,8 +43,9 @@ select = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# 標註 prompt 為自然語言內容，中文長行不受程式行寬限制
+# 含 LLM prompt 的模組：prompt 為自然語言內容，中文長行不受程式行寬限制
 "memeradar/understanding/annotator.py" = ["E501"]
+"memeradar/matching/intent.py" = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

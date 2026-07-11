@@ -77,3 +77,9 @@ python -m memeradar.understanding.embedding [--limit N]
 ```bash
 python -m memeradar.matching.cli "被老闆罵了想擺爛" --top 10 [--franchise 海綿寶寶] [--category 卡通動畫] [--min-similarity 0.35] [--show-doc]
 ```
+
+意圖分析驗證：對話 → 意圖 JSON（需 `ANTHROPIC_API_KEY`；每個參數一則訊息）：
+
+```bash
+python -m memeradar.matching.intent "other:你報告又遲交了！" "me:抱歉抱歉" "other:你到底行不行"
+```

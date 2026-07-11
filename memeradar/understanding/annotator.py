@@ -16,13 +16,13 @@ from __future__ import annotations
 import base64
 import sqlite3
 import sys
-from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, Field, field_validator
 
 from memeradar.shared import repository as repo
 from memeradar.shared.config import get_settings
+from memeradar.shared.labels import CategoryLabel, EmotionLabel
 from memeradar.shared.models import Meme, MemeAnnotation, MemeSource
 from memeradar.shared.taxonomy import get_taxonomy
 
@@ -31,13 +31,6 @@ ANNOTATION_PROMPT_VERSION = "labeler-v1"
 DEFAULT_ANNOTATION_MODEL = "claude-sonnet-5"
 CONFIDENCE_REVIEW_THRESHOLD = 0.7
 MAX_OUTPUT_TOKENS = 2048
-
-_TAX = get_taxonomy()
-
-# 封閉集 → 動態 StrEnum：成員值即繁中標籤，會進 structured outputs 的 JSON schema，
-# 讓 API 端直接拒絕字典外的標籤（達成「structured output 零解析失敗」）。
-EmotionLabel = StrEnum("EmotionLabel", {label: label for label in _TAX.emotions})
-CategoryLabel = StrEnum("CategoryLabel", {c.label: c.label for c in _TAX.categories})
 
 
 class AnnotationResult(BaseModel):
