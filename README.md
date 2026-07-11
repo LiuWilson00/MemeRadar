@@ -71,3 +71,9 @@ python -m memeradar.understanding.annotator [--limit N]
 ```bash
 python -m memeradar.understanding.embedding [--limit N]
 ```
+
+檢索驗證：一句話 query 查 Top-K（調校檢索品質用）：
+
+```bash
+python -m memeradar.matching.cli "被老闆罵了想擺爛" --top 10 [--franchise 海綿寶寶] [--category 卡通動畫] [--min-similarity 0.35] [--show-doc]
+```

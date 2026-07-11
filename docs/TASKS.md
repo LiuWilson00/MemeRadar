@@ -30,6 +30,7 @@
   - 驗收：Top-K + franchise/category/nsfw 過濾查詢通過整合測試 ✅（`memeradar/matching/search.py`，12 項整合測試：Top-K 排序、閾值、別名正規化過濾、JSON 分類過濾、NSFW 開關、組合過濾、下架/待審/非梗圖/異簽名排除、維度檢查）
 - [ ] **P1-6** CLI 檢索驗證工具：一句話 query → Top-10（含分數與標籤）— **S**（依賴 P1-5）
   - 驗收：團隊肉眼驗證 20 組 query 合理；embedding A/B 結論記錄於 docs
+  - 進度：工具已完成 ✅（`python -m memeradar.matching.cli`，含過濾參數 / 空結果診斷 / --show-doc；真 BGE-M3 煙霧：3 張假梗圖上語意排序與簡體別名過濾皆正確）；embedding A/B 因 Q2 成本決策直接定案 BGE-M3 而免做；「20 組 query 肉眼驗證」⏳ 待 P0-3 seed 資料
 
 ## Phase 2 — 匹配模組 + Demo Console（目標：可對外 Demo）
 
