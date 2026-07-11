@@ -12,8 +12,8 @@
   - 驗收：taxonomy 以資料檔（yaml/json）落在 repo，標註與意圖兩端引用同一份 ✅（`memeradar/shared/data/taxonomy.yaml` + `shared/taxonomy.py` 載入器）
 - [ ] **P0-3** 人工 seed 資料集：蒐集 150–300 張精選梗圖，**按策略錨點配平**（每情境 ≥ 8 張），海綿寶寶 / 甄嬛傳兩包優先配足（各 ≥ 30 張）；附來源紀錄 — **L**（可多人分攤、與 P1 並行）
   - 驗收：入庫腳本可重複執行；配平統計報表達標
-- [ ] **P0-4** 資料模型落地：依 01 文件 §4 建 schema（先用 SQLite/Postgres 皆可，物件儲存用本機目錄），含 `model_version` 等版本欄位 — **M**
-  - 驗收：migration 腳本 + 種子資料寫讀測試
+- [x] **P0-4** 資料模型落地：依 01 文件 §4 建 schema（先用 SQLite/Postgres 皆可，物件儲存用本機目錄），含 `model_version` 等版本欄位 — **M**
+  - 驗收：migration 腳本 + 種子資料寫讀測試 ✅（`memeradar/shared/{db,models,repository}.py` + `migrations/0001_initial.sql`，11 項寫讀測試；概念模型的 TEMPLATE 實體 v1 簡化為 `template_name` 欄位）
 
 ## Phase 1 — 理解管線 MVP（目標：一句話能查回合理的 Top-10）
 

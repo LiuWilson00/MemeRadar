@@ -47,3 +47,9 @@ cp .env.example .env  # 再填入 ANTHROPIC_API_KEY 等
 | `make lint` | `python -m ruff check .` |
 | `make check` | 依序執行上述兩者 |
 | `make install` | `python -m pip install -e ".[dev]"` |
+
+初始化 / 升級本機資料庫（SQLite，位於 `MEMERADAR_DATA_DIR`，預設 `./data`）：
+
+```bash
+python -m memeradar.shared.db
+```
