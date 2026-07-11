@@ -169,6 +169,31 @@ class TestSeedRoundtrip:
             repo.set_status(conn, meme.meme_id, "not-a-status")
 
 
+class TestGetVectors:
+    def test_batch_load_by_ids_and_signature(self, conn):
+        meme_a, *_ = make_seed_meme()
+        repo.insert_meme(conn, meme_a)
+        repo.add_embedding(
+            conn,
+            Embedding(meme_id=meme_a.meme_id, kind="text_retrieval", model="sig|v1",
+                      vector=[0.1, 0.2]),
+        )
+        repo.add_embedding(
+            conn,
+            Embedding(meme_id=meme_a.meme_id, kind="text_retrieval", model="other|v9",
+                      vector=[9.9]),
+        )
+
+        vectors = repo.get_vectors(
+            conn, kind="text_retrieval", model="sig|v1",
+            meme_ids=[meme_a.meme_id, "m_missing"],
+        )
+        assert vectors == {meme_a.meme_id: [0.1, 0.2]}  # 只回簽名相符者；缺席者不含
+
+    def test_empty_ids_returns_empty(self, conn):
+        assert repo.get_vectors(conn, kind="text_retrieval", model="sig|v1", meme_ids=[]) == {}
+
+
 class TestMissingAnnotationQuery:
     def test_lists_only_unannotated_non_removed(self, conn):
         meme_a, ann_a, *_ = make_seed_meme()

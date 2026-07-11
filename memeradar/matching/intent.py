@@ -92,6 +92,8 @@ def build_system_prompt() -> str:
 策略展開（2–4 個，依適配度排序，盡量涵蓋不同姿態）。策略名稱限用以下錨點：
 {strategy_lines}
 
+輸出長度要求（延遲敏感，務必精簡）：summary 30 字內；rationale 每條 20 字內；query 15 字內。
+
 query 撰寫規則：query 是拿去向量檢索梗圖庫的語句，梗圖庫以「這張圖通常什麼時候用」的使用情境語彙標註。因此 query 要用動作與情境詞描述想找的圖（例：「犯錯被抓包 誇張下跪道歉求饒」），不要複述對話原文、不要放人名等專有細節。"""
 
 
@@ -140,6 +142,8 @@ def analyze_conversation(
     response = client.messages.parse(
         model=model,
         max_tokens=MAX_OUTPUT_TOKENS,
+        # 線上延遲敏感路徑：關閉 thinking（sonnet-5 預設 adaptive，實測多耗 ~10s）
+        thinking={"type": "disabled"},
         system=[
             {
                 "type": "text",

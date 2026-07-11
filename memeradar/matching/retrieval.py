@@ -39,6 +39,7 @@ class Candidate:
     annotation: MemeAnnotation
     matched_strategies: tuple[str, ...]  # 命中策略名，依各自分數排序
     per_strategy_similarity: dict[str, float]
+    hotness: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -62,8 +63,8 @@ def retrieve_candidates(
     query_vectors = embedder.embed([s.query for s in strategies])
 
     per_strategy_hits: dict[str, int] = {}
-    # meme_id → (annotation, {策略名: 分數})
-    pool: dict[str, tuple[MemeAnnotation, dict[str, float]]] = {}
+    # meme_id → (annotation, hotness, {策略名: 分數})
+    pool: dict[str, tuple[MemeAnnotation, float, dict[str, float]]] = {}
 
     for plan, vector in zip(strategies, query_vectors, strict=True):
         name = plan.name.value
@@ -72,7 +73,7 @@ def retrieve_candidates(
         )
         per_strategy_hits[name] = len(hits)
         for hit in hits:
-            annotation, scores = pool.setdefault(hit.meme_id, (hit.annotation, {}))
+            _, _, scores = pool.setdefault(hit.meme_id, (hit.annotation, hit.hotness, {}))
             # 同策略理論上不會重複命中同圖；保險起見取最高
             scores[name] = max(scores.get(name, float("-inf")), hit.similarity)
 
@@ -85,8 +86,9 @@ def retrieve_candidates(
                 sorted(scores, key=lambda strategy_name: -scores[strategy_name])
             ),
             per_strategy_similarity=dict(scores),
+            hotness=hotness,
         )
-        for meme_id, (annotation, scores) in pool.items()
+        for meme_id, (annotation, hotness, scores) in pool.items()
     ]
     candidates.sort(key=lambda c: (-c.similarity, c.meme_id))
     return RetrievalResult(candidates=candidates, per_strategy_hits=per_strategy_hits)

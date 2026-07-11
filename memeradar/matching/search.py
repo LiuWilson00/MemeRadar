@@ -38,6 +38,7 @@ class SearchHit:
     meme_id: str
     similarity: float
     annotation: MemeAnnotation
+    hotness: float = 0.0  # 熱度（排序端最終分數微調用，docs/04 §2.4）
 
 
 class VectorSearcher(Protocol):
@@ -80,7 +81,7 @@ class SqliteBruteForceSearcher:
         min_similarity: float = DEFAULT_MIN_SIMILARITY,
     ) -> list[SearchHit]:
         sql = """
-            SELECT a.*, e.vector AS emb_vector
+            SELECT a.*, e.vector AS emb_vector, m.hotness AS meme_hotness
             FROM memes m
             JOIN meme_annotations a ON a.meme_id = m.meme_id
             JOIN embeddings e
@@ -118,6 +119,7 @@ class SqliteBruteForceSearcher:
                     meme_id=row["meme_id"],
                     similarity=similarity,
                     annotation=annotation_from_row(row),
+                    hotness=row["meme_hotness"],
                 )
             )
 

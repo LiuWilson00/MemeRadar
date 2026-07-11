@@ -135,6 +135,8 @@ class TestAnalyzeConversation:
         assert call["model"] == DEFAULT_INTENT_MODEL
         assert call["output_format"] is IntentResult
         assert call["system"][0]["cache_control"] == {"type": "ephemeral"}
+        # 線上延遲敏感路徑：顯式關閉 thinking（sonnet-5 預設 adaptive 會拖慢數秒）
+        assert call["thinking"] == {"type": "disabled"}
         user_text = call["messages"][0]["content"]
         assert "你報告又遲交了" in user_text
 

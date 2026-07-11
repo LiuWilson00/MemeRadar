@@ -262,6 +262,21 @@ def add_embedding(conn: sqlite3.Connection, emb: Embedding) -> None:
     conn.commit()
 
 
+def get_vectors(
+    conn: sqlite3.Connection, *, kind: str, model: str, meme_ids: list[str]
+) -> dict[str, list[float]]:
+    """批次載入指定簽名的向量（MMR 多樣化計算用）。缺席的 id 不含在結果中。"""
+    if not meme_ids:
+        return {}
+    placeholders = ",".join("?" * len(meme_ids))
+    rows = conn.execute(
+        f"SELECT meme_id, vector FROM embeddings"
+        f" WHERE kind = ? AND model = ? AND meme_id IN ({placeholders})",
+        (kind, model, *meme_ids),
+    ).fetchall()
+    return {r["meme_id"]: _loads(r["vector"]) for r in rows}
+
+
 def get_embeddings(
     conn: sqlite3.Connection, meme_id: str, kind: str | None = None
 ) -> list[Embedding]:

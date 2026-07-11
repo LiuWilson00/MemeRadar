@@ -96,6 +96,13 @@ class TestTopKAndScoring:
         hits = searcher.search([1.0, 0.0], k=1, filters=SearchFilters())
         assert hits[0].annotation.usage_hints == ["被指責時自嘲"]
 
+    def test_hit_carries_hotness_for_final_scoring(self, conn):
+        meme = seed_meme(conn, [1.0, 0.0])
+        repo.add_hotness(conn, meme.meme_id, 3.5)
+        searcher = SqliteBruteForceSearcher(conn, signature=SIGNATURE)
+        hits = searcher.search([1.0, 0.0], k=1, filters=SearchFilters())
+        assert hits[0].hotness == pytest.approx(3.5)
+
 
 class TestMetadataFilters:
     def test_franchise_filter_with_alias_normalization(self, conn):
