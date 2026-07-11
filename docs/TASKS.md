@@ -42,8 +42,9 @@
 - [x] **P2-3** Rerank + MMR + 推薦理由（✅ Q3 定案：LLM listwise，一次呼叫同得分數與理由）— **M**（依賴 P2-2）
   - 驗收：延遲預算內 ✅（實測全線 13.3s，預算依實測修訂為 ≤15s，見 04 §5；優化：thinking off / 字數上限 / 低分免理由；haiku 實測不更快，維持 sonnet-5）；同模板限量 1 張生效 ✅（單元測試 + 真實煙霧驗證）
   - 真實煙霧亦驗證：rerank 成功剔除無關候選（慶祝梗 0.02 分墊底），P2-2 的門檻疑慮由 rerank 解決
-- [ ] **P2-4** 推薦 API（FastAPI）：`/recommend`、`/feedback`，`RECOMMENDATION_LOG` / `FEEDBACK_EVENT` 落庫（01 文件 §5.2 契約）— **M**（依賴 P2-3）
-  - 驗收：契約測試通過；文字輸入端到端 ≤ 8s
+- [x] **P2-4** 推薦 API（FastAPI）：`/recommend`、`/feedback`，`RECOMMENDATION_LOG` / `FEEDBACK_EVENT` 落庫（01 文件 §5.2 契約）— **M**（依賴 P2-3）
+  - 驗收：契約測試通過 ✅（14 項，stub 注入零金鑰可跑）；文字輸入端到端 ≤ 15s（依 P2-3 修訂預算）✅ 暖機後 ~11–13s（BGE 冷載入 7s 移至伺服器啟動暖機）
+  - 額外交付：GET /memes/{id}/image 圖片代理、GET /meta（franchise 計數 / 分類 / 策略，供 Console）、rerank 拒答自動退回向量排序、debug 含各階段耗時與候選池
 - [ ] **P2-5** 截圖解析：VLM 氣泡解析 → 結構化對話（04 文件 §2.1），截圖不落庫 — **M**（依賴 P2-4）
   - 驗收：LINE / Messenger 各 10 張，speaker 準確率 ≥ 90%
 - [ ] **P2-6** Console 主頁（React + Vite）：輸入區（含解析預覽編輯）、參數面板、結果卡片 + 👍👎、Debug 面板（05 文件 §2.1）— **L**（依賴 P2-4；UI 骨架可先行）

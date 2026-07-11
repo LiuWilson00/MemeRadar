@@ -108,6 +108,21 @@ def list_memes_missing_annotation(conn: sqlite3.Connection, limit: int | None = 
     return [_row_to_meme(r) for r in conn.execute(sql, params).fetchall()]
 
 
+def franchise_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """各 franchise 的可檢索梗圖數（Console 梗圖包下拉選單用）。"""
+    rows = conn.execute(
+        """
+        SELECT a.franchise AS name, COUNT(*) AS n
+        FROM meme_annotations a
+        JOIN memes m ON m.meme_id = a.meme_id
+        WHERE m.status = 'active' AND a.is_meme = 1 AND a.franchise IS NOT NULL
+        GROUP BY a.franchise
+        ORDER BY n DESC, name
+        """
+    ).fetchall()
+    return {r["name"]: r["n"] for r in rows}
+
+
 def list_memes_missing_embedding(
     conn: sqlite3.Connection, kind: str, model: str, limit: int | None = None
 ) -> list[Meme]:

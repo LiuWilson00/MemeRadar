@@ -83,3 +83,9 @@ python -m memeradar.matching.cli "被老闆罵了想擺爛" --top 10 [--franchis
 ```bash
 python -m memeradar.matching.intent "other:你報告又遲交了！" "me:抱歉抱歉" "other:你到底行不行"
 ```
+
+啟動推薦 API（http://127.0.0.1:8000，互動文件在 /docs；需 `ANTHROPIC_API_KEY` 與 local-embedding extras）：
+
+```bash
+python -m memeradar.api
+```
