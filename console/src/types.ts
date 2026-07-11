@@ -67,6 +67,12 @@ export interface RecommendResponse {
   };
 }
 
+export interface ScreenshotParse {
+  app_guess: string;
+  conversation: Array<{ speaker: "me" | "other"; text: string; confidence: number }>;
+  warnings: string[];
+}
+
 export interface Meta {
   franchises: Array<{ name: string; count: number }>;
   categories: string[];

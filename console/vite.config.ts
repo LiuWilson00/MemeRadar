@@ -10,6 +10,7 @@ export default defineConfig({
   server: {
     proxy: {
       "/recommend": API,
+      "/parse-screenshot": API,
       "/feedback": API,
       "/memes": API,
       "/meta": API,

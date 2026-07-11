@@ -3,6 +3,8 @@
 以 stub anthropic client + fake embedder 注入，全程不需 API 金鑰。
 """
 
+import base64
+
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -10,6 +12,7 @@ from PIL import Image
 from memeradar.api.app import Deps, create_app
 from memeradar.matching.intent import IntentResult
 from memeradar.matching.rerank import CandidateScore, RerankResult
+from memeradar.matching.screenshot import ScreenshotParseResult
 from memeradar.shared import repository as repo
 from memeradar.shared.db import connect, migrate
 from memeradar.shared.models import Embedding, Meme, MemeAnnotation, new_id
@@ -32,6 +35,15 @@ RERANK_PAYLOAD = RerankResult(
     scores=[
         CandidateScore(candidate_id=i, score=95 - i * 10, reason=f"理由{i}") for i in range(1, 11)
     ]
+)
+
+SCREENSHOT_PAYLOAD = ScreenshotParseResult(
+    app_guess="line",
+    conversation=[
+        {"speaker": "other", "text": "你報告又遲交了！", "confidence": 0.98},
+        {"speaker": "me", "text": "抱歉抱歉", "confidence": 0.95},
+    ],
+    warnings=["最上方一則訊息被裁切，未納入"],
 )
 
 
@@ -59,6 +71,10 @@ class DualStubClient:
                     if "rerank" in outer.refuse:
                         return StubResponse(None, "refusal")
                     return StubResponse(RERANK_PAYLOAD)
+                if fmt is ScreenshotParseResult:
+                    if "screenshot" in outer.refuse:
+                        return StubResponse(None, "refusal")
+                    return StubResponse(SCREENSHOT_PAYLOAD)
                 raise AssertionError(f"未知 output_format: {fmt}")
 
         self.messages = _Messages()
@@ -184,10 +200,38 @@ class TestRecommendContract:
         assert body["results"] == []
         assert body["debug"]["per_strategy_hits"] == {"滑跪求饒": 0}
 
-    def test_screenshot_not_implemented(self, env):
+    def test_screenshot_input_parses_then_recommends(self, env):
+        client, conn, *_ = env
+        png_b64 = base64.standard_b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16).decode()
+        resp = client.post(
+            "/recommend",
+            json={**BASE_REQUEST, "input_type": "screenshot", "conversation": [], "image": png_b64},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["results"]) > 0
+        assert body["debug"]["screenshot_parse"]["app_guess"] == "line"
+        # 截圖不落庫：log 只存解析後的文字對話
+        log = repo.get_recommendation_log(conn, body["query_id"])
+        assert log.conversation == [
+            {"speaker": "other", "text": "你報告又遲交了！"},
+            {"speaker": "me", "text": "抱歉抱歉"},
+        ]
+
+    def test_screenshot_missing_image_422(self, env):
         client, *_ = env
-        resp = client.post("/recommend", json={**BASE_REQUEST, "input_type": "screenshot"})
-        assert resp.status_code == 501
+        resp = client.post(
+            "/recommend", json={**BASE_REQUEST, "input_type": "screenshot", "conversation": []}
+        )
+        assert resp.status_code == 422
+
+    def test_screenshot_invalid_base64_422(self, env):
+        client, *_ = env
+        resp = client.post(
+            "/recommend",
+            json={**BASE_REQUEST, "input_type": "screenshot", "conversation": [], "image": "@@@"},
+        )
+        assert resp.status_code == 422
 
     def test_empty_conversation_422(self, env):
         client, *_ = env
@@ -210,6 +254,33 @@ class TestRecommendContract:
         assert body["debug"]["rerank_fallback"] is True
         sims = [r["scores"]["vector"] for r in body["results"]]
         assert sims == sorted(sims, reverse=True)  # 退回純向量排序
+
+
+class TestParseScreenshotEndpoint:
+    def test_returns_parse_result_for_console_editing(self, env):
+        client, *_ = env
+        png_b64 = base64.standard_b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16).decode()
+        resp = client.post("/parse-screenshot", json={"image": png_b64})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["app_guess"] == "line"
+        assert body["conversation"][0] == {
+            "speaker": "other",
+            "text": "你報告又遲交了！",
+            "confidence": 0.98,
+        }
+        assert body["warnings"] == ["最上方一則訊息被裁切，未納入"]
+
+    def test_invalid_base64_422(self, env):
+        client, *_ = env
+        assert client.post("/parse-screenshot", json={"image": "@@@"}).status_code == 422
+
+    def test_parse_refusal_422(self, env):
+        client, _, _, deps = env
+        deps.client.refuse = {"screenshot"}
+        png_b64 = base64.standard_b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16).decode()
+        resp = client.post("/parse-screenshot", json={"image": png_b64})
+        assert resp.status_code == 422
 
 
 class TestFeedback:

@@ -34,6 +34,10 @@ class RecommendRequest(BaseModel):
     params: ParamsIn = Field(default_factory=ParamsIn)
 
 
+class ParseScreenshotRequest(BaseModel):
+    image: str  # base64（PNG / JPEG / WebP）
+
+
 class FeedbackRequest(BaseModel):
     query_id: str
     meme_id: str

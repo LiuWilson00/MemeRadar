@@ -1,4 +1,4 @@
-import type { Filters, Meta, Params, RecommendResponse, Turn } from "../types";
+import type { Filters, Meta, Params, RecommendResponse, ScreenshotParse, Turn } from "../types";
 
 export const DEFAULT_FILTERS: Filters = {
   franchises: [],
@@ -65,4 +65,14 @@ export async function sendFeedback(body: {
 
 export async function fetchMeta(): Promise<Meta> {
   return unwrap<Meta>(await fetch("/meta"));
+}
+
+/** 截圖 → 結構化對話（後端僅記憶體處理，不落庫）。約 5–8 秒。 */
+export async function parseScreenshot(imageBase64: string): Promise<ScreenshotParse> {
+  const response = await fetch("/parse-screenshot", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ image: imageBase64 }),
+  });
+  return unwrap<ScreenshotParse>(response);
 }

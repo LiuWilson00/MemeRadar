@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import sqlite3
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -18,8 +20,9 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
 from memeradar.api.pipeline import run_recommendation
-from memeradar.api.schemas import FeedbackRequest, RecommendRequest
+from memeradar.api.schemas import FeedbackRequest, ParseScreenshotRequest, RecommendRequest
 from memeradar.matching.intent import IntentRefusedError
+from memeradar.matching.screenshot import ScreenshotParseError, parse_screenshot
 from memeradar.shared import repository as repo
 from memeradar.shared.db import connect, migrate
 from memeradar.shared.models import FeedbackEvent, new_id
@@ -77,18 +80,40 @@ def create_app(deps: Deps | None = None) -> FastAPI:
     def health() -> dict:
         return {"status": "ok"}
 
+    def _decode_image(image_b64: str | None) -> bytes:
+        if not image_b64:
+            raise HTTPException(status_code=422, detail="input_type=screenshot 時 image 必填")
+        try:
+            return base64.b64decode(image_b64, validate=True)
+        except binascii.Error:
+            raise HTTPException(status_code=422, detail="image 不是有效的 base64") from None
+
     @app.post("/recommend")
     def recommend(request: RecommendRequest, conn: sqlite3.Connection = Depends(get_conn)):
+        image_bytes: bytes | None = None
         if request.input_type == "screenshot":
-            raise HTTPException(status_code=501, detail="截圖解析將於 P2-5 提供")
-        if not request.conversation:
+            image_bytes = _decode_image(request.image)
+        elif not request.conversation:
             raise HTTPException(status_code=422, detail="conversation 不可為空")
         try:
-            return run_recommendation(conn, deps.client, deps.embedder, request)
+            return run_recommendation(
+                conn, deps.client, deps.embedder, request, image_bytes=image_bytes
+            )
         except IntentRefusedError:
             raise HTTPException(
                 status_code=422, detail="模型基於安全政策拒絕分析此對話"
             ) from None
+        except ScreenshotParseError as exc:
+            raise HTTPException(status_code=422, detail=f"截圖解析失敗：{exc}") from None
+
+    @app.post("/parse-screenshot")
+    def parse_screenshot_endpoint(request: ParseScreenshotRequest):
+        """解析截圖供 Console 編修（截圖僅在記憶體處理，不落庫）。"""
+        image_bytes = _decode_image(request.image)
+        try:
+            return parse_screenshot(deps.client, image_bytes).model_dump()
+        except ScreenshotParseError as exc:
+            raise HTTPException(status_code=422, detail=f"截圖解析失敗：{exc}") from None
 
     @app.post("/feedback")
     def feedback(request: FeedbackRequest, conn: sqlite3.Connection = Depends(get_conn)):

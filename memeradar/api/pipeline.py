@@ -11,7 +11,7 @@ import sqlite3
 import time
 from typing import Any
 
-from memeradar.api.schemas import RecommendRequest
+from memeradar.api.schemas import RecommendRequest, TurnIn
 from memeradar.matching.intent import ConversationTurn, analyze_conversation
 from memeradar.matching.rerank import (
     RankedMeme,
@@ -20,6 +20,7 @@ from memeradar.matching.rerank import (
     rank_candidates,
 )
 from memeradar.matching.retrieval import Candidate, RetrievalParams, retrieve_candidates
+from memeradar.matching.screenshot import parse_screenshot
 from memeradar.matching.search import SearchFilters, SqliteBruteForceSearcher
 from memeradar.shared import repository as repo
 from memeradar.shared.models import RecommendationLog, new_id
@@ -43,12 +44,28 @@ def _vector_fallback(candidates: list[Candidate], top_n: int) -> list[RankedMeme
     ]
 
 
-def run_recommendation(conn: sqlite3.Connection, client, embedder: Embedder,
-                       request: RecommendRequest) -> dict[str, Any]:
+def run_recommendation(
+    conn: sqlite3.Connection,
+    client,
+    embedder: Embedder,
+    request: RecommendRequest,
+    *,
+    image_bytes: bytes | None = None,
+) -> dict[str, Any]:
     timings: dict[str, int] = {}
     t_start = time.perf_counter()
 
-    turns = [ConversationTurn(t.speaker, t.text) for t in request.conversation]
+    conversation = request.conversation
+    screenshot_debug: dict | None = None
+    if request.input_type == "screenshot":
+        # 截圖僅在記憶體處理、不落庫（docs/06 §1）；log 只存解析後文字
+        t0 = time.perf_counter()
+        parsed = parse_screenshot(client, image_bytes or b"")
+        timings["screenshot_parse"] = int((time.perf_counter() - t0) * 1000)
+        conversation = [TurnIn(speaker=t.speaker, text=t.text) for t in parsed.conversation]
+        screenshot_debug = parsed.model_dump()
+
+    turns = [ConversationTurn(t.speaker, t.text) for t in conversation]
     t0 = time.perf_counter()
     intent = analyze_conversation(client, turns)  # IntentRefusedError 由端點層轉 422
     timings["intent"] = int((time.perf_counter() - t0) * 1000)
@@ -128,7 +145,7 @@ def run_recommendation(conn: sqlite3.Connection, client, embedder: Embedder,
         conn,
         RecommendationLog(
             query_id=query_id,
-            conversation=[t.model_dump() for t in request.conversation],
+            conversation=[t.model_dump() for t in conversation],
             intent_result=intent.model_dump(mode="json"),
             params_snapshot={
                 "filters": request.filters.model_dump(),
@@ -141,15 +158,19 @@ def run_recommendation(conn: sqlite3.Connection, client, embedder: Embedder,
         ),
     )
 
+    debug: dict[str, Any] = {
+        "queries": [s.query for s in intent.strategies],
+        "candidates": candidates_debug,
+        "per_strategy_hits": retrieval.per_strategy_hits,
+        "rerank_fallback": rerank_fallback,
+        "timings_ms": {**timings, "total": latency_ms},
+    }
+    if screenshot_debug is not None:
+        debug["screenshot_parse"] = screenshot_debug
+
     return {
         "query_id": query_id,
         "intent": intent.model_dump(mode="json"),
         "results": results,
-        "debug": {
-            "queries": [s.query for s in intent.strategies],
-            "candidates": candidates_debug,
-            "per_strategy_hits": retrieval.per_strategy_hits,
-            "rerank_fallback": rerank_fallback,
-            "timings_ms": {**timings, "total": latency_ms},
-        },
+        "debug": debug,
     }

@@ -1,7 +1,18 @@
 import { useState } from "react";
+import { parseScreenshot } from "../lib/api";
 import { EXAMPLES } from "../lib/examples";
 import { parsePastedConversation } from "../lib/parseConversation";
 import type { Turn } from "../types";
+
+async function fileToBase64(file: File): Promise<string> {
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error("讀取檔案失敗"));
+    reader.readAsDataURL(file);
+  });
+  return dataUrl.slice(dataUrl.indexOf(",") + 1);
+}
 
 interface Props {
   turns: Turn[];
@@ -13,6 +24,26 @@ interface Props {
 export default function ConversationEditor({ turns, onChange, onSubmit, loading }: Props) {
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
+  const [parsing, setParsing] = useState(false);
+  const [parseNotice, setParseNotice] = useState<string[]>([]);
+
+  const onScreenshot = async (file: File | undefined) => {
+    if (!file || parsing) return;
+    setParsing(true);
+    setParseNotice([]);
+    try {
+      const parsed = await parseScreenshot(await fileToBase64(file));
+      onChange(parsed.conversation.map((t) => ({ speaker: t.speaker, text: t.text })));
+      setParseNotice([
+        `已解析 ${parsed.conversation.length} 則訊息（判定來源：${parsed.app_guess}）——請確認左右方與內容後再送出`,
+        ...parsed.warnings.map((w) => `⚠ ${w}`),
+      ]);
+    } catch (e) {
+      setParseNotice([`✕ ${e instanceof Error ? e.message : "截圖解析失敗"}`]);
+    } finally {
+      setParsing(false);
+    }
+  };
 
   const update = (index: number, patch: Partial<Turn>) =>
     onChange(turns.map((t, i) => (i === index ? { ...t, ...patch } : t)));
@@ -127,9 +158,27 @@ export default function ConversationEditor({ turns, onChange, onSubmit, loading 
         >
           {loading ? "掃描中…" : "推薦梗圖"}
         </button>
-        <label className="block cursor-not-allowed rounded border border-dashed border-line py-2 text-center text-xs text-muted">
-          上傳對話截圖——解析功能將於 P2-5 提供
+        <label
+          className={`block rounded border border-dashed border-line py-2 text-center text-xs
+                      ${parsing ? "cursor-wait text-amber" : "cursor-pointer text-muted hover:border-amber hover:text-fg"}`}
+        >
+          {parsing ? "解析截圖中…（約 5–8 秒）" : "上傳對話截圖（LINE / Messenger，PNG / JPEG / WebP）"}
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            className="hidden"
+            disabled={parsing}
+            onChange={(e) => {
+              void onScreenshot(e.target.files?.[0]);
+              e.target.value = "";
+            }}
+          />
         </label>
+        {parseNotice.map((line) => (
+          <p key={line} className="mt-1 text-xs text-muted">
+            {line}
+          </p>
+        ))}
       </div>
     </section>
   );
