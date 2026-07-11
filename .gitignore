@@ -15,6 +15,11 @@ build/
 data/
 *.sqlite3
 
+# 前端
+console/node_modules/
+console/dist/
+console/*.tsbuildinfo
+
 # 編輯器
 .idea/
 .vscode/

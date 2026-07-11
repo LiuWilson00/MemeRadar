@@ -1,0 +1,83 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #0d1321;
+  --color-panel: #141c2b;
+  --color-raised: #1c2638;
+  --color-line: #2a3549;
+  --color-fg: #e8edf6;
+  --color-muted: #8b97ad;
+  --color-amber: #f5a524;
+  --color-amber-soft: #f5a52426;
+  --color-signal: #2fd6a3;
+  --color-danger: #f76f72;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-sans: "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
+}
+
+body {
+  @apply bg-ink text-fg font-sans antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-amber);
+  outline-offset: 2px;
+}
+
+/* ── 簽名元素：雷達掃描（查詢等待時的儀表動畫）───────────── */
+.radar {
+  position: relative;
+  border-radius: 9999px;
+  border: 1px solid var(--color-line);
+  background:
+    radial-gradient(circle, transparent 0 32%, var(--color-line) 32.5% 33%, transparent 33.5%),
+    radial-gradient(circle, transparent 0 62%, var(--color-line) 62.5% 63%, transparent 63.5%),
+    radial-gradient(circle, #f5a52414, transparent 70%);
+  overflow: hidden;
+}
+.radar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(var(--color-line), var(--color-line)) center/100% 1px no-repeat,
+    linear-gradient(var(--color-line), var(--color-line)) center/1px 100% no-repeat;
+  opacity: 0.7;
+}
+.radar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: conic-gradient(from 0deg, #f5a52488, #f5a52418 55deg, transparent 70deg);
+  animation: radar-sweep 2.4s linear infinite;
+}
+@keyframes radar-sweep {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.radar-blip {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--color-amber);
+  animation: blip 2.4s ease-out infinite;
+}
+@keyframes blip {
+  0%,
+  12% {
+    opacity: 1;
+  }
+  60%,
+  100% {
+    opacity: 0.12;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .radar::after,
+  .radar-blip {
+    animation: none;
+  }
+}
