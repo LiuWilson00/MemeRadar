@@ -27,7 +27,8 @@ from memeradar.shared.models import Meme, MemeAnnotation, MemeSource
 from memeradar.shared.taxonomy import get_taxonomy
 
 ANNOTATION_PROMPT_VERSION = "labeler-v1"
-DEFAULT_ANNOTATION_MODEL = "claude-opus-4-8"
+# 2026-07-11 團隊決策：成本考量採 sonnet 級為預設；品質不足時以 --model 升級 opus
+DEFAULT_ANNOTATION_MODEL = "claude-sonnet-5"
 CONFIDENCE_REVIEW_THRESHOLD = 0.7
 MAX_OUTPUT_TOKENS = 2048
 

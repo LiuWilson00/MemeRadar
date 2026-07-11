@@ -253,14 +253,16 @@ erDiagram
 
 ### 6.1 AI 模型（明確建議）
 
+> 2026-07-11 團隊決策：Anthropic 模型以成本為先採 **`claude-sonnet-5`** 為專案預設（vision 品質接近 opus、價格約四成，另有推廣價）；embedding **定案本地自架 BGE-M3**（零 API 成本）。品質不足時的升級路徑保留。
+
 | 用途 | 建議 | 理由與備註 |
 |------|------|-----------|
-| 圖片標註（OCR + 描述 + 標籤，單一 VLM pass） | **Claude `claude-opus-4-8`** via Messages API + **structured outputs**（`output_config.format` 保證合法 JSON） | 高解析視覺（長邊 2576px）、繁中 OCR 與網路文化理解俱佳；一次 pass 同時完成 OCR / 描述 / 情緒 / 情境，免去自建 OCR pipeline。批次標註走 **Batch API（費用 −50%）**，共用 system prompt 搭配 **prompt caching** |
-| 標註成本降級選項 | `claude-sonnet-5` 或 `claude-haiku-4-5` 做第一層「是否梗圖 / NSFW」粗篩 | 是否採用由團隊依成本評估決定；預設全程 opus。粗篩淘汰非梗圖後，昂貴的完整標註只跑合格圖 |
-| 截圖解析（對話結構還原） | Claude `claude-opus-4-8`（vision + structured outputs） | 需辨識氣泡左右方（自己 / 對方）、順序、時間戳，是結構化理解不只是 OCR |
-| 意圖分析（線上、即時） | Claude `claude-opus-4-8` + structured outputs | 品質敏感路徑；輸出多策略檢索 query。延遲若成瓶頸再評估降級 |
+| 圖片標註（OCR + 描述 + 標籤，單一 VLM pass） | **Claude `claude-sonnet-5`** via Messages API + **structured outputs**（保證合法 JSON） | 高解析視覺（長邊 2576px）、繁中 OCR 與網路文化理解俱佳；一次 pass 同時完成 OCR / 描述 / 情緒 / 情境。批次標註走 **Batch API（費用 −50%）**，共用 system prompt 搭配 **prompt caching**。golden set 若顯示品質不足，以 `--model claude-opus-4-8` 升級 |
+| 標註成本再降級選項 | `claude-haiku-4-5` 做第一層「是否梗圖 / NSFW」粗篩 | 量級破 10 萬張再評估；粗篩淘汰非梗圖後，完整標註只跑合格圖 |
+| 截圖解析（對話結構還原） | Claude `claude-sonnet-5`（vision + structured outputs） | 需辨識氣泡左右方（自己 / 對方）、順序、時間戳，是結構化理解不只是 OCR |
+| 意圖分析（線上、即時） | Claude `claude-sonnet-5` + structured outputs | 輸出多策略檢索 query；golden set 顯示品質不足時再升級 opus |
 | Rerank | 首選 **LLM listwise rerank**（Claude 對候選 20–30 張的標註摘要打分）；備選 Voyage `rerank` 系列模型 | LLM rerank 可同時產出「推薦理由」文字，一石二鳥 |
-| Text Embedding（檢索主軸） | 候選一：**Voyage AI**（Anthropic 官方推薦的 embedding 夥伴，多語系佳）；候選二：**BGE-M3**（開源自架、中文強、零 API 成本） | 以介面封裝（`embed(texts) -> vectors`）便於 A/B 切換；embedding 模型版本必須記錄在向量 metadata，換模型 = 全量重建索引 |
+| Text Embedding（檢索主軸） | ✅ **已定案：BGE-M3**（開源本地自架、中文強、零 API 成本） | 以介面封裝（`embed(texts) -> vectors`），Voyage AI 保留為備選可隨時 A/B；embedding 模型版本必須記錄在向量 metadata，換模型 = 全量重建索引 |
 | Image Embedding（去重 / 以圖搜圖） | 開源 **CLIP / SigLIP**（自架推論即可） | 僅用於去重與相似圖聚合，非檢索主軸 |
 | OCR 輔助驗證（可選） | PaddleOCR（開源，繁中佳） | 僅在 VLM OCR 抽樣品質不達標時引入交叉驗證，預設不用 |
 
