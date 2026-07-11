@@ -63,6 +63,7 @@
   - 進度：已實作並通過測試 ✅（`ingestion/base.py` 統一候選 schema + SourceAdapter 介面；`crawl_state` 水位表；`ingestion/reddit.py`：水位增量、min_score 門檻先過再抓留言、gallery 多圖、PRAW 與公開 JSON 雙客戶端、CLI）
   - ⛔ **合規暫停（2026-07-12）**：Reddit Responsible Builder Policy 要求 API 存取事先核准、mining 不論商業與否皆需書面核准——**adapter 封存，取得核准前不得執行**（風險評估已修正於 02/06 文件）；申請走 Reddit 官方 ticket / 商業聯絡表單
 - [ ] **P3-2** Dcard adapter（節流、UA、失敗告警）— **M**（依賴 P3-1 框架）
+  - ⛔ **合規暫停（2026-07-12 查證）**：Dcard 全站主動封鎖自動化存取（Cloudflare 403）、公開 API 已關閉——規避防護不可為。**先決條件改為取得 Dcard 正式授權**；替代來源 memes.tw 亦需先取得站長同意（查證紀錄見 02 文件 §2）
 - [x] **P3-3** 去重三層漏斗：SHA256 / pHash / CLIP + 佇列 + 熱度累加（02 文件 §4，判定策略依實證修訂）— **L**（依賴 P3-1）
   - 驗收：02 文件 §8 測試組全過 ✅（單元 15 項 + 真 CLIP 煙霧）；「同模板不同字」不誤殺 ✅——真實驗證曾抓到原規格會誤殺（pHash 距離 0、CLIP 0.993），已修訂為「僅 SHA256 自動判重；L2/L3 進佇列，標註後以 OCR 比對自動裁決」，修訂已寫回 02 文件 §4
   - 交付：`ingestion/dedup.py`（Deduplicator + ClipImageEmbedder + absorb_duplicate + maybe_upgrade_image + resolve_pending_reviews）、migration 0003 dedup_reviews、hotness_gain = 1 + log10(1+upvotes)
