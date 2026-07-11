@@ -217,7 +217,7 @@ def resolve_pending_reviews(conn: sqlite3.Connection) -> dict[str, int]:
             stats["pending"] += 1
             continue
         if _normalized_ocr(dup_ann.ocr_text) == _normalized_ocr(kept_ann.ocr_text):
-            _merge_duplicate_into(conn, review["meme_id"], review["matched_meme_id"])
+            merge_duplicate_into(conn, review["meme_id"], review["matched_meme_id"])
             repo.set_dedup_review_resolution(conn, review["review_id"], "merged")
             stats["merged"] += 1
         else:
@@ -226,7 +226,8 @@ def resolve_pending_reviews(conn: sqlite3.Connection) -> dict[str, int]:
     return stats
 
 
-def _merge_duplicate_into(conn: sqlite3.Connection, dup_meme_id: str, kept_meme_id: str) -> None:
+def merge_duplicate_into(conn: sqlite3.Connection, dup_meme_id: str, kept_meme_id: str) -> None:
+    """把重複梗圖併入保留者：來源搬移、熱度累加、重複者下架。"""
     gain = sum(hotness_gain(s.upvotes) for s in repo.list_sources(conn, dup_meme_id)) or 1.0
     repo.move_sources(conn, from_meme_id=dup_meme_id, to_meme_id=kept_meme_id)
     repo.add_hotness(conn, kept_meme_id, gain)

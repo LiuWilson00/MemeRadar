@@ -409,6 +409,115 @@ class TestLibrary:
         assert client.post("/memes", json={"image": bad}).status_code == 422
 
 
+class TestAnnotationReviewQueue:
+    def _seed_pending(self, env):
+        client, conn, memes, deps = env
+        meme = seed_meme(conn, deps.data_dir, franchise="海綿寶寶", ocr="待審文字")
+        repo.set_status(conn, meme.meme_id, "pending_review")
+        return client, conn, meme
+
+    def test_approve_with_patch_updates_and_reembeds(self, env):
+        client, conn, meme = self._seed_pending(env)
+        resp = client.post(
+            f"/review/annotations/{meme.meme_id}",
+            json={
+                "action": "approve",
+                "patch": {
+                    "ocr_text": "人工修正後的文字",
+                    "emotions": ["嘲諷"],
+                    "usage_hints": ["修正後的用途"],
+                },
+            },
+        )
+        assert resp.status_code == 200
+        assert repo.get_meme(conn, meme.meme_id).status == "active"
+        ann = repo.get_annotation(conn, meme.meme_id)
+        assert ann.ocr_text == "人工修正後的文字"
+        assert ann.emotions == ["嘲諷"]
+        assert ann.franchise == "海綿寶寶"  # 未修補欄位保留
+        assert ann.model_version.endswith("+human")  # 人工審核溯源
+        assert repo.get_embeddings(conn, meme.meme_id, kind="text_retrieval")  # 已重建向量
+
+    def test_approve_without_patch(self, env):
+        client, conn, meme = self._seed_pending(env)
+        resp = client.post(f"/review/annotations/{meme.meme_id}", json={"action": "approve"})
+        assert resp.status_code == 200
+        assert repo.get_meme(conn, meme.meme_id).status == "active"
+
+    def test_remove_action(self, env):
+        client, conn, meme = self._seed_pending(env)
+        resp = client.post(f"/review/annotations/{meme.meme_id}", json={"action": "remove"})
+        assert resp.status_code == 200
+        assert repo.get_meme(conn, meme.meme_id).status == "removed"
+
+    def test_unknown_meme_404_and_invalid_action_422(self, env):
+        client, *_ = env
+        assert client.post(
+            "/review/annotations/m_nope", json={"action": "approve"}
+        ).status_code == 404
+        assert client.post(
+            "/review/annotations/m_nope", json={"action": "yolo"}
+        ).status_code == 422
+
+    def test_patch_rejects_off_taxonomy_emotion(self, env):
+        client, conn, meme = self._seed_pending(env)
+        resp = client.post(
+            f"/review/annotations/{meme.meme_id}",
+            json={"action": "approve", "patch": {"emotions": ["超展開"]}},
+        )
+        assert resp.status_code == 422
+
+
+class TestDedupReviewQueue:
+    def _seed_pair(self, env):
+        client, conn, memes, deps = env
+        dup = seed_meme(conn, deps.data_dir, franchise="海綿寶寶", ocr="重複疑似")
+        repo.add_dedup_review(
+            conn, meme_id=dup.meme_id, matched_meme_id=memes[0].meme_id,
+            layer="clip", score=0.95,
+        )
+        return client, conn, dup, memes[0]
+
+    def test_list_pairs_with_images(self, env):
+        client, conn, dup, kept = self._seed_pair(env)
+        rows = client.get("/review/dedup").json()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["meme"]["meme_id"] == dup.meme_id
+        assert row["meme"]["image_url"] == f"/memes/{dup.meme_id}/image"
+        assert row["matched"]["meme_id"] == kept.meme_id
+        assert row["matched"]["ocr_text"] == "我就爛"
+        assert row["score"] == pytest.approx(0.95)
+
+    def test_resolve_merged(self, env):
+        client, conn, dup, kept = self._seed_pair(env)
+        review_id = client.get("/review/dedup").json()[0]["review_id"]
+
+        resp = client.post(f"/review/dedup/{review_id}", json={"resolution": "merged"})
+
+        assert resp.status_code == 200
+        assert repo.get_meme(conn, dup.meme_id).status == "removed"
+        assert repo.get_meme(conn, kept.meme_id).hotness > 0  # 熱度轉移
+        assert repo.list_dedup_reviews(conn, resolution="merged")
+        assert client.get("/review/dedup").json() == []  # 佇列清空
+
+    def test_resolve_distinct(self, env):
+        client, conn, dup, kept = self._seed_pair(env)
+        review_id = client.get("/review/dedup").json()[0]["review_id"]
+
+        resp = client.post(f"/review/dedup/{review_id}", json={"resolution": "distinct"})
+
+        assert resp.status_code == 200
+        assert repo.get_meme(conn, dup.meme_id).status == "active"  # 保留
+        assert repo.list_dedup_reviews(conn, resolution="distinct")
+
+    def test_unknown_review_404(self, env):
+        client, *_ = env
+        assert client.post(
+            "/review/dedup/dr_nope", json={"resolution": "merged"}
+        ).status_code == 404
+
+
 class TestImagesAndMeta:
     def test_image_served(self, env):
         client, _, memes, _ = env
@@ -426,3 +535,4 @@ class TestImagesAndMeta:
         franchises = {f["name"]: f["count"] for f in body["franchises"]}
         assert franchises == {"海綿寶寶": 2, "甄嬛傳": 1}
         assert "卡通動畫" in body["categories"]
+        assert "擺爛" in body["emotions"]  # 複核頁標籤編修的字典來源

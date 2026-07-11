@@ -385,6 +385,13 @@ def list_dedup_reviews(conn: sqlite3.Connection, resolution: str = "pending") ->
     return [dict(r) for r in rows]
 
 
+def get_dedup_review(conn: sqlite3.Connection, review_id: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM dedup_reviews WHERE review_id = ?", (review_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def set_dedup_review_resolution(
     conn: sqlite3.Connection, review_id: str, resolution: str
 ) -> None:

@@ -21,20 +21,24 @@ from fastapi.responses import FileResponse
 
 from memeradar.api.pipeline import run_recommendation
 from memeradar.api.schemas import (
+    DedupResolutionRequest,
     FeedbackRequest,
     ParseScreenshotRequest,
     RecommendRequest,
+    ReviewAnnotationRequest,
     UploadMemeRequest,
 )
+from memeradar.ingestion.dedup import merge_duplicate_into
 from memeradar.ingestion.seed_import import import_image_bytes
 from memeradar.matching.intent import IntentRefusedError
 from memeradar.matching.screenshot import ScreenshotParseError, parse_screenshot
 from memeradar.shared import repository as repo
 from memeradar.shared.db import connect, migrate
-from memeradar.shared.models import FeedbackEvent, new_id
+from memeradar.shared.models import Embedding, FeedbackEvent, new_id
 from memeradar.shared.taxonomy import get_taxonomy
 from memeradar.understanding.annotator import annotate_meme
-from memeradar.understanding.embedding import Embedder, embed_pending_memes
+from memeradar.understanding.embedding import Embedder, embed_pending_memes, embedding_signature
+from memeradar.understanding.retrieval_doc import build_retrieval_document
 
 _MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp"}
 
@@ -195,6 +199,93 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             "image_url": f"/memes/{meme.meme_id}/image",
         }
 
+    @app.post("/review/annotations/{meme_id}")
+    def review_annotation(
+        meme_id: str,
+        request: ReviewAnnotationRequest,
+        conn: sqlite3.Connection = Depends(get_conn),
+    ):
+        """標註複核：修標籤（可選）+ 通過 / 淘汰；通過即重建檢索向量。"""
+        meme = repo.get_meme(conn, meme_id)
+        if meme is None:
+            raise HTTPException(status_code=404, detail="梗圖不存在")
+
+        annotation = repo.get_annotation(conn, meme_id)
+        if request.patch is not None:
+            if annotation is None:
+                raise HTTPException(status_code=422, detail="尚未標註，無法修補標籤")
+            changes = {
+                key: value
+                for key, value in request.patch.model_dump(mode="json").items()
+                if value is not None
+            }
+            from dataclasses import replace
+
+            annotation = replace(annotation, **changes)
+            if not annotation.model_version.endswith("+human"):
+                annotation = replace(
+                    annotation, model_version=annotation.model_version + "+human"
+                )
+            repo.upsert_annotation(conn, annotation)
+
+        if request.action == "approve":
+            repo.set_status(conn, meme_id, "active")
+            if annotation is not None and annotation.is_meme:
+                # 標註可能已修改 → 立即重建檢索向量（add_embedding 為 upsert）
+                [vector] = deps.embedder.embed([build_retrieval_document(annotation)])
+                repo.add_embedding(
+                    conn,
+                    Embedding(
+                        meme_id=meme_id,
+                        kind="text_retrieval",
+                        model=embedding_signature(deps.embedder),
+                        vector=vector,
+                    ),
+                )
+        else:
+            repo.set_status(conn, meme_id, "removed")
+        return {"meme_id": meme_id, "status": repo.get_meme(conn, meme_id).status}
+
+    @app.get("/review/dedup")
+    def dedup_queue(conn: sqlite3.Connection = Depends(get_conn)):
+        """去重裁決佇列：待人工判定的疑似重複配對（並排比對資料）。"""
+
+        def summary(meme_id: str) -> dict:
+            meme = repo.get_meme(conn, meme_id)
+            annotation = repo.get_annotation(conn, meme_id)
+            return {
+                "meme_id": meme_id,
+                "image_url": f"/memes/{meme_id}/image",
+                "ocr_text": annotation.ocr_text if annotation else "",
+                "status": meme.status if meme else "unknown",
+            }
+
+        return [
+            {
+                "review_id": row["review_id"],
+                "layer": row["layer"],
+                "score": row["score"],
+                "created_at": row["created_at"],
+                "meme": summary(row["meme_id"]),
+                "matched": summary(row["matched_meme_id"]),
+            }
+            for row in repo.list_dedup_reviews(conn)
+        ]
+
+    @app.post("/review/dedup/{review_id}")
+    def resolve_dedup(
+        review_id: str,
+        request: DedupResolutionRequest,
+        conn: sqlite3.Connection = Depends(get_conn),
+    ):
+        review = repo.get_dedup_review(conn, review_id)
+        if review is None:
+            raise HTTPException(status_code=404, detail="裁決項不存在")
+        if request.resolution == "merged":
+            merge_duplicate_into(conn, review["meme_id"], review["matched_meme_id"])
+        repo.set_dedup_review_resolution(conn, review_id, request.resolution)
+        return {"review_id": review_id, "resolution": request.resolution}
+
     @app.get("/memes/{meme_id}/image")
     def meme_image(meme_id: str, conn: sqlite3.Connection = Depends(get_conn)):
         meme = repo.get_meme(conn, meme_id)
@@ -216,6 +307,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             ],
             "categories": [c.label for c in taxonomy.categories],
             "strategies": [s.label for s in taxonomy.strategies],
+            "emotions": list(taxonomy.emotions),
         }
 
     return app

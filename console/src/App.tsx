@@ -6,14 +6,16 @@ import LibraryView from "./components/LibraryView";
 import ParamsPanel from "./components/ParamsPanel";
 import RadarLoading from "./components/RadarLoading";
 import ResultCard from "./components/ResultCard";
+import ReviewView from "./components/ReviewView";
 import { DEFAULT_FILTERS, DEFAULT_PARAMS, fetchMeta, recommend } from "./lib/api";
 import type { Filters, HistoryDetail, Meta, Params, RecommendResponse, Turn } from "./types";
 
-type Tab = "work" | "history" | "library";
+type Tab = "work" | "history" | "library" | "review";
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "work", label: "工作台" },
   { id: "history", label: "查詢歷史" },
   { id: "library", label: "梗圖庫" },
+  { id: "review", label: "複核" },
 ];
 
 export default function App() {
@@ -108,6 +110,7 @@ export default function App() {
 
       {tab === "history" && <HistoryView onReplay={replay} />}
       {tab === "library" && <LibraryView meta={meta} />}
+      {tab === "review" && <ReviewView meta={meta} />}
 
       <main
         className={`min-h-0 flex-1 grid-cols-[300px_1fr_260px] gap-4 p-4 ${

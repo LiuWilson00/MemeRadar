@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from memeradar.shared.labels import CategoryLabel, EmotionLabel
+
 
 class TurnIn(BaseModel):
     speaker: str = Field(pattern=r"^(me|other(_\w+)?)$")
@@ -43,6 +45,29 @@ class UploadMemeRequest(BaseModel):
 
     image: str  # base64（PNG / JPEG / WebP）
     title_hint: str | None = None  # 標註時的上下文提示（如主題名）
+
+
+class AnnotationPatch(BaseModel):
+    """人工複核的標籤修補（僅覆蓋有提供的欄位；封閉集欄位鎖 taxonomy）。"""
+
+    ocr_text: str | None = None
+    description: str | None = None
+    franchise: str | None = None
+    template_name: str | None = None
+    emotions: list[EmotionLabel] | None = None
+    usage_hints: list[str] | None = None
+    categories: list[CategoryLabel] | None = None
+    nsfw: bool | None = None
+    is_meme: bool | None = None
+
+
+class ReviewAnnotationRequest(BaseModel):
+    action: Literal["approve", "remove"]
+    patch: AnnotationPatch | None = None
+
+
+class DedupResolutionRequest(BaseModel):
+    resolution: Literal["merged", "distinct"]
 
 
 class FeedbackRequest(BaseModel):

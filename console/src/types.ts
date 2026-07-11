@@ -129,4 +129,24 @@ export interface Meta {
   franchises: Array<{ name: string; count: number }>;
   categories: string[];
   strategies: string[];
+  emotions: string[];
+}
+
+export interface DedupReviewItem {
+  review_id: string;
+  layer: string;
+  score: number | null;
+  created_at: string;
+  meme: { meme_id: string; image_url: string; ocr_text: string; status: string };
+  matched: { meme_id: string; image_url: string; ocr_text: string; status: string };
+}
+
+export interface AnnotationPatch {
+  ocr_text?: string;
+  franchise?: string | null;
+  emotions?: string[];
+  usage_hints?: string[];
+  categories?: string[];
+  nsfw?: boolean;
+  is_meme?: boolean;
 }

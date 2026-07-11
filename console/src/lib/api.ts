@@ -1,4 +1,6 @@
 import type {
+  AnnotationPatch,
+  DedupReviewItem,
   Filters,
   HistoryDetail,
   HistoryItem,
@@ -106,6 +108,36 @@ export async function uploadMeme(imageBase64: string, titleHint: string): Promis
     body: JSON.stringify({ image: imageBase64, title_hint: titleHint || null }),
   });
   return unwrap<UploadResult>(response);
+}
+
+/** 標註複核：通過（可帶標籤修補，後端會重建向量）或淘汰。 */
+export async function reviewAnnotation(
+  memeId: string,
+  action: "approve" | "remove",
+  patch?: AnnotationPatch,
+): Promise<void> {
+  const response = await fetch(`/review/annotations/${memeId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, patch: patch ?? null }),
+  });
+  await unwrap(response);
+}
+
+export async function fetchDedupReviews(): Promise<DedupReviewItem[]> {
+  return unwrap<DedupReviewItem[]>(await fetch("/review/dedup"));
+}
+
+export async function resolveDedup(
+  reviewId: string,
+  resolution: "merged" | "distinct",
+): Promise<void> {
+  const response = await fetch(`/review/dedup/${reviewId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ resolution }),
+  });
+  await unwrap(response);
 }
 
 /** 截圖 → 結構化對話（後端僅記憶體處理，不落庫）。約 5–8 秒。 */
