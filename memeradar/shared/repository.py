@@ -425,6 +425,48 @@ def set_watermark(conn: sqlite3.Connection, source: str, watermark: str) -> None
     conn.commit()
 
 
+# ── crawl_health（來源健康度）───────────────────────────────────────
+
+
+def get_crawl_failures(conn: sqlite3.Connection, source: str) -> int:
+    row = conn.execute(
+        "SELECT consecutive_failures FROM crawl_health WHERE source = ?", (source,)
+    ).fetchone()
+    return row["consecutive_failures"] if row else 0
+
+
+def record_crawl_failure(conn: sqlite3.Connection, source: str, error: str) -> int:
+    """記一次來源失敗，回傳連續失敗次數（≥3 應告警，docs/02 §6）。"""
+    conn.execute(
+        """
+        INSERT INTO crawl_health (source, consecutive_failures, last_error, updated_at)
+        VALUES (?, 1, ?, datetime('now'))
+        ON CONFLICT (source) DO UPDATE SET
+            consecutive_failures = consecutive_failures + 1,
+            last_error = excluded.last_error,
+            updated_at = excluded.updated_at
+        """,
+        (source, error),
+    )
+    conn.commit()
+    return get_crawl_failures(conn, source)
+
+
+def reset_crawl_failures(conn: sqlite3.Connection, source: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO crawl_health (source, consecutive_failures, last_error, updated_at)
+        VALUES (?, 0, NULL, datetime('now'))
+        ON CONFLICT (source) DO UPDATE SET
+            consecutive_failures = 0,
+            last_error = NULL,
+            updated_at = excluded.updated_at
+        """,
+        (source,),
+    )
+    conn.commit()
+
+
 # ── meme_sources ─────────────────────────────────────────────────────
 
 

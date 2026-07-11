@@ -66,9 +66,11 @@
   - 驗收：02 文件 §8 測試組全過 ✅（單元 15 項 + 真 CLIP 煙霧）；「同模板不同字」不誤殺 ✅——真實驗證曾抓到原規格會誤殺（pHash 距離 0、CLIP 0.993），已修訂為「僅 SHA256 自動判重；L2/L3 進佇列，標註後以 OCR 比對自動裁決」，修訂已寫回 02 文件 §4
   - 交付：`ingestion/dedup.py`（Deduplicator + ClipImageEmbedder + absorb_duplicate + maybe_upgrade_image + resolve_pending_reviews）、migration 0003 dedup_reviews、hotness_gain = 1 + log10(1+upvotes)
   - 已知限制：加大框＋裁切等激烈改造可能掉出 L3 偵測帶（小浮水印 L2 可攔）
-- [ ] **P3-4** 規則引擎價值過濾 + 批次報表（02 文件 §5–6）— **S**（依賴 P3-1）
-- [ ] **P3-5** 排程整合：cron 觸發「抓取 → 去重 → 過濾 → Batch 標註 → 入索引」全自動管線 — **M**（依賴 P3-2, P3-3, P3-4, P1-2）
+- [x] **P3-4** 規則引擎價值過濾 + 批次報表（02 文件 §5–6）— **S**（依賴 P3-1）
+  - 驗收 ✅（`ingestion/rules.py`：互動門檻按平台 / URL 黑名單 / 格式 / 短邊≥200 / 長寬比≤4，下載前後分段檢查省頻寬；報表整合於 P3-5 管線）
+- [ ] **P3-5** 排程整合：cron 觸發「抓取 → 去重 → 過濾 → 標註 → 入索引」全自動管線 — **M**（依賴 P3-2, P3-3, P3-4, P1-2）
   - 驗收：連續 7 天無人工介入，批次報表數字對帳
+  - 進度：管線已實作並通過測試 ✅（`ingestion/pipeline.py`：抓取 → 規則過濾 → 下載（重試 2 次）→ 去重（吸收 / 佇列 / 入庫）→ 標註 → 佇列 OCR 裁決 → 向量化；單來源失敗隔離 + crawl_health 連續 3 次告警（migration 0004）；報表對帳由測試保證；CLI 供 cron 觸發）；「連續 7 天」⏳ 待 Reddit 憑證填入後排程實跑；標註走同步版，Batch API 半價（P1-2）為後續成本優化；Dcard adapter（P3-2）未接
 - [ ] **P3-6** KnowYourMeme / memes.tw adapter（模板知識補充，選做）— **M**
 - [ ] **P3-7** 規模化驗證：庫達 3,000 張後重跑匹配 golden set，確認 Recall 不降、延遲不爆 — **S**（依賴 P3-5, P2-8）
 

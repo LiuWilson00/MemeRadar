@@ -53,6 +53,10 @@ def import_image_bytes(
     data_dir: Path,
     source_title: str | None = None,
     platform: str = "manual",
+    post_url: str | None = None,
+    top_comments: list[str] | None = None,
+    upvotes: int | None = None,
+    posted_at: str | None = None,
 ) -> tuple[Meme | None, str]:
     """單張圖片入庫（seed 匯入與 Console 上傳共用核心）。
 
@@ -95,6 +99,10 @@ def import_image_bytes(
             meme_id=meme_id,
             platform=platform,
             post_title=source_title,
+            post_url=post_url,
+            top_comments=top_comments or [],
+            upvotes=upvotes,
+            posted_at=posted_at,
         ),
     )
     return meme, "imported"

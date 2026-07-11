@@ -84,6 +84,12 @@ python -m memeradar.matching.cli "被老闆罵了想擺爛" --top 10 [--franchis
 python -m memeradar.ingestion.reddit --client praw --subreddit memes --limit 25 [--update-watermark] [--json]
 ```
 
+全自動資料管線（抓取 → 過濾 → 去重 → 標註 → 向量化，一鍵完成；供排程器定期觸發，如 Windows 工作排程器或 cron 每日一次）：
+
+```bash
+python -m memeradar.ingestion.pipeline --client praw [--subreddit memes] [--limit 100] [--no-clip]
+```
+
 意圖分析驗證：對話 → 意圖 JSON（需 `ANTHROPIC_API_KEY`；每個參數一則訊息）：
 
 ```bash
