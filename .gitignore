@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Secrets 與本機設定
+.env
+
+# 本機資料（物件儲存 / DB）
+data/
+*.sqlite3
+
+# 編輯器
+.idea/
+.vscode/
