@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from memeradar.ingestion.seed_import import import_seed_folder
+from memeradar.ingestion.seed_import import import_image_bytes, import_seed_folder
 from memeradar.shared import repository as repo
 from memeradar.shared.db import connect, migrate
 
@@ -120,6 +120,47 @@ def test_corrupt_image_skipped_with_warning(conn, data_dir, tmp_path):
     assert report.imported == 0
     assert report.errors == 1
     assert repo.count_memes(conn) == 0
+
+
+class TestImportImageBytes:
+    def test_imports_single_image_with_source_title(self, conn, data_dir, tmp_path):
+        make_image(tmp_path / "a.png")
+        content = (tmp_path / "a.png").read_bytes()
+
+        meme, status = import_image_bytes(
+            conn, content, data_dir=data_dir, source_title="Console 上傳"
+        )
+
+        assert status == "imported"
+        assert meme is not None
+        assert (data_dir / meme.image_uri).exists()
+        assert repo.list_sources(conn, meme.meme_id)[0].post_title == "Console 上傳"
+
+    def test_duplicate_returns_existing_meme(self, conn, data_dir, tmp_path):
+        make_image(tmp_path / "a.png")
+        content = (tmp_path / "a.png").read_bytes()
+        first, _ = import_image_bytes(conn, content, data_dir=data_dir)
+
+        dup, status = import_image_bytes(conn, content, data_dir=data_dir)
+
+        assert status == "duplicate"
+        assert dup.meme_id == first.meme_id
+        assert repo.count_memes(conn) == 1
+
+    def test_corrupt_bytes_return_error(self, conn, data_dir):
+        meme, status = import_image_bytes(conn, b"not an image", data_dir=data_dir)
+        assert status == "error"
+        assert meme is None
+
+    def test_unsupported_format_rejected(self, conn, data_dir, tmp_path):
+        from PIL import Image
+
+        Image.new("RGB", (300, 300)).save(tmp_path / "a.gif")
+        meme, status = import_image_bytes(
+            conn, (tmp_path / "a.gif").read_bytes(), data_dir=data_dir
+        )
+        assert status == "unsupported"
+        assert meme is None
 
 
 def _sha256_of(path: Path) -> str:

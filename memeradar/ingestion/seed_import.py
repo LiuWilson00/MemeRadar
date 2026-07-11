@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 import hashlib
-import shutil
+import io
 import sqlite3
 import sys
 from dataclasses import dataclass, field
@@ -28,6 +28,7 @@ from memeradar.shared.models import Meme, MemeSource, new_id
 
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 MIN_SHORT_SIDE = 200  # docs/02 §5 規則門檻；seed 僅警告
+_FORMAT_EXTENSIONS = {"PNG": ".png", "JPEG": ".jpg", "WEBP": ".webp"}
 
 
 @dataclass
@@ -45,13 +46,65 @@ def _normalized_ext(path: Path) -> str:
     return ".jpg" if ext == ".jpeg" else ext
 
 
+def import_image_bytes(
+    conn: sqlite3.Connection,
+    content: bytes,
+    *,
+    data_dir: Path,
+    source_title: str | None = None,
+    platform: str = "manual",
+) -> tuple[Meme | None, str]:
+    """單張圖片入庫（seed 匯入與 Console 上傳共用核心）。
+
+    回傳 ``(meme, status)``；status ∈ imported / duplicate / unsupported / error。
+    duplicate 時回傳既有 meme。
+    """
+    sha256 = hashlib.sha256(content).hexdigest()
+    existing = repo.find_meme_by_sha256(conn, sha256)
+    if existing is not None:
+        return existing, "duplicate"
+
+    try:
+        with Image.open(io.BytesIO(content)) as img:
+            width, height = img.size
+            image_format = img.format
+    except (UnidentifiedImageError, OSError):
+        return None, "error"
+
+    extension = _FORMAT_EXTENSIONS.get(image_format or "")
+    if extension is None:
+        return None, "unsupported"
+
+    images_dir = data_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    meme_id = new_id("m")
+    (images_dir / f"{meme_id}{extension}").write_bytes(content)
+
+    meme = Meme(
+        meme_id=meme_id,
+        image_uri=f"images/{meme_id}{extension}",
+        sha256=sha256,
+        width=width,
+        height=height,
+    )
+    repo.insert_meme(conn, meme)
+    repo.add_source(
+        conn,
+        MemeSource(
+            source_id=new_id("s"),
+            meme_id=meme_id,
+            platform=platform,
+            post_title=source_title,
+        ),
+    )
+    return meme, "imported"
+
+
 def import_seed_folder(
     conn: sqlite3.Connection, folder: Path, data_dir: Path | None = None
 ) -> ImportReport:
     folder = Path(folder)
     data_dir = Path(data_dir) if data_dir is not None else get_settings().memeradar_data_dir
-    images_dir = data_dir / "images"
-    images_dir.mkdir(parents=True, exist_ok=True)
 
     report = ImportReport()
     for path in sorted(p for p in folder.rglob("*") if p.is_file()):
@@ -59,50 +112,24 @@ def import_seed_folder(
             report.skipped_unsupported += 1
             continue
 
-        content = path.read_bytes()
-        sha256 = hashlib.sha256(content).hexdigest()
-        if repo.find_meme_by_sha256(conn, sha256) is not None:
+        rel_dir = path.parent.relative_to(folder)
+        folder_hint = None if str(rel_dir) == "." else str(rel_dir).replace("\\", "/")
+
+        meme, status = import_image_bytes(
+            conn, path.read_bytes(), data_dir=data_dir, source_title=folder_hint
+        )
+        if status == "duplicate":
             report.skipped_duplicate += 1
             continue
-
-        try:
-            with Image.open(path) as img:
-                width, height = img.size
-        except (UnidentifiedImageError, OSError):
+        if status in ("error", "unsupported"):
             report.errors += 1
             report.warnings.append(f"無法讀取圖片，已跳過：{path}")
             continue
 
-        if min(width, height) < MIN_SHORT_SIDE:
-            report.warnings.append(f"尺寸過小（{width}x{height}）仍匯入：{path.name}")
+        assert meme is not None
+        if min(meme.width or 0, meme.height or 0) < MIN_SHORT_SIDE:
+            report.warnings.append(f"尺寸過小（{meme.width}x{meme.height}）仍匯入：{path.name}")
 
-        meme_id = new_id("m")
-        ext = _normalized_ext(path)
-        dest = images_dir / f"{meme_id}{ext}"
-        shutil.copyfile(path, dest)
-
-        rel_dir = path.parent.relative_to(folder)
-        folder_hint = None if str(rel_dir) == "." else str(rel_dir).replace("\\", "/")
-
-        repo.insert_meme(
-            conn,
-            Meme(
-                meme_id=meme_id,
-                image_uri=f"images/{meme_id}{ext}",
-                sha256=sha256,
-                width=width,
-                height=height,
-            ),
-        )
-        repo.add_source(
-            conn,
-            MemeSource(
-                source_id=new_id("s"),
-                meme_id=meme_id,
-                platform="manual",
-                post_title=folder_hint,
-            ),
-        )
         report.imported += 1
         key = folder_hint or "."
         report.per_folder[key] = report.per_folder.get(key, 0) + 1

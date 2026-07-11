@@ -15,6 +15,7 @@ export default defineConfig({
       "/memes": API,
       "/meta": API,
       "/health": API,
+      "/history": API,
     },
   },
   test: {

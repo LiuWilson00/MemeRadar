@@ -73,6 +73,58 @@ export interface ScreenshotParse {
   warnings: string[];
 }
 
+export interface HistoryItem {
+  query_id: string;
+  created_at: string;
+  conversation: Turn[];
+  params_snapshot: { filters?: Filters; params?: Params };
+  latency_ms: number | null;
+  result_count: number;
+  ups: number;
+  downs: number;
+}
+
+export interface HistoryDetail {
+  query_id: string;
+  conversation: Turn[];
+  params_snapshot: { filters?: Filters; params?: Params };
+  intent_result: Intent | null;
+  final_results: ResultItem[] | null;
+  latency_ms: number | null;
+  created_at: string;
+}
+
+export interface LibraryMeme {
+  meme_id: string;
+  image_url: string;
+  status: string;
+  hotness: number;
+  first_seen_at: string;
+  annotation: {
+    is_meme: boolean;
+    nsfw: boolean;
+    ocr_text: string;
+    description: string;
+    characters: string[];
+    franchise: string | null;
+    template_name: string | null;
+    emotions: string[];
+    usage_hints: string[];
+    categories: string[];
+    confidence: number | null;
+    model_version: string;
+  } | null;
+}
+
+export interface UploadResult {
+  meme_id: string;
+  status: string;
+  meme_status: string;
+  annotation: LibraryMeme["annotation"];
+  embedded: boolean;
+  image_url: string;
+}
+
 export interface Meta {
   franchises: Array<{ name: string; count: number }>;
   categories: string[];

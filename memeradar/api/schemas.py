@@ -38,6 +38,13 @@ class ParseScreenshotRequest(BaseModel):
     image: str  # base64（PNG / JPEG / WebP）
 
 
+class UploadMemeRequest(BaseModel):
+    """Console 手動上傳（seed 匯入口）：匯入 → 標註 → 向量化一條龍。"""
+
+    image: str  # base64（PNG / JPEG / WebP）
+    title_hint: str | None = None  # 標註時的上下文提示（如主題名）
+
+
 class FeedbackRequest(BaseModel):
     query_id: str
     meme_id: str

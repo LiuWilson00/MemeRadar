@@ -1,13 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
 import ConversationEditor from "./components/ConversationEditor";
 import DebugPanel from "./components/DebugPanel";
+import HistoryView from "./components/HistoryView";
+import LibraryView from "./components/LibraryView";
 import ParamsPanel from "./components/ParamsPanel";
 import RadarLoading from "./components/RadarLoading";
 import ResultCard from "./components/ResultCard";
 import { DEFAULT_FILTERS, DEFAULT_PARAMS, fetchMeta, recommend } from "./lib/api";
-import type { Filters, Meta, Params, RecommendResponse, Turn } from "./types";
+import type { Filters, HistoryDetail, Meta, Params, RecommendResponse, Turn } from "./types";
+
+type Tab = "work" | "history" | "library";
+const TABS: Array<{ id: Tab; label: string }> = [
+  { id: "work", label: "工作台" },
+  { id: "history", label: "查詢歷史" },
+  { id: "library", label: "梗圖庫" },
+];
 
 export default function App() {
+  const [tab, setTab] = useState<Tab>("work");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [filters, setFilters] = useState<Filters>({ ...DEFAULT_FILTERS });
   const [params, setParams] = useState<Params>({ ...DEFAULT_PARAMS });
@@ -26,20 +36,42 @@ export default function App() {
       .catch(() => setMeta(null));
   }, []);
 
-  const submit = useCallback(async () => {
-    const cleaned = turns.filter((t) => t.text.trim());
-    if (cleaned.length === 0 || loading) return;
-    setLoading(true);
-    setError(null);
-    try {
-      setResponse(await recommend(cleaned, filters, params));
-    } catch (e) {
-      setResponse(null);
-      setError(e instanceof Error ? e.message : "查詢失敗");
-    } finally {
-      setLoading(false);
-    }
-  }, [turns, filters, params, loading]);
+  const runQuery = useCallback(
+    async (queryTurns: Turn[], queryFilters: Filters, queryParams: Params) => {
+      const cleaned = queryTurns.filter((t) => t.text.trim());
+      if (cleaned.length === 0) return;
+      setLoading(true);
+      setError(null);
+      try {
+        setResponse(await recommend(cleaned, queryFilters, queryParams));
+      } catch (e) {
+        setResponse(null);
+        setError(e instanceof Error ? e.message : "查詢失敗");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [],
+  );
+
+  const submit = useCallback(() => {
+    if (!loading) void runQuery(turns, filters, params);
+  }, [turns, filters, params, loading, runQuery]);
+
+  /** 歷史重放：載入當時輸入與參數回工作台並自動重跑（docs/05 §2.2） */
+  const replay = useCallback(
+    (detail: HistoryDetail) => {
+      const replayTurns = detail.conversation;
+      const replayFilters = { ...DEFAULT_FILTERS, ...detail.params_snapshot.filters };
+      const replayParams = { ...DEFAULT_PARAMS, ...detail.params_snapshot.params };
+      setTurns(replayTurns);
+      setFilters(replayFilters);
+      setParams(replayParams);
+      setTab("work");
+      void runQuery(replayTurns, replayFilters, replayParams);
+    },
+    [runQuery],
+  );
 
   const hits = response?.debug.per_strategy_hits ?? {};
   const allZeroHits = Object.values(hits).length > 0 && Object.values(hits).every((n) => n === 0);
@@ -51,6 +83,19 @@ export default function App() {
           MEME<span className="text-amber">RADAR</span>
         </h1>
         <span className="text-xs text-muted">調適控制台</span>
+        <nav className="ml-6 flex gap-1">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`rounded px-3 py-1 text-xs ${
+                tab === t.id ? "bg-amber-soft text-amber" : "text-muted hover:text-fg"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </nav>
         <span className="ml-auto flex items-center gap-1.5 font-mono text-xs text-muted">
           <span
             className={`h-2 w-2 rounded-full ${
@@ -61,7 +106,14 @@ export default function App() {
         </span>
       </header>
 
-      <main className="grid min-h-0 flex-1 grid-cols-[300px_1fr_260px] gap-4 p-4">
+      {tab === "history" && <HistoryView onReplay={replay} />}
+      {tab === "library" && <LibraryView meta={meta} />}
+
+      <main
+        className={`min-h-0 flex-1 grid-cols-[300px_1fr_260px] gap-4 p-4 ${
+          tab === "work" ? "grid" : "hidden"
+        }`}
+      >
         <ConversationEditor turns={turns} onChange={setTurns} onSubmit={submit} loading={loading} />
 
         <section className="flex min-h-0 flex-col gap-3 overflow-y-auto" aria-label="推薦結果">

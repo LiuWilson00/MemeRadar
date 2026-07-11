@@ -16,6 +16,7 @@ from memeradar.matching.screenshot import ScreenshotParseResult
 from memeradar.shared import repository as repo
 from memeradar.shared.db import connect, migrate
 from memeradar.shared.models import Embedding, Meme, MemeAnnotation, new_id
+from memeradar.understanding.annotator import AnnotationResult
 
 SIGNATURE = "fake-embed@v1|doc-v1"
 
@@ -35,6 +36,20 @@ RERANK_PAYLOAD = RerankResult(
     scores=[
         CandidateScore(candidate_id=i, score=95 - i * 10, reason=f"理由{i}") for i in range(1, 11)
     ]
+)
+
+ANNOTATION_PAYLOAD = AnnotationResult(
+    is_meme=True,
+    nsfw=False,
+    ocr_text="上傳的梗",
+    description="測試上傳",
+    characters=[],
+    franchise="海綿寶寶",
+    template_name=None,
+    emotions=["得意"],
+    usage_hints=["炫耀成果時使用"],
+    categories=["卡通動畫"],
+    confidence=0.9,
 )
 
 SCREENSHOT_PAYLOAD = ScreenshotParseResult(
@@ -75,6 +90,8 @@ class DualStubClient:
                     if "screenshot" in outer.refuse:
                         return StubResponse(None, "refusal")
                     return StubResponse(SCREENSHOT_PAYLOAD)
+                if fmt is AnnotationResult:
+                    return StubResponse(ANNOTATION_PAYLOAD)
                 raise AssertionError(f"未知 output_format: {fmt}")
 
         self.messages = _Messages()
@@ -325,6 +342,71 @@ class TestFeedback:
             json={"query_id": "q_x", "meme_id": "m_x", "rank": 1, "rating": "meh"},
         )
         assert resp.status_code == 422
+
+
+class TestHistory:
+    def test_list_with_feedback_counts_and_detail_for_replay(self, env):
+        client, *_ = env
+        body = client.post("/recommend", json=BASE_REQUEST).json()
+        client.post("/feedback", json={
+            "query_id": body["query_id"], "meme_id": body["results"][0]["meme_id"],
+            "rank": 1, "rating": "up",
+        })
+
+        history = client.get("/history").json()
+        assert history[0]["query_id"] == body["query_id"]
+        assert history[0]["ups"] == 1 and history[0]["downs"] == 0
+        assert history[0]["result_count"] == 3
+
+        detail = client.get(f"/history/{body['query_id']}").json()
+        assert detail["conversation"] == BASE_REQUEST["conversation"]  # 重放輸入
+        assert detail["params_snapshot"]["params"]["top_n"] == 3
+        assert detail["intent_result"]["punchline"] == "你到底行不行"
+
+    def test_unknown_query_404(self, env):
+        client, *_ = env
+        assert client.get("/history/q_nope").status_code == 404
+
+
+class TestLibrary:
+    def test_list_and_filter(self, env):
+        client, _, memes, _ = env
+        rows = client.get("/memes").json()
+        assert {r["meme_id"] for r in rows} >= {m.meme_id for m in memes}
+        assert all("image_url" in r for r in rows)
+
+        rows = client.get("/memes", params={"franchise": "甄嬛傳"}).json()
+        assert [r["meme_id"] for r in rows] == [memes[1].meme_id]
+        assert rows[0]["annotation"]["ocr_text"] == "臣妾做不到啊"
+
+    def test_upload_imports_annotates_and_embeds(self, env):
+        client, conn, *_ = env
+        buffer = __import__("io").BytesIO()
+        Image.new("RGB", (300, 300), (10, 200, 90)).save(buffer, format="PNG")
+        png_b64 = base64.standard_b64encode(buffer.getvalue()).decode()
+
+        resp = client.post("/memes", json={"image": png_b64, "title_hint": "手動上傳測試"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "imported"
+        assert body["annotation"]["ocr_text"] == "上傳的梗"
+        # 已標註 + 已向量化 → 立即可檢索
+        embeddings = repo.get_embeddings(conn, body["meme_id"], kind="text_retrieval")
+        assert len(embeddings) == 1
+        assert embeddings[0].model == SIGNATURE
+
+        dup = client.post("/memes", json={"image": png_b64})
+        assert dup.status_code == 409
+
+    def test_upload_invalid_base64_422(self, env):
+        client, *_ = env
+        assert client.post("/memes", json={"image": "@@@"}).status_code == 422
+
+    def test_upload_corrupt_image_422(self, env):
+        client, *_ = env
+        bad = base64.standard_b64encode(b"not an image").decode()
+        assert client.post("/memes", json={"image": bad}).status_code == 422
 
 
 class TestImagesAndMeta:

@@ -108,6 +108,107 @@ def list_memes_missing_annotation(conn: sqlite3.Connection, limit: int | None = 
     return [_row_to_meme(r) for r in conn.execute(sql, params).fetchall()]
 
 
+def list_recommendation_logs(
+    conn: sqlite3.Connection, limit: int = 50, offset: int = 0
+) -> list[dict]:
+    """查詢歷史列表（含 👍👎 統計），新到舊。回傳 JSON-ready dict。"""
+    rows = conn.execute(
+        """
+        SELECT r.query_id, r.created_at, r.conversation, r.params_snapshot,
+               r.latency_ms, r.final_results,
+               COALESCE(SUM(CASE WHEN f.rating = 'up' THEN 1 ELSE 0 END), 0) AS ups,
+               COALESCE(SUM(CASE WHEN f.rating = 'down' THEN 1 ELSE 0 END), 0) AS downs
+        FROM recommendation_logs r
+        LEFT JOIN feedback_events f ON f.query_id = r.query_id
+        GROUP BY r.query_id
+        ORDER BY r.created_at DESC
+        LIMIT ? OFFSET ?
+        """,
+        (limit, offset),
+    ).fetchall()
+    return [
+        {
+            "query_id": r["query_id"],
+            "created_at": r["created_at"],
+            "conversation": _loads(r["conversation"]),
+            "params_snapshot": _loads(r["params_snapshot"]),
+            "latency_ms": r["latency_ms"],
+            "result_count": len(_loads(r["final_results"]) or []),
+            "ups": r["ups"],
+            "downs": r["downs"],
+        }
+        for r in rows
+    ]
+
+
+def list_memes_with_annotations(
+    conn: sqlite3.Connection,
+    *,
+    franchise: str | None = None,
+    category: str | None = None,
+    emotion: str | None = None,
+    status: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
+) -> list[dict]:
+    """梗圖庫瀏覽：含標註摘要與篩選，未標註者 annotation 為 None。"""
+    sql = """
+        SELECT m.meme_id, m.image_uri, m.status, m.hotness, m.width, m.height,
+               m.first_seen_at, a.*
+        FROM memes m
+        LEFT JOIN meme_annotations a ON a.meme_id = m.meme_id
+        WHERE 1 = 1
+    """
+    params: list = []
+    if status is not None:
+        sql += " AND m.status = ?"
+        params.append(status)
+    if franchise is not None:
+        sql += " AND a.franchise = ?"
+        params.append(franchise)
+    if category is not None:
+        sql += " AND EXISTS (SELECT 1 FROM json_each(a.categories) WHERE json_each.value = ?)"
+        params.append(category)
+    if emotion is not None:
+        sql += " AND EXISTS (SELECT 1 FROM json_each(a.emotions) WHERE json_each.value = ?)"
+        params.append(emotion)
+    sql += " ORDER BY m.first_seen_at DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+
+    results = []
+    for row in conn.execute(sql, params):
+        annotation = None
+        if row["model_version"] is not None:
+            ann = annotation_from_row(row)
+            annotation = {
+                "is_meme": ann.is_meme,
+                "nsfw": ann.nsfw,
+                "ocr_text": ann.ocr_text,
+                "description": ann.description,
+                "characters": ann.characters,
+                "franchise": ann.franchise,
+                "template_name": ann.template_name,
+                "emotions": ann.emotions,
+                "usage_hints": ann.usage_hints,
+                "categories": ann.categories,
+                "confidence": ann.confidence,
+                "model_version": ann.model_version,
+            }
+        results.append(
+            {
+                "meme_id": row["meme_id"],
+                "image_uri": row["image_uri"],
+                "status": row["status"],
+                "hotness": row["hotness"],
+                "width": row["width"],
+                "height": row["height"],
+                "first_seen_at": row["first_seen_at"],
+                "annotation": annotation,
+            }
+        )
+    return results
+
+
 def franchise_counts(conn: sqlite3.Connection) -> dict[str, int]:
     """各 franchise 的可檢索梗圖數（Console 梗圖包下拉選單用）。"""
     rows = conn.execute(

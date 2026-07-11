@@ -1,4 +1,15 @@
-import type { Filters, Meta, Params, RecommendResponse, ScreenshotParse, Turn } from "../types";
+import type {
+  Filters,
+  HistoryDetail,
+  HistoryItem,
+  LibraryMeme,
+  Meta,
+  Params,
+  RecommendResponse,
+  ScreenshotParse,
+  Turn,
+  UploadResult,
+} from "../types";
 
 export const DEFAULT_FILTERS: Filters = {
   franchises: [],
@@ -65,6 +76,36 @@ export async function sendFeedback(body: {
 
 export async function fetchMeta(): Promise<Meta> {
   return unwrap<Meta>(await fetch("/meta"));
+}
+
+export async function fetchHistory(): Promise<HistoryItem[]> {
+  return unwrap<HistoryItem[]>(await fetch("/history"));
+}
+
+export async function fetchHistoryDetail(queryId: string): Promise<HistoryDetail> {
+  return unwrap<HistoryDetail>(await fetch(`/history/${queryId}`));
+}
+
+export async function fetchMemes(filters: {
+  franchise?: string;
+  category?: string;
+  emotion?: string;
+  status?: string;
+}): Promise<LibraryMeme[]> {
+  const query = new URLSearchParams(
+    Object.entries(filters).filter(([, v]) => v) as [string, string][],
+  );
+  return unwrap<LibraryMeme[]>(await fetch(`/memes?${query}`));
+}
+
+/** 手動上傳（seed 匯入口）：匯入 → 標註 → 向量化，約 8–12 秒。 */
+export async function uploadMeme(imageBase64: string, titleHint: string): Promise<UploadResult> {
+  const response = await fetch("/memes", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ image: imageBase64, title_hint: titleHint || null }),
+  });
+  return unwrap<UploadResult>(response);
 }
 
 /** 截圖 → 結構化對話（後端僅記憶體處理，不落庫）。約 5–8 秒。 */

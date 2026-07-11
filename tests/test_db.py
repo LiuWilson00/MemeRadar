@@ -218,6 +218,80 @@ class TestMissingAnnotationQuery:
         assert len(repo.list_memes_missing_annotation(conn, limit=2)) == 2
 
 
+class TestHistoryQuery:
+    def test_list_logs_newest_first_with_feedback_counts(self, conn):
+        meme, *_ = make_seed_meme()
+        repo.insert_meme(conn, meme)
+        older = RecommendationLog(
+            query_id=new_id("q"), conversation=[{"speaker": "other", "text": "早的"}],
+            params_snapshot={"params": {"top_n": 5}}, created_at="2026-07-10T10:00:00+00:00",
+        )
+        newer = RecommendationLog(
+            query_id=new_id("q"), conversation=[{"speaker": "other", "text": "晚的"}],
+            params_snapshot={"params": {"top_n": 3}}, latency_ms=1234,
+            final_results=[{"meme_id": meme.meme_id, "rank": 1}],
+            created_at="2026-07-11T10:00:00+00:00",
+        )
+        repo.insert_recommendation_log(conn, older)
+        repo.insert_recommendation_log(conn, newer)
+        for rating in ("up", "up", "down"):
+            repo.insert_feedback(conn, FeedbackEvent(
+                feedback_id=new_id("f"), query_id=newer.query_id,
+                meme_id=meme.meme_id, rank=1, rating=rating,
+            ))
+
+        logs = repo.list_recommendation_logs(conn)
+
+        assert [entry["query_id"] for entry in logs] == [newer.query_id, older.query_id]
+        assert logs[0]["ups"] == 2 and logs[0]["downs"] == 1
+        assert logs[0]["result_count"] == 1
+        assert logs[0]["conversation"][0]["text"] == "晚的"
+        assert logs[1]["ups"] == 0 and logs[1]["downs"] == 0
+
+    def test_list_logs_limit(self, conn):
+        for i in range(3):
+            repo.insert_recommendation_log(conn, RecommendationLog(
+                query_id=new_id("q"), conversation=[], params_snapshot={},
+                created_at=f"2026-07-0{i + 1}T00:00:00+00:00",
+            ))
+        assert len(repo.list_recommendation_logs(conn, limit=2)) == 2
+
+
+class TestLibraryQuery:
+    def _seed(self, conn, *, franchise, emotions, status="active"):
+        meme = Meme(meme_id=new_id("m"), image_uri="x.png", sha256=new_id("h").ljust(64, "0")[:64])
+        repo.insert_meme(conn, meme)
+        repo.upsert_annotation(conn, MemeAnnotation(
+            meme_id=meme.meme_id, model_version="v", ocr_text="字",
+            franchise=franchise, emotions=emotions, categories=["卡通動畫"],
+        ))
+        if status != "active":
+            repo.set_status(conn, meme.meme_id, status)
+        return meme
+
+    def test_filters_by_franchise_emotion_status(self, conn):
+        sponge = self._seed(conn, franchise="海綿寶寶", emotions=["擺爛"])
+        zhen = self._seed(conn, franchise="甄嬛傳", emotions=["崩潰"])
+        pending = self._seed(conn, franchise="海綿寶寶", emotions=["擺爛"], status="pending_review")
+
+        rows = repo.list_memes_with_annotations(conn, franchise="海綿寶寶")
+        assert {r["meme_id"] for r in rows} == {sponge.meme_id, pending.meme_id}
+
+        rows = repo.list_memes_with_annotations(conn, emotion="崩潰")
+        assert [r["meme_id"] for r in rows] == [zhen.meme_id]
+        assert rows[0]["annotation"]["franchise"] == "甄嬛傳"
+
+        rows = repo.list_memes_with_annotations(conn, status="pending_review")
+        assert [r["meme_id"] for r in rows] == [pending.meme_id]
+
+    def test_unannotated_meme_listed_with_null_annotation(self, conn):
+        bare = Meme(meme_id=new_id("m"), image_uri="u.png", sha256="9" * 64)
+        repo.insert_meme(conn, bare)
+        rows = repo.list_memes_with_annotations(conn)
+        target = next(r for r in rows if r["meme_id"] == bare.meme_id)
+        assert target["annotation"] is None
+
+
 class TestRecommendationAndFeedback:
     def _seed_log(self, conn, meme_id: str) -> RecommendationLog:
         log = RecommendationLog(

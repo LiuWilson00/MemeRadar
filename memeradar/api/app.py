@@ -12,7 +12,7 @@ import base64
 import binascii
 import sqlite3
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -20,14 +20,21 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
 from memeradar.api.pipeline import run_recommendation
-from memeradar.api.schemas import FeedbackRequest, ParseScreenshotRequest, RecommendRequest
+from memeradar.api.schemas import (
+    FeedbackRequest,
+    ParseScreenshotRequest,
+    RecommendRequest,
+    UploadMemeRequest,
+)
+from memeradar.ingestion.seed_import import import_image_bytes
 from memeradar.matching.intent import IntentRefusedError
 from memeradar.matching.screenshot import ScreenshotParseError, parse_screenshot
 from memeradar.shared import repository as repo
 from memeradar.shared.db import connect, migrate
 from memeradar.shared.models import FeedbackEvent, new_id
 from memeradar.shared.taxonomy import get_taxonomy
-from memeradar.understanding.embedding import Embedder
+from memeradar.understanding.annotator import annotate_meme
+from memeradar.understanding.embedding import Embedder, embed_pending_memes
 
 _MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp"}
 
@@ -132,6 +139,61 @@ def create_app(deps: Deps | None = None) -> FastAPI:
                 status_code=404, detail="query_id 或 meme_id 不存在"
             ) from None
         return {"feedback_id": event.feedback_id}
+
+    @app.get("/history")
+    def history(limit: int = 50, offset: int = 0,
+                conn: sqlite3.Connection = Depends(get_conn)):
+        return repo.list_recommendation_logs(conn, limit=limit, offset=offset)
+
+    @app.get("/history/{query_id}")
+    def history_detail(query_id: str, conn: sqlite3.Connection = Depends(get_conn)):
+        log = repo.get_recommendation_log(conn, query_id)
+        if log is None:
+            raise HTTPException(status_code=404, detail="查詢紀錄不存在")
+        return asdict(log)
+
+    @app.get("/memes")
+    def list_memes(
+        franchise: str | None = None,
+        category: str | None = None,
+        emotion: str | None = None,
+        status: str | None = None,
+        limit: int = 200,
+        conn: sqlite3.Connection = Depends(get_conn),
+    ):
+        rows = repo.list_memes_with_annotations(
+            conn, franchise=franchise, category=category, emotion=emotion,
+            status=status, limit=limit,
+        )
+        for row in rows:
+            row["image_url"] = f"/memes/{row['meme_id']}/image"
+        return rows
+
+    @app.post("/memes")
+    def upload_meme(request: UploadMemeRequest, conn: sqlite3.Connection = Depends(get_conn)):
+        """手動上傳（seed 匯入口）：匯入 → 立即標註 → 立即向量化，完成即可檢索。"""
+        content = _decode_image(request.image)
+        meme, status = import_image_bytes(
+            conn, content, data_dir=deps.data_dir, source_title=request.title_hint
+        )
+        if status == "duplicate":
+            raise HTTPException(status_code=409, detail=f"圖片已存在（{meme.meme_id}）")
+        if status in ("error", "unsupported"):
+            raise HTTPException(
+                status_code=422, detail="無法讀取圖片（僅支援 PNG / JPEG / WebP）"
+            )
+        annotation = annotate_meme(conn, deps.client, meme, data_dir=deps.data_dir)
+        embedded = 0
+        if annotation is not None and annotation.is_meme:
+            embedded = embed_pending_memes(conn, deps.embedder)
+        return {
+            "meme_id": meme.meme_id,
+            "status": "imported",
+            "meme_status": repo.get_meme(conn, meme.meme_id).status,
+            "annotation": asdict(annotation) if annotation is not None else None,
+            "embedded": embedded > 0,
+            "image_url": f"/memes/{meme.meme_id}/image",
+        }
 
     @app.get("/memes/{meme_id}/image")
     def meme_image(meme_id: str, conn: sqlite3.Connection = Depends(get_conn)):
