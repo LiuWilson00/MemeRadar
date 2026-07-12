@@ -88,6 +88,7 @@ class RecommendationLog:
     candidates: list[dict] | None = None
     final_results: list[dict] | None = None
     latency_ms: int | None = None
+    timings: dict | None = None  # 分階段耗時 ms（意圖 / 檢索 / 重排 / 總計）
     created_at: str = field(default_factory=_now_iso)
 
 

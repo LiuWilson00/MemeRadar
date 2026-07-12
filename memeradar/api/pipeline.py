@@ -164,6 +164,7 @@ def run_recommendation(
             candidates=candidates_debug,
             final_results=results,
             latency_ms=latency_ms,
+            timings={**timings, "total": latency_ms},
         ),
     )
 

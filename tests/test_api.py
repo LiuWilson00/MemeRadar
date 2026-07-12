@@ -214,6 +214,9 @@ class TestRecommendContract:
         assert log.intent_result["punchline"] == "你到底行不行"
         assert len(log.final_results) == 3
         assert isinstance(log.latency_ms, int)
+        # 分階段耗時持續落庫（延遲監控用）
+        assert log.timings is not None
+        assert {"intent", "retrieval", "rerank", "total"} <= set(log.timings)
 
     def test_franchise_filter_applied(self, env):
         client, conn, memes, _ = env

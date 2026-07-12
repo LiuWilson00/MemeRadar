@@ -27,7 +27,9 @@ from memeradar.shared.taxonomy import get_taxonomy
 
 INTENT_PROMPT_VERSION = "intent-v1"
 # 2026-07-11 團隊決策：成本考量採 sonnet 級為預設
-DEFAULT_INTENT_MODEL = "claude-sonnet-5"
+# 2026-07 成本優化：意圖分析改用 haiku-4.5（實測品質相當、成本約 sonnet 的 1/3）；
+# 需要更高品質時以 --model / model= 覆寫回 sonnet-5。
+DEFAULT_INTENT_MODEL = "claude-haiku-4-5"
 MAX_OUTPUT_TOKENS = 1500
 
 _CONVO_OPEN = "<conversation>"

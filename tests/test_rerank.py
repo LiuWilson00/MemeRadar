@@ -92,6 +92,10 @@ class StubClient:
 
 
 class TestRankHappyPath:
+    def test_default_model_is_cost_optimized_haiku(self):
+        # rerank 改用 haiku-4.5：top 推薦與 sonnet 相同、快 ~17%、成本約 1/3（實測 A/B）
+        assert DEFAULT_RERANK_MODEL == "claude-haiku-4-5"
+
     def test_orders_by_rerank_score_with_reasons(self):
         candidates = [cand("m_a", 0.9), cand("m_b", 0.8), cand("m_c", 0.7)]
         # 模型把向量第二名評為最高

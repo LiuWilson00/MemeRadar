@@ -595,8 +595,8 @@ def insert_recommendation_log(conn: sqlite3.Connection, log: RecommendationLog) 
         """
         INSERT INTO recommendation_logs (query_id, conversation, intent_result,
                                          params_snapshot, candidates, final_results,
-                                         latency_ms, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                         latency_ms, timings, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             log.query_id,
@@ -606,6 +606,7 @@ def insert_recommendation_log(conn: sqlite3.Connection, log: RecommendationLog) 
             _dumps(log.candidates) if log.candidates is not None else None,
             _dumps(log.final_results) if log.final_results is not None else None,
             log.latency_ms,
+            _dumps(log.timings) if log.timings is not None else None,
             log.created_at,
         ),
     )
@@ -626,6 +627,7 @@ def get_recommendation_log(conn: sqlite3.Connection, query_id: str) -> Recommend
         candidates=_loads(row["candidates"]),
         final_results=_loads(row["final_results"]),
         latency_ms=row["latency_ms"],
+        timings=_loads(row["timings"]),
         created_at=row["created_at"],
     )
 

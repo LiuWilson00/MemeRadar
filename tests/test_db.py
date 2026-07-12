@@ -351,6 +351,18 @@ class TestRecommendationAndFeedback:
         assert got.params_snapshot["top_n"] == 5
         assert got.latency_ms == 4200
 
+    def test_log_persists_stage_timings(self, conn):
+        # 分階段耗時寫進 log，之後可持續監控延遲（不必再靠即時 API 抓）
+        log = RecommendationLog(
+            query_id=new_id("q"),
+            conversation=[{"speaker": "other", "text": "x"}],
+            params_snapshot={},
+            timings={"intent": 6800, "retrieval": 400, "rerank": 4200, "total": 11400},
+        )
+        repo.insert_recommendation_log(conn, log)
+        got = repo.get_recommendation_log(conn, log.query_id)
+        assert got.timings == {"intent": 6800, "retrieval": 400, "rerank": 4200, "total": 11400}
+
     def test_feedback_links_query_and_meme(self, conn):
         meme, *_ = make_seed_meme()
         repo.insert_meme(conn, meme)

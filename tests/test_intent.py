@@ -125,6 +125,10 @@ class StubClient:
 
 
 class TestAnalyzeConversation:
+    def test_default_model_is_cost_optimized_haiku(self):
+        # 意圖分析改用 haiku-4.5：品質相當、成本約 sonnet 的 1/3（實測 A/B）
+        assert DEFAULT_INTENT_MODEL == "claude-haiku-4-5"
+
     def test_happy_path(self):
         client = StubClient(StubResponse(IntentResult(**valid_payload())))
 
