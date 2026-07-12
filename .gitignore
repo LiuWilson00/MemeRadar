@@ -26,3 +26,6 @@ console/*.tsbuildinfo
 # 編輯器
 .idea/
 .vscode/
+
+# 隨手丟在專案根目錄的截圖（非專案資產）
+螢幕擷取畫面*.png
