@@ -2,6 +2,10 @@
 
 React + Vite + Tailwind 的內部 Demo / 調參工作台（規格：[docs/05](../docs/05-demo-console.md)）。
 
+兩個入口（雙頁 App）：
+- `/`（`index.html`）——**桌機調適 Console**：六分頁工作台，給開發/調參用。
+- `/mobile.html`——**手機版 client**：給一般使用者。極簡單頁流程，以「上傳對話截圖」為主、手動輸入為輔，結果以輪播圖呈現，詳細數據點「詳細」開 bottom sheet。
+
 ## 開發
 
 ```bash
@@ -38,6 +42,10 @@ src/
     RadarLoading          雷達掃描等待動畫 + 管線階段燈號
     ReportView            回饋報表（KPI / 每日趨勢 / 分組通過率 / 👎 歸因）
     UploadView            批次拖曳上傳（佇列即時進度）
+    MemeImage             梗圖顯示（載入失敗可點擊重試，防破圖）
+  mobile/
+    main.tsx              手機版 client 入口（mobile.html）
+    MobileApp.tsx         單頁流程：截圖上傳 → 輪播結果 → 詳細 bottom sheet
   lib/
     uploadQueue.ts        批次上傳佇列（循序、單張失敗不中斷、進度回報）
     files.ts              檔案 → base64 / 圖片型別過濾

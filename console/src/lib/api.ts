@@ -63,6 +63,26 @@ export async function recommend(
   return unwrap<RecommendResponse>(response);
 }
 
+/** 截圖直推（手機 client 主流程）：input_type=screenshot，後端一次完成解析＋推薦。 */
+export async function recommendByScreenshot(
+  imageBase64: string,
+  filters: Filters = DEFAULT_FILTERS,
+  params: Params = DEFAULT_PARAMS,
+): Promise<RecommendResponse> {
+  const response = await fetch("/recommend", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      input_type: "screenshot",
+      image: imageBase64,
+      conversation: [],
+      filters,
+      params,
+    }),
+  });
+  return unwrap<RecommendResponse>(response);
+}
+
 export async function sendFeedback(body: {
   query_id: string;
   meme_id: string;
