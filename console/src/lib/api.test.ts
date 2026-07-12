@@ -19,6 +19,7 @@ describe("buildRecommendRequest", () => {
         diversity: 0.5,
         hotness_weight: 0.1,
       },
+      client_id: "anon", // node 測試環境無 localStorage → getClientId 退回固定匿名值
     });
   });
 

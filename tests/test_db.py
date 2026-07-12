@@ -363,6 +363,23 @@ class TestRecommendationAndFeedback:
         got = repo.get_recommendation_log(conn, log.query_id)
         assert got.timings == {"intent": 6800, "retrieval": 400, "rerank": 4200, "total": 11400}
 
+    def test_log_persists_context_for_optimization(self, conn):
+        # 記錄輸入類型與匿名 client id，供未來以回饋做優化 / 分群分析
+        log = RecommendationLog(
+            query_id=new_id("q"),
+            conversation=[{"speaker": "other", "text": "x"}],
+            params_snapshot={
+                "models": {"intent": "claude-haiku-4-5", "rerank": "claude-haiku-4-5"}
+            },
+            input_type="meme_battle",
+            client_id="c_abc123",
+        )
+        repo.insert_recommendation_log(conn, log)
+        got = repo.get_recommendation_log(conn, log.query_id)
+        assert got.input_type == "meme_battle"
+        assert got.client_id == "c_abc123"
+        assert got.params_snapshot["models"]["intent"] == "claude-haiku-4-5"
+
     def test_feedback_links_query_and_meme(self, conn):
         meme, *_ = make_seed_meme()
         repo.insert_meme(conn, meme)

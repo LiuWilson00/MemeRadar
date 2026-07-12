@@ -89,6 +89,8 @@ class RecommendationLog:
     final_results: list[dict] | None = None
     latency_ms: int | None = None
     timings: dict | None = None  # 分階段耗時 ms（意圖 / 檢索 / 重排 / 總計）
+    input_type: str | None = None  # text / screenshot / meme_battle
+    client_id: str | None = None  # localStorage 匿名碼（無個資），供分群分析
     created_at: str = field(default_factory=_now_iso)
 
 

@@ -206,7 +206,9 @@ class TestRecommendContract:
 
     def test_recommendation_logged(self, env):
         client, conn, *_ = env
-        query_id = client.post("/recommend", json=BASE_REQUEST).json()["query_id"]
+        query_id = client.post(
+            "/recommend", json={**BASE_REQUEST, "client_id": "c_test123"}
+        ).json()["query_id"]
 
         log = repo.get_recommendation_log(conn, query_id)
         assert log is not None
@@ -217,6 +219,10 @@ class TestRecommendContract:
         # 分階段耗時持續落庫（延遲監控用）
         assert log.timings is not None
         assert {"intent", "retrieval", "rerank", "total"} <= set(log.timings)
+        # 供未來優化的上下文：輸入類型、匿名 client id、產生推薦的 LLM 模型
+        assert log.input_type == "text"
+        assert log.client_id == "c_test123"
+        assert set(log.params_snapshot["models"]) == {"intent", "rerank"}
 
     def test_franchise_filter_applied(self, env):
         client, conn, memes, _ = env

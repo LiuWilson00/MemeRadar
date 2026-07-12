@@ -12,8 +12,13 @@ import time
 from typing import Any
 
 from memeradar.api.schemas import RecommendRequest, TurnIn
-from memeradar.matching.intent import ConversationTurn, analyze_conversation
+from memeradar.matching.intent import (
+    DEFAULT_INTENT_MODEL,
+    ConversationTurn,
+    analyze_conversation,
+)
 from memeradar.matching.rerank import (
+    DEFAULT_RERANK_MODEL,
     RankedMeme,
     RankingParams,
     RerankRefusedError,
@@ -160,11 +165,15 @@ def run_recommendation(
                 "filters": request.filters.model_dump(),
                 "params": request.params.model_dump(),
                 "embedding_signature": signature,
+                # 記錄產生此推薦的 LLM 模型，供回饋驗證模型選擇（如 haiku vs sonnet）
+                "models": {"intent": DEFAULT_INTENT_MODEL, "rerank": DEFAULT_RERANK_MODEL},
             },
             candidates=candidates_debug,
             final_results=results,
             latency_ms=latency_ms,
             timings={**timings, "total": latency_ms},
+            input_type=request.input_type,
+            client_id=request.client_id,
         ),
     )
 

@@ -35,6 +35,7 @@ class RecommendRequest(BaseModel):
     image: str | None = None  # screenshot（P2-5）/ meme_battle（對方梗圖）的 base64
     filters: FiltersIn = Field(default_factory=FiltersIn)
     params: ParamsIn = Field(default_factory=ParamsIn)
+    client_id: str | None = None  # localStorage 匿名碼（無個資），供回饋分群分析
 
 
 class ParseScreenshotRequest(BaseModel):

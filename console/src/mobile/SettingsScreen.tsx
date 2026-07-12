@@ -1,4 +1,5 @@
 import { Check } from "lucide-react";
+import { useState } from "react";
 import type { UserSettings } from "../lib/settings";
 import type { Meta } from "../types";
 import Chip, { toggle } from "./Chip";
@@ -13,6 +14,7 @@ export default function SettingsScreen({
   meta: Meta | null;
   onChange: (next: UserSettings) => void;
 }) {
+  const [cleared, setCleared] = useState(false);
   return (
     <div className="flex-1 space-y-6 overflow-y-auto px-5 py-4">
       <section>
@@ -73,6 +75,30 @@ export default function SettingsScreen({
       <p className="flex items-center gap-1.5 pt-2 text-xs text-muted">
         <Check className="size-3.5 text-signal" /> 偏好會自動存在這支手機，下次打開沿用。
       </p>
+
+      <section className="border-t border-line pt-4">
+        <h2 className="mb-1 text-sm font-semibold">隱私</h2>
+        <p className="text-xs text-muted">
+          本機保存一個<span className="text-fg">匿名代碼</span>（無任何個資），只為了改善推薦——
+          讓系統分辨同一支手機的多次使用。可隨時清除，清除後視為新裝置。
+        </p>
+        <div className="mt-2 flex items-center gap-3">
+          <button
+            onClick={() => {
+              try {
+                localStorage.removeItem("memeradar.clientId");
+              } catch {
+                /* localStorage 不可用時略過 */
+              }
+              setCleared(true);
+            }}
+            className="rounded-full border border-line px-4 py-1.5 text-xs text-muted active:bg-panel"
+          >
+            清除匿名代碼
+          </button>
+          {cleared && <span className="text-xs text-signal">已清除，下次使用視為新裝置</span>}
+        </div>
+      </section>
     </div>
   );
 }

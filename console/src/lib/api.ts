@@ -13,6 +13,7 @@ import type {
   Turn,
   UploadResult,
 } from "../types";
+import { getClientId } from "./clientId";
 import type { UploadOutcome } from "./uploadQueue";
 
 export const DEFAULT_FILTERS: Filters = {
@@ -36,6 +37,7 @@ export function buildRecommendRequest(turns: Turn[], filters: Filters, params: P
     conversation: turns,
     filters,
     params,
+    client_id: getClientId(),
   };
 }
 
@@ -78,6 +80,7 @@ export async function recommendByMemeBattle(
       conversation: [],
       filters,
       params,
+      client_id: getClientId(),
     }),
   });
   return unwrap<RecommendResponse>(response);
@@ -98,6 +101,7 @@ export async function recommendByScreenshot(
       conversation: [],
       filters,
       params,
+      client_id: getClientId(),
     }),
   });
   return unwrap<RecommendResponse>(response);
