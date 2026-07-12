@@ -3,26 +3,45 @@ import {
   Camera,
   Download,
   RotateCcw,
+  Search,
   SearchX,
+  Sparkles,
+  SlidersHorizontal,
   Swords,
   ThumbsDown,
   ThumbsUp,
 } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import MemeImage from "../components/MemeImage";
 import {
-  DEFAULT_FILTERS,
   DEFAULT_PARAMS,
+  fetchMeta,
   recommend,
   recommendByMemeBattle,
   recommendByScreenshot,
   sendFeedback,
 } from "../lib/api";
 import { fileToBase64 } from "../lib/files";
-import type { RecommendResponse, ResultItem } from "../types";
+import {
+  loadSettings,
+  saveSettings,
+  settingsToFilters,
+  type UserSettings,
+} from "../lib/settings";
+import type { Filters, Meta, Params, RecommendResponse, ResultItem } from "../types";
+import Chip, { toggle } from "./Chip";
+import SettingsScreen from "./SettingsScreen";
 
 type Phase = "idle" | "loading" | "results" | "error";
+type Tab = "home" | "settings";
 type Mode = "screenshot" | "battle";
+type Input =
+  | { kind: "screenshot"; image: string }
+  | { kind: "battle"; image: string }
+  | { kind: "text"; text: string };
+
+// 搜尋更多：拉高多樣性、放寬相似度門檻，換一批不同的圖
+const REFINE_PARAMS: Params = { ...DEFAULT_PARAMS, diversity: 0.85, min_similarity: 0.3, candidate_k: 80 };
 
 const EXT: Record<string, string> = {
   "image/png": "png",
@@ -30,40 +49,78 @@ const EXT: Record<string, string> = {
   "image/webp": "webp",
 };
 
-/** 下載梗圖：抓成 blob 再觸發存檔，免得使用者長按。iOS 失敗時退回開新分頁。 */
-async function downloadImage(url: string, name: string) {
+/** 存圖：iOS 用系統分享面板（含「儲存影像」直接存到照片），Android/桌機直接下載。 */
+async function saveImage(url: string, name: string) {
+  let blob: Blob;
+  let file: File;
   try {
     const res = await fetch(url);
-    const blob = await res.blob();
-    const objectUrl = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = objectUrl;
-    a.download = `${name}.${EXT[blob.type] ?? "png"}`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(objectUrl);
+    blob = await res.blob();
+    file = new File([blob], `${name}.${EXT[blob.type] ?? "png"}`, { type: blob.type });
   } catch {
     window.open(url, "_blank");
+    return;
   }
+
+  // iOS Safari：navigator.share 帶檔案 → 分享面板的「儲存影像」存進相簿
+  const nav = navigator as Navigator & { canShare?: (data: ShareData) => boolean };
+  if (typeof nav.share === "function" && nav.canShare?.({ files: [file] })) {
+    try {
+      await nav.share({ files: [file] });
+    } catch {
+      /* 使用者取消分享面板，不再退回下載 */
+    }
+    return;
+  }
+
+  // Android / 桌機：直接下載
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objectUrl;
+  a.download = file.name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(objectUrl);
 }
 
 export default function MobileApp() {
+  const [tab, setTab] = useState<Tab>("home");
+  const [settings, setSettings] = useState<UserSettings>(() => loadSettings());
+  const [meta, setMeta] = useState<Meta | null>(null);
+
   const [phase, setPhase] = useState<Phase>("idle");
   const [response, setResponse] = useState<RecommendResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [battleImage, setBattleImage] = useState<string | null>(null);
   const [typing, setTyping] = useState(false);
   const [text, setText] = useState("");
-  const [battleImage, setBattleImage] = useState<string | null>(null);
   const modeRef = useRef<Mode>("screenshot");
   const fileRef = useRef<HTMLInputElement>(null);
+  const lastInput = useRef<Input | null>(null);
 
-  const run = useCallback(async (task: () => Promise<RecommendResponse>) => {
+  useEffect(() => {
+    fetchMeta().then(setMeta).catch(() => {});
+  }, []);
+
+  const updateSettings = (next: UserSettings) => {
+    setSettings(next);
+    saveSettings(next);
+  };
+
+  const runInput = useCallback(async (input: Input, filters: Filters, params: Params) => {
+    lastInput.current = input;
     setPhase("loading");
     setError(null);
     setResponse(null);
     try {
-      setResponse(await task());
+      const task =
+        input.kind === "screenshot"
+          ? recommendByScreenshot(input.image, filters, params)
+          : input.kind === "battle"
+            ? recommendByMemeBattle(input.image, filters, params)
+            : recommend([{ speaker: "other", text: input.text }], filters, params);
+      setResponse(await task);
       setPhase("results");
     } catch (e) {
       setError(e instanceof Error ? e.message : "出了點問題，請再試一次");
@@ -80,23 +137,34 @@ export default function MobileApp() {
     async (file: File | undefined) => {
       if (!file) return;
       const b64 = await fileToBase64(file);
+      const filters = settingsToFilters(settings);
       if (modeRef.current === "battle") {
         setBattleImage(`data:${file.type};base64,${b64}`);
-        void run(() => recommendByMemeBattle(b64));
+        void runInput({ kind: "battle", image: b64 }, filters, DEFAULT_PARAMS);
       } else {
         setBattleImage(null);
-        void run(() => recommendByScreenshot(b64));
+        void runInput({ kind: "screenshot", image: b64 }, filters, DEFAULT_PARAMS);
       }
     },
-    [run],
+    [runInput, settings],
   );
 
   const onText = useCallback(() => {
     const t = text.trim();
     if (!t) return;
     setBattleImage(null);
-    void run(() => recommend([{ speaker: "other", text: t }], DEFAULT_FILTERS, DEFAULT_PARAMS));
-  }, [text, run]);
+    void runInput({ kind: "text", text: t }, settingsToFilters(settings), DEFAULT_PARAMS);
+  }, [text, runInput, settings]);
+
+  // 搜尋更多：用選定的標籤 + 更高多樣性，重跑上一個輸入
+  const refine = (franchises: string[], categories: string[]) => {
+    if (!lastInput.current) return;
+    void runInput(
+      lastInput.current,
+      { franchises, categories, exclude_nsfw: settings.excludeNsfw },
+      REFINE_PARAMS,
+    );
+  };
 
   const reset = () => {
     setPhase("idle");
@@ -116,34 +184,45 @@ export default function MobileApp() {
         </h1>
       </header>
 
-      {phase === "idle" && (
-        <IdleScreen
-          typing={typing}
-          text={text}
-          onText={setText}
-          onToggleTyping={() => setTyping((v) => !v)}
-          onSubmitText={onText}
-          onPick={pick}
-        />
-      )}
+      <main className="flex min-h-0 flex-1 flex-col">
+        {tab === "settings" ? (
+          <SettingsScreen settings={settings} meta={meta} onChange={updateSettings} />
+        ) : phase === "idle" ? (
+          <IdleScreen
+            typing={typing}
+            text={text}
+            onText={setText}
+            onToggleTyping={() => setTyping((v) => !v)}
+            onSubmitText={onText}
+            onPick={pick}
+          />
+        ) : phase === "loading" ? (
+          <LoadingScreen mode={modeRef.current} />
+        ) : phase === "error" ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center">
+            <p className="text-sm text-danger">{error}</p>
+            <button
+              onClick={reset}
+              className="rounded-full border border-line px-5 py-2 text-sm text-fg active:bg-panel"
+            >
+              重新開始
+            </button>
+          </div>
+        ) : (
+          response && (
+            <ResultsScreen
+              response={response}
+              battleImage={battleImage}
+              meta={meta}
+              initialTags={{ franchises: settings.franchises, categories: settings.categories }}
+              onRefine={refine}
+              onReset={reset}
+            />
+          )
+        )}
+      </main>
 
-      {phase === "loading" && <LoadingScreen mode={modeRef.current} />}
-
-      {phase === "error" && (
-        <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center">
-          <p className="text-sm text-danger">{error}</p>
-          <button
-            onClick={reset}
-            className="rounded-full border border-line px-5 py-2 text-sm text-fg active:bg-panel"
-          >
-            重新開始
-          </button>
-        </div>
-      )}
-
-      {phase === "results" && response && (
-        <ResultsScreen response={response} battleImage={battleImage} onReset={reset} />
-      )}
+      <NavBar tab={tab} onTab={setTab} />
 
       <input
         ref={fileRef}
@@ -159,7 +238,30 @@ export default function MobileApp() {
   );
 }
 
-/** 首頁：兩個主入口（截圖 / 對方梗圖）+ 手動輸入為輔。 */
+function NavBar({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
+  const items: Array<{ id: Tab; label: string; Icon: typeof Sparkles }> = [
+    { id: "home", label: "推薦", Icon: Sparkles },
+    { id: "settings", label: "設定", Icon: SlidersHorizontal },
+  ];
+  return (
+    <nav className="flex border-t border-line bg-panel pb-[env(safe-area-inset-bottom)]">
+      {items.map(({ id, label, Icon }) => (
+        <button
+          key={id}
+          onClick={() => onTab(id)}
+          className={`flex flex-1 flex-col items-center gap-0.5 py-2.5 text-[11px] ${
+            tab === id ? "text-amber" : "text-muted"
+          }`}
+          aria-current={tab === id}
+        >
+          <Icon className="size-5" strokeWidth={tab === id ? 2.2 : 1.75} />
+          {label}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
 function IdleScreen({
   typing,
   text,
@@ -176,7 +278,7 @@ function IdleScreen({
   onPick: (mode: Mode) => void;
 }) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-6 px-6 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+    <div className="flex flex-1 flex-col items-center justify-center gap-6 px-6 pb-4">
       <div className="text-center">
         <p className="text-lg font-semibold leading-relaxed">
           不知道怎麼回？
@@ -260,18 +362,24 @@ function LoadingScreen({ mode }: { mode: Mode }) {
   );
 }
 
-/** 結果：全幅輪播圖 + 圓點指示 + 每張回饋 + 詳細 bottom sheet。 */
 function ResultsScreen({
   response,
   battleImage,
+  meta,
+  initialTags,
+  onRefine,
   onReset,
 }: {
   response: RecommendResponse;
   battleImage: string | null;
+  meta: Meta | null;
+  initialTags: { franchises: string[]; categories: string[] };
+  onRefine: (franchises: string[], categories: string[]) => void;
   onReset: () => void;
 }) {
   const [index, setIndex] = useState(0);
   const [detail, setDetail] = useState<ResultItem | null>(null);
+  const [refining, setRefining] = useState(false);
   const results = response.results;
 
   const onScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -285,16 +393,28 @@ function ResultsScreen({
         <SearchX className="size-10 text-muted" strokeWidth={1.5} />
         <p className="text-sm">這次沒找到夠合適的梗圖</p>
         <p className="text-xs text-muted">
-          {response.intent.sensitive
-            ? "偵測到敏感情境，已保守處理"
-            : "換一張圖，或多給一點上下文再試"}
+          {response.intent.sensitive ? "偵測到敏感情境，已保守處理" : "換個方向再找找"}
         </p>
         <button
-          onClick={onReset}
-          className="mt-2 rounded-full bg-amber px-6 py-2.5 text-sm font-semibold text-ink active:opacity-80"
+          onClick={() => setRefining(true)}
+          className="mt-2 flex items-center gap-2 rounded-full bg-amber px-6 py-2.5 text-sm font-semibold text-ink active:opacity-80"
         >
-          再試一次
+          <Search className="size-4" /> 換方向搜尋
         </button>
+        <button onClick={onReset} className="text-xs text-muted underline underline-offset-4">
+          重新上傳
+        </button>
+        {refining && (
+          <RefineSheet
+            meta={meta}
+            initial={initialTags}
+            onSearch={(f, c) => {
+              setRefining(false);
+              onRefine(f, c);
+            }}
+            onClose={() => setRefining(false)}
+          />
+        )}
       </div>
     );
   }
@@ -309,11 +429,7 @@ function ResultsScreen({
 
       {battleImage && (
         <div className="mx-4 mb-1 flex items-center gap-2 rounded-2xl border border-line bg-panel p-2">
-          <img
-            src={battleImage}
-            alt="對方丟的梗圖"
-            className="h-12 w-12 rounded-lg object-cover"
-          />
+          <img src={battleImage} alt="對方丟的梗圖" className="h-12 w-12 rounded-lg object-cover" />
           <span className="text-xs text-muted">
             對方出這張 —— <span className="text-fg">往下滑挑一張回敬</span>
           </span>
@@ -335,7 +451,7 @@ function ResultsScreen({
         ))}
       </div>
 
-      <div className="flex items-center justify-center gap-1.5 py-3">
+      <div className="flex items-center justify-center gap-1.5 py-2.5">
         {results.map((item, i) => (
           <span
             key={item.meme_id}
@@ -346,12 +462,18 @@ function ResultsScreen({
         ))}
       </div>
 
-      <div className="px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+      <div className="space-y-2 px-4 pb-3">
+        <button
+          onClick={() => setRefining(true)}
+          className="flex w-full items-center justify-center gap-2 rounded-full bg-amber py-3 text-sm font-semibold text-ink active:opacity-80"
+        >
+          <Search className="size-4" /> 都不喜歡？搜尋更多
+        </button>
         <button
           onClick={onReset}
-          className="flex w-full items-center justify-center gap-2 rounded-full border border-line py-3 text-sm text-muted active:bg-panel"
+          className="flex w-full items-center justify-center gap-2 rounded-full border border-line py-2.5 text-xs text-muted active:bg-panel"
         >
-          <RotateCcw className="size-4" /> 換一張
+          <RotateCcw className="size-3.5" /> 重新上傳
         </button>
       </div>
 
@@ -362,6 +484,78 @@ function ResultsScreen({
           onClose={() => setDetail(null)}
         />
       )}
+      {refining && (
+        <RefineSheet
+          meta={meta}
+          initial={initialTags}
+          onSearch={(f, c) => {
+            setRefining(false);
+            onRefine(f, c);
+          }}
+          onClose={() => setRefining(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** 搜尋更多引導：選梗圖包 / 分類標籤，換一批。 */
+function RefineSheet({
+  meta,
+  initial,
+  onSearch,
+  onClose,
+}: {
+  meta: Meta | null;
+  initial: { franchises: string[]; categories: string[] };
+  onSearch: (franchises: string[], categories: string[]) => void;
+  onClose: () => void;
+}) {
+  const [franchises, setFranchises] = useState<string[]>(initial.franchises);
+  const [categories, setCategories] = useState<string[]>(initial.categories);
+
+  return (
+    <div className="fixed inset-0 z-20 flex items-end bg-ink/70" onClick={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="max-h-[80dvh] w-full overflow-y-auto rounded-t-3xl border-t border-line bg-panel px-5
+                   pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-3"
+      >
+        <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-line" />
+        <p className="mb-1 text-base font-semibold">想看哪種？</p>
+        <p className="mb-4 text-xs text-muted">選幾個方向，我換一批給你（不選就換個更多樣的一批）。</p>
+
+        <p className="mb-2 text-sm font-semibold">梗圖包</p>
+        <div className="mb-4 flex flex-wrap gap-2">
+          {meta?.franchises.map((f) => (
+            <Chip
+              key={f.name}
+              label={f.name}
+              active={franchises.includes(f.name)}
+              onToggle={() => setFranchises((v) => toggle(v, f.name))}
+            />
+          ))}
+        </div>
+
+        <p className="mb-2 text-sm font-semibold">分類</p>
+        <div className="mb-5 flex flex-wrap gap-2">
+          {meta?.categories.map((c) => (
+            <Chip
+              key={c}
+              label={c}
+              active={categories.includes(c)}
+              onToggle={() => setCategories((v) => toggle(v, c))}
+            />
+          ))}
+        </div>
+
+        <button
+          onClick={() => onSearch(franchises, categories)}
+          className="flex w-full items-center justify-center gap-2 rounded-full bg-amber py-3 text-sm font-semibold text-ink active:opacity-80"
+        >
+          <Search className="size-4" /> 搜尋
+        </button>
+      </div>
     </div>
   );
 }
@@ -377,9 +571,8 @@ function Slide({
 }) {
   const [sent, setSent] = useState<"up" | "down" | null>(null);
 
-  // 可改投：點另一顆即切換，最新一次為準（後端對每組 query+meme 冪等，不重複計數）
   const rate = (rating: "up" | "down") => {
-    const next = sent === rating ? null : rating; // 再點同一顆＝取消
+    const next = sent === rating ? null : rating;
     setSent(next);
     if (next) {
       void sendFeedback({
@@ -387,9 +580,7 @@ function Slide({
         meme_id: item.meme_id,
         rank: item.rank,
         rating: next,
-      }).catch(() => {
-        /* 靜默：手機端回饋失敗不打擾使用者 */
-      });
+      }).catch(() => {});
     }
   };
 
@@ -399,7 +590,7 @@ function Slide({
         <MemeImage
           src={item.image_url}
           alt={`推薦梗圖第 ${item.rank} 名`}
-          className="max-h-[52vh] w-full rounded-3xl object-contain"
+          className="max-h-[48vh] w-full rounded-3xl object-contain"
         />
         <span className="absolute left-3 top-3 rounded-full bg-ink/80 px-2.5 py-0.5 font-mono text-xs text-amber">
           #{item.rank}
@@ -408,11 +599,11 @@ function Slide({
           {item.matched_strategy}
         </span>
         <button
-          onClick={() => downloadImage(item.image_url, `memeradar-${item.meme_id.slice(2, 10)}`)}
+          onClick={() => saveImage(item.image_url, `memeradar-${item.meme_id.slice(2, 10)}`)}
           className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-full bg-ink/80 px-3 py-1.5 text-xs text-fg active:bg-ink"
-          aria-label="下載這張梗圖"
+          aria-label="儲存這張梗圖"
         >
-          <Download className="size-4" strokeWidth={1.75} /> 下載
+          <Download className="size-4" strokeWidth={1.75} /> 存圖
         </button>
       </div>
 
@@ -448,7 +639,6 @@ function Slide({
   );
 }
 
-/** 詳細數據 bottom sheet：分數拆解、命中理由、意圖摘要。 */
 function DetailSheet({
   item,
   intentSummary,
@@ -480,9 +670,7 @@ function DetailSheet({
 
         <p className="text-sm leading-relaxed">{item.reason}</p>
 
-        {intentSummary && (
-          <p className="mt-2 text-xs text-muted">系統判讀的情境：{intentSummary}</p>
-        )}
+        {intentSummary && <p className="mt-2 text-xs text-muted">系統判讀的情境：{intentSummary}</p>}
 
         <div className="mt-4 space-y-2">
           <ScoreBar label="相似度" value={item.scores.vector} />
