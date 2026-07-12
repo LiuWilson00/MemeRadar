@@ -30,7 +30,9 @@ from memeradar.shared.taxonomy import get_taxonomy
 ANNOTATION_PROMPT_VERSION = "labeler-v1"
 # 2026-07-11 團隊決策：成本考量採 sonnet 級為預設；品質不足時以 --model 升級 opus
 DEFAULT_ANNOTATION_MODEL = "claude-sonnet-5"
-CONFIDENCE_REVIEW_THRESHOLD = 0.7
+# 2026-07 依積壓佇列實證下調（原 0.7）：模型對正常梗圖多給 0.6（92 張積壓中
+# 79 張剛好 0.6、全 is_meme=true），0.7 門檻把好圖灌爆複核佇列。0.5 只攔真正很低者。
+CONFIDENCE_REVIEW_THRESHOLD = 0.5
 MAX_OUTPUT_TOKENS = 2048
 
 

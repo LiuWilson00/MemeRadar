@@ -211,7 +211,15 @@ class TestAnnotateMeme:
         assert repo.get_annotation(conn, seeded_meme.meme_id) is not None
         assert repo.get_meme(conn, seeded_meme.meme_id).status == "pending_review"
 
-    def test_low_confidence_marks_pending_review(self, conn, data_dir, seeded_meme):
-        client = StubClient(StubResponse(AnnotationResult(**valid_payload(confidence=0.5))))
+    def test_very_low_confidence_marks_pending_review(self, conn, data_dir, seeded_meme):
+        # 門檻 0.5：真正很低（< 0.5）才進複核
+        client = StubClient(StubResponse(AnnotationResult(**valid_payload(confidence=0.4))))
         annotate_meme(conn, client, seeded_meme, data_dir=data_dir)
         assert repo.get_meme(conn, seeded_meme.meme_id).status == "pending_review"
+
+    def test_moderate_confidence_auto_approved(self, conn, data_dir, seeded_meme):
+        # 模型對正常梗圖多給 0.6（實證：積壓佇列 79/92 剛好 0.6，全是 is_meme=true 好圖）
+        # → 0.6 不該進複核，否則佇列被正常梗圖灌爆
+        client = StubClient(StubResponse(AnnotationResult(**valid_payload(confidence=0.6))))
+        annotate_meme(conn, client, seeded_meme, data_dir=data_dir)
+        assert repo.get_meme(conn, seeded_meme.meme_id).status == "active"
