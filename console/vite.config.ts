@@ -8,6 +8,8 @@ const API = "http://127.0.0.1:8000";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
+    // 放行 ngrok 隧道網域（Vite 6 預設擋未知 Host → "Blocked request"）
+    allowedHosts: [".ngrok-free.app", ".ngrok.app", ".ngrok-free.dev", ".ngrok.dev", ".ngrok.io"],
     proxy: {
       "/recommend": API,
       "/parse-screenshot": API,
