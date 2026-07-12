@@ -1,3 +1,4 @@
+import { AlertTriangle } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import ConversationEditor from "./components/ConversationEditor";
 import DebugPanel from "./components/DebugPanel";
@@ -149,8 +150,9 @@ export default function App() {
           {!loading && response && (
             <>
               {response.intent.sensitive && (
-                <p className="rounded border border-amber/50 bg-amber-soft px-3 py-2 text-xs">
-                  ⚠ 偵測到敏感情境——回應策略已降級為僅「安撫」
+                <p className="flex items-center gap-1.5 rounded border border-amber/50 bg-amber-soft px-3 py-2 text-xs">
+                  <AlertTriangle className="size-3.5 shrink-0 text-amber" />
+                  偵測到敏感情境——回應策略已降級為僅「安撫」
                 </p>
               )}
               {response.results.length === 0 ? (

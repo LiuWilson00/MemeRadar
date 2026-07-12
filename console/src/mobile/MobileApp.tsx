@@ -1,9 +1,19 @@
+import {
+  AlertTriangle,
+  Camera,
+  RotateCcw,
+  SearchX,
+  Swords,
+  ThumbsDown,
+  ThumbsUp,
+} from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import MemeImage from "../components/MemeImage";
 import {
   DEFAULT_FILTERS,
   DEFAULT_PARAMS,
   recommend,
+  recommendByMemeBattle,
   recommendByScreenshot,
   sendFeedback,
 } from "../lib/api";
@@ -11,6 +21,7 @@ import { fileToBase64 } from "../lib/files";
 import type { RecommendResponse, ResultItem } from "../types";
 
 type Phase = "idle" | "loading" | "results" | "error";
+type Mode = "screenshot" | "battle";
 
 export default function MobileApp() {
   const [phase, setPhase] = useState<Phase>("idle");
@@ -18,6 +29,8 @@ export default function MobileApp() {
   const [error, setError] = useState<string | null>(null);
   const [typing, setTyping] = useState(false);
   const [text, setText] = useState("");
+  const [battleImage, setBattleImage] = useState<string | null>(null);
+  const modeRef = useRef<Mode>("screenshot");
   const fileRef = useRef<HTMLInputElement>(null);
 
   const run = useCallback(async (task: () => Promise<RecommendResponse>) => {
@@ -33,11 +46,22 @@ export default function MobileApp() {
     }
   }, []);
 
-  const onScreenshot = useCallback(
+  const pick = (mode: Mode) => {
+    modeRef.current = mode;
+    fileRef.current?.click();
+  };
+
+  const onFile = useCallback(
     async (file: File | undefined) => {
       if (!file) return;
       const b64 = await fileToBase64(file);
-      void run(() => recommendByScreenshot(b64));
+      if (modeRef.current === "battle") {
+        setBattleImage(`data:${file.type};base64,${b64}`);
+        void run(() => recommendByMemeBattle(b64));
+      } else {
+        setBattleImage(null);
+        void run(() => recommendByScreenshot(b64));
+      }
     },
     [run],
   );
@@ -45,6 +69,7 @@ export default function MobileApp() {
   const onText = useCallback(() => {
     const t = text.trim();
     if (!t) return;
+    setBattleImage(null);
     void run(() => recommend([{ speaker: "other", text: t }], DEFAULT_FILTERS, DEFAULT_PARAMS));
   }, [text, run]);
 
@@ -54,6 +79,7 @@ export default function MobileApp() {
     setError(null);
     setText("");
     setTyping(false);
+    setBattleImage(null);
   };
 
   return (
@@ -72,11 +98,11 @@ export default function MobileApp() {
           onText={setText}
           onToggleTyping={() => setTyping((v) => !v)}
           onSubmitText={onText}
-          onPickFile={() => fileRef.current?.click()}
+          onPick={pick}
         />
       )}
 
-      {phase === "loading" && <LoadingScreen />}
+      {phase === "loading" && <LoadingScreen mode={modeRef.current} />}
 
       {phase === "error" && (
         <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center">
@@ -91,7 +117,7 @@ export default function MobileApp() {
       )}
 
       {phase === "results" && response && (
-        <ResultsScreen response={response} onReset={reset} />
+        <ResultsScreen response={response} battleImage={battleImage} onReset={reset} />
       )}
 
       <input
@@ -101,7 +127,7 @@ export default function MobileApp() {
         capture="environment"
         className="hidden"
         onChange={(e) => {
-          void onScreenshot(e.target.files?.[0]);
+          void onFile(e.target.files?.[0]);
           e.target.value = "";
         }}
       />
@@ -109,43 +135,54 @@ export default function MobileApp() {
   );
 }
 
-/** 首頁：以「上傳截圖」為主，「打字」為輔。 */
+/** 首頁：兩個主入口（截圖 / 對方梗圖）+ 手動輸入為輔。 */
 function IdleScreen({
   typing,
   text,
   onText,
   onToggleTyping,
   onSubmitText,
-  onPickFile,
+  onPick,
 }: {
   typing: boolean;
   text: string;
   onText: (v: string) => void;
   onToggleTyping: () => void;
   onSubmitText: () => void;
-  onPickFile: () => void;
+  onPick: (mode: Mode) => void;
 }) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-8 px-6 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+    <div className="flex flex-1 flex-col items-center justify-center gap-6 px-6 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
       <div className="text-center">
         <p className="text-lg font-semibold leading-relaxed">
           不知道怎麼回？
           <br />
-          <span className="text-amber">丟截圖，我幫你想梗圖。</span>
+          <span className="text-amber">丟給我，我幫你想梗圖。</span>
         </p>
-        <p className="mt-2 text-sm text-muted">上傳對話截圖，馬上給你 5 張適合的回應</p>
       </div>
 
       <button
-        onClick={onPickFile}
-        className="flex w-full flex-col items-center gap-3 rounded-3xl border-2 border-dashed
-                   border-amber/60 bg-amber-soft px-6 py-10 active:scale-[0.99] active:bg-amber/20"
+        onClick={() => onPick("screenshot")}
+        className="flex w-full items-center gap-4 rounded-2xl border border-line bg-panel px-5 py-5
+                   text-left active:scale-[0.99] active:bg-raised"
       >
-        <span className="text-4xl" aria-hidden>
-          📷
+        <Camera className="size-7 shrink-0 text-amber" strokeWidth={1.75} />
+        <span>
+          <span className="block text-base font-semibold">上傳對話截圖</span>
+          <span className="block text-xs text-muted">看對話內容，推薦怎麼回</span>
         </span>
-        <span className="text-base font-semibold text-amber">上傳對話截圖</span>
-        <span className="text-xs text-muted">從相簿選，或直接拍</span>
+      </button>
+
+      <button
+        onClick={() => onPick("battle")}
+        className="flex w-full items-center gap-4 rounded-2xl border border-amber/50 bg-amber-soft
+                   px-5 py-5 text-left active:scale-[0.99] active:bg-amber/20"
+      >
+        <Swords className="size-7 shrink-0 text-amber" strokeWidth={1.75} />
+        <span>
+          <span className="block text-base font-semibold text-amber">對方丟了梗圖</span>
+          <span className="block text-xs text-muted">梗圖大戰——上傳對方的圖，挑一張回敬</span>
+        </span>
       </button>
 
       <div className="w-full">
@@ -180,7 +217,7 @@ function IdleScreen({
   );
 }
 
-function LoadingScreen() {
+function LoadingScreen({ mode }: { mode: Mode }) {
   return (
     <div
       className="flex flex-1 flex-col items-center justify-center gap-6"
@@ -192,7 +229,9 @@ function LoadingScreen() {
         <span className="radar-blip" style={{ left: "30%", top: "58%", animationDelay: "0.9s" }} />
         <span className="radar-blip" style={{ left: "52%", top: "70%", animationDelay: "1.6s" }} />
       </div>
-      <p className="text-sm text-muted">掃描梗圖庫中……（約 15 秒）</p>
+      <p className="text-sm text-muted">
+        {mode === "battle" ? "解讀對方的梗，想怎麼回敬……" : "掃描梗圖庫中……"}（約 15 秒）
+      </p>
     </div>
   );
 }
@@ -200,9 +239,11 @@ function LoadingScreen() {
 /** 結果：全幅輪播圖 + 圓點指示 + 每張回饋 + 詳細 bottom sheet。 */
 function ResultsScreen({
   response,
+  battleImage,
   onReset,
 }: {
   response: RecommendResponse;
+  battleImage: string | null;
   onReset: () => void;
 }) {
   const [index, setIndex] = useState(0);
@@ -217,14 +258,12 @@ function ResultsScreen({
   if (results.length === 0) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center">
-        <p className="text-4xl" aria-hidden>
-          🤔
-        </p>
+        <SearchX className="size-10 text-muted" strokeWidth={1.5} />
         <p className="text-sm">這次沒找到夠合適的梗圖</p>
         <p className="text-xs text-muted">
           {response.intent.sensitive
             ? "偵測到敏感情境，已保守處理"
-            : "換一張對話截圖，或多給一點上下文再試"}
+            : "換一張圖，或多給一點上下文再試"}
         </p>
         <button
           onClick={onReset}
@@ -239,9 +278,22 @@ function ResultsScreen({
   return (
     <div className="flex flex-1 flex-col">
       {response.intent.sensitive && (
-        <p className="mx-4 mb-1 rounded-full bg-amber-soft px-3 py-1.5 text-center text-xs text-amber">
-          ⚠ 偵測到敏感情境，回應已降級為安撫
+        <p className="mx-4 mb-1 flex items-center justify-center gap-1.5 rounded-full bg-amber-soft px-3 py-1.5 text-center text-xs text-amber">
+          <AlertTriangle className="size-3.5" /> 偵測到敏感情境，回應已降級為安撫
         </p>
+      )}
+
+      {battleImage && (
+        <div className="mx-4 mb-1 flex items-center gap-2 rounded-2xl border border-line bg-panel p-2">
+          <img
+            src={battleImage}
+            alt="對方丟的梗圖"
+            className="h-12 w-12 rounded-lg object-cover"
+          />
+          <span className="text-xs text-muted">
+            對方出這張 —— <span className="text-fg">往下滑挑一張回敬</span>
+          </span>
+        </div>
       )}
 
       <div
@@ -273,14 +325,18 @@ function ResultsScreen({
       <div className="px-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
         <button
           onClick={onReset}
-          className="w-full rounded-full border border-line py-3 text-sm text-muted active:bg-panel"
+          className="flex w-full items-center justify-center gap-2 rounded-full border border-line py-3 text-sm text-muted active:bg-panel"
         >
-          ↺ 換一張截圖
+          <RotateCcw className="size-4" /> 換一張
         </button>
       </div>
 
       {detail && (
-        <DetailSheet item={detail} intentSummary={response.intent.summary} onClose={() => setDetail(null)} />
+        <DetailSheet
+          item={detail}
+          intentSummary={response.intent.summary}
+          onClose={() => setDetail(null)}
+        />
       )}
     </div>
   );
@@ -302,7 +358,7 @@ function Slide({
     try {
       await sendFeedback({ query_id: queryId, meme_id: item.meme_id, rank: item.rank, rating });
     } catch {
-      /* 靜默：手機端不打擾使用者，回饋失敗不影響體驗 */
+      /* 靜默：手機端回饋失敗不打擾使用者 */
     }
   };
 
@@ -327,22 +383,22 @@ function Slide({
         <button
           onClick={() => rate("up")}
           disabled={sent !== null}
-          className={`flex-1 rounded-full border py-3 text-lg active:scale-95 ${
-            sent === "up" ? "border-signal bg-signal/15 text-signal" : "border-line"
+          className={`flex flex-1 items-center justify-center rounded-full border py-3 active:scale-95 ${
+            sent === "up" ? "border-signal bg-signal/15 text-signal" : "border-line text-fg"
           }`}
           aria-label="這張讚"
         >
-          👍
+          <ThumbsUp className="size-5" strokeWidth={sent === "up" ? 2.4 : 1.75} />
         </button>
         <button
           onClick={() => rate("down")}
           disabled={sent !== null}
-          className={`flex-1 rounded-full border py-3 text-lg active:scale-95 ${
-            sent === "down" ? "border-danger bg-danger/15 text-danger" : "border-line"
+          className={`flex flex-1 items-center justify-center rounded-full border py-3 active:scale-95 ${
+            sent === "down" ? "border-danger bg-danger/15 text-danger" : "border-line text-fg"
           }`}
           aria-label="這張不行"
         >
-          👎
+          <ThumbsDown className="size-5" strokeWidth={sent === "down" ? 2.4 : 1.75} />
         </button>
         <button
           onClick={onDetail}

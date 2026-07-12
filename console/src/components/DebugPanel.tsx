@@ -1,3 +1,4 @@
+import { AlertTriangle } from "lucide-react";
 import type { RecommendResponse } from "../types";
 
 /** 開發者向：意圖 JSON、檢索 query 與回收數、候選池表格、耗時（docs/05 §2.1） */
@@ -44,7 +45,11 @@ export default function DebugPanel({ response }: { response: RecommendResponse }
               <span className="ml-3 text-muted">類型：</span>
               {intent.conversation_type}
             </p>
-            {intent.sensitive && <p className="text-danger">⚠ 敏感情境——策略已降級為僅安撫</p>}
+            {intent.sensitive && (
+              <p className="flex items-center gap-1.5 text-danger">
+                <AlertTriangle className="size-3.5" /> 敏感情境——策略已降級為僅安撫
+              </p>
+            )}
             {intent.low_context && <p className="text-amber">△ 上下文不足，採泛用策略</p>}
           </div>
         </section>

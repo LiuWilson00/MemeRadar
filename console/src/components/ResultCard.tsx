@@ -1,3 +1,4 @@
+import { Pencil, ThumbsDown, ThumbsUp } from "lucide-react";
 import { useState } from "react";
 import { sendFeedback } from "../lib/api";
 import type { ResultItem } from "../types";
@@ -76,30 +77,34 @@ export default function ResultCard({ item, queryId }: { item: ResultItem; queryI
 
         <div className="mt-auto border-t border-line pt-2">
           {sent ? (
-            <p className="text-xs text-signal">已記錄 {sent === "up" ? "👍" : "👎"} ✓</p>
+            <p className="flex items-center gap-1.5 text-xs text-signal">
+              已記錄
+              {sent === "up" ? <ThumbsUp className="size-3.5" /> : <ThumbsDown className="size-3.5" />}
+            </p>
           ) : (
             <div className="space-y-1.5">
               <div className="flex items-center gap-1.5">
                 <button
                   onClick={() => rate("up")}
-                  className="flex-1 rounded border border-line py-1 hover:border-signal hover:text-signal"
+                  className="flex flex-1 items-center justify-center rounded border border-line py-1.5 hover:border-signal hover:text-signal"
                   aria-label="好推薦"
                 >
-                  👍
+                  <ThumbsUp className="size-4" strokeWidth={1.75} />
                 </button>
                 <button
                   onClick={() => rate("down")}
-                  className="flex-1 rounded border border-line py-1 hover:border-danger hover:text-danger"
+                  className="flex flex-1 items-center justify-center rounded border border-line py-1.5 hover:border-danger hover:text-danger"
                   aria-label="爛推薦"
                 >
-                  👎
+                  <ThumbsDown className="size-4" strokeWidth={1.75} />
                 </button>
                 <button
                   onClick={() => setNoteOpen(!noteOpen)}
-                  className="rounded border border-line px-2 py-1 text-xs text-muted hover:text-fg"
+                  className="flex items-center rounded border border-line px-2.5 py-1.5 text-muted hover:text-fg"
                   title="先寫備註再按讚/倒讚，會一起送出"
+                  aria-label="加備註"
                 >
-                  ✎
+                  <Pencil className="size-3.5" strokeWidth={1.75} />
                 </button>
               </div>
               {noteOpen && (

@@ -1,3 +1,5 @@
+import { Ban, Check, CircleDashed, LoaderCircle, X } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { uploadMemeClassified } from "../lib/api";
 import { fileToBase64, imageFilesFrom } from "../lib/files";
@@ -5,12 +7,15 @@ import { runUploadQueue, type UploadItem, type UploadSummary } from "../lib/uplo
 
 /** 批次上傳（seed 匯入口）：拖曳一疊圖 → 逐張入庫 → 標註 → 向量化，即時回報。 */
 
-const STATUS: Record<UploadItem["status"], { icon: string; cls: string; label: string }> = {
-  queued: { icon: "○", cls: "text-muted", label: "排隊中" },
-  uploading: { icon: "◐", cls: "text-amber", label: "入庫標註中…" },
-  done: { icon: "✓", cls: "text-chart-up", label: "完成" },
-  duplicate: { icon: "⊘", cls: "text-muted", label: "已存在" },
-  error: { icon: "✕", cls: "text-danger", label: "失敗" },
+const STATUS: Record<
+  UploadItem["status"],
+  { Icon: LucideIcon; cls: string; label: string; spin?: boolean }
+> = {
+  queued: { Icon: CircleDashed, cls: "text-muted", label: "排隊中" },
+  uploading: { Icon: LoaderCircle, cls: "text-amber", label: "入庫標註中…", spin: true },
+  done: { Icon: Check, cls: "text-chart-up", label: "完成" },
+  duplicate: { Icon: Ban, cls: "text-muted", label: "已存在" },
+  error: { Icon: X, cls: "text-danger", label: "失敗" },
 };
 
 export default function UploadView({ onDone }: { onDone?: () => void }) {
@@ -128,9 +133,11 @@ export default function UploadView({ onDone }: { onDone?: () => void }) {
                 key={`${item.name}-${idx}`}
                 className="flex items-center gap-2 rounded border border-line/50 bg-panel/50 px-3 py-1.5"
               >
-                <span className={`w-4 text-center ${s.cls}`} aria-hidden>
-                  {s.icon}
-                </span>
+                <s.Icon
+                  className={`size-4 shrink-0 ${s.cls} ${s.spin ? "animate-spin" : ""}`}
+                  strokeWidth={2}
+                  aria-hidden
+                />
                 <span className="w-40 shrink-0 truncate text-fg" title={item.name}>
                   {item.name}
                 </span>

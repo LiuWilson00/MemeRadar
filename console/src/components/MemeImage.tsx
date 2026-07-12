@@ -1,3 +1,4 @@
+import { ImageOff } from "lucide-react";
 import { useState } from "react";
 
 /** 梗圖顯示元件：載入失敗時顯示可點擊重試的佔位，避免破圖 icon + 版面壓扁。
@@ -34,9 +35,7 @@ export default function MemeImage({
         className={`flex min-h-24 cursor-pointer flex-col items-center justify-center gap-1
                     text-muted ${className ?? ""}`}
       >
-        <span className="text-2xl" aria-hidden>
-          🖼
-        </span>
+        <ImageOff className="size-7" strokeWidth={1.5} aria-hidden />
         <span className="text-[11px]">圖片載入失敗 · 點此重試</span>
       </div>
     );
