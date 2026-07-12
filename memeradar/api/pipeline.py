@@ -25,6 +25,7 @@ from memeradar.matching.search import SearchFilters, SqliteBruteForceSearcher
 from memeradar.shared import repository as repo
 from memeradar.shared.models import RecommendationLog, new_id
 from memeradar.understanding.embedding import Embedder, embedding_signature
+from memeradar.understanding.opponent import analyze_opponent_meme, build_battle_turn
 
 VECTOR_FALLBACK_REASON = "（rerank 暫不可用，依向量相似度排序）"
 
@@ -57,6 +58,7 @@ def run_recommendation(
 
     conversation = request.conversation
     screenshot_debug: dict | None = None
+    opponent_debug: dict | None = None
     if request.input_type == "screenshot":
         # 截圖僅在記憶體處理、不落庫（docs/06 §1）；log 只存解析後文字
         t0 = time.perf_counter()
@@ -64,6 +66,13 @@ def run_recommendation(
         timings["screenshot_parse"] = int((time.perf_counter() - t0) * 1000)
         conversation = [TurnIn(speaker=t.speaker, text=t.text) for t in parsed.conversation]
         screenshot_debug = parsed.model_dump()
+    elif request.input_type == "meme_battle":
+        # 梗圖大戰：理解對方梗圖（僅記憶體、不落庫），合成一則 other 輪次走既有管線
+        t0 = time.perf_counter()
+        opponent = analyze_opponent_meme(client, image_bytes or b"")  # 拒答由端點層轉 422
+        timings["opponent_meme"] = int((time.perf_counter() - t0) * 1000)
+        conversation = [TurnIn(speaker="other", text=build_battle_turn(opponent))]
+        opponent_debug = opponent.model_dump()
 
     turns = [ConversationTurn(t.speaker, t.text) for t in conversation]
     t0 = time.perf_counter()
@@ -167,6 +176,8 @@ def run_recommendation(
     }
     if screenshot_debug is not None:
         debug["screenshot_parse"] = screenshot_debug
+    if opponent_debug is not None:
+        debug["opponent_meme"] = opponent_debug
 
     return {
         "query_id": query_id,

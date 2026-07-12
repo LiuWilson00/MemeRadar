@@ -17,6 +17,7 @@ from memeradar.shared import repository as repo
 from memeradar.shared.db import connect, migrate
 from memeradar.shared.models import Embedding, Meme, MemeAnnotation, new_id
 from memeradar.understanding.annotator import AnnotationResult
+from memeradar.understanding.opponent import OpponentMeme
 
 SIGNATURE = "fake-embed@v1|doc-v1"
 
@@ -50,6 +51,13 @@ ANNOTATION_PAYLOAD = AnnotationResult(
     usage_hints=["炫耀成果時使用"],
     categories=["卡通動畫"],
     confidence=0.9,
+)
+
+OPPONENT_PAYLOAD = OpponentMeme(
+    ocr_text="我就爛",
+    description="海綿寶寶攤手，一臉理直氣壯",
+    emotions=["擺爛", "理直氣壯"],
+    read="對方擺爛耍賴，擺明不想被說服",
 )
 
 SCREENSHOT_PAYLOAD = ScreenshotParseResult(
@@ -92,6 +100,10 @@ class DualStubClient:
                     return StubResponse(SCREENSHOT_PAYLOAD)
                 if fmt is AnnotationResult:
                     return StubResponse(ANNOTATION_PAYLOAD)
+                if fmt is OpponentMeme:
+                    if "opponent" in outer.refuse:
+                        return StubResponse(None, "refusal")
+                    return StubResponse(OPPONENT_PAYLOAD)
                 raise AssertionError(f"未知 output_format: {fmt}")
 
         self.messages = _Messages()
@@ -234,6 +246,42 @@ class TestRecommendContract:
             {"speaker": "other", "text": "你報告又遲交了！"},
             {"speaker": "me", "text": "抱歉抱歉"},
         ]
+
+    def test_meme_battle_understands_opponent_then_recommends(self, env):
+        client, conn, *_ = env
+        png_b64 = base64.standard_b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16).decode()
+        resp = client.post(
+            "/recommend",
+            json={**BASE_REQUEST, "input_type": "meme_battle",
+                  "conversation": [], "image": png_b64},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["results"]) > 0
+        # 對方梗圖理解入 debug；合成的對話輪次寫進 log（不落庫存原圖）
+        assert body["debug"]["opponent_meme"]["ocr_text"] == "我就爛"
+        log = repo.get_recommendation_log(conn, body["query_id"])
+        assert len(log.conversation) == 1
+        assert log.conversation[0]["speaker"] == "other"
+        assert "梗圖" in log.conversation[0]["text"]
+
+    def test_meme_battle_missing_image_422(self, env):
+        client, *_ = env
+        resp = client.post(
+            "/recommend", json={**BASE_REQUEST, "input_type": "meme_battle", "conversation": []}
+        )
+        assert resp.status_code == 422
+
+    def test_meme_battle_refusal_422(self, env):
+        client, _conn, _memes, deps = env
+        deps.client.refuse = {"opponent"}
+        png_b64 = base64.standard_b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16).decode()
+        resp = client.post(
+            "/recommend",
+            json={**BASE_REQUEST, "input_type": "meme_battle",
+                  "conversation": [], "image": png_b64},
+        )
+        assert resp.status_code == 422
 
     def test_screenshot_missing_image_422(self, env):
         client, *_ = env

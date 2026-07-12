@@ -38,6 +38,7 @@ from memeradar.shared.models import Embedding, FeedbackEvent, new_id
 from memeradar.shared.taxonomy import get_taxonomy
 from memeradar.understanding.annotator import annotate_meme
 from memeradar.understanding.embedding import Embedder, embed_pending_memes, embedding_signature
+from memeradar.understanding.opponent import OpponentMemeRefusedError
 from memeradar.understanding.retrieval_doc import build_retrieval_document
 
 _MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp"}
@@ -93,7 +94,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
 
     def _decode_image(image_b64: str | None) -> bytes:
         if not image_b64:
-            raise HTTPException(status_code=422, detail="input_type=screenshot 時 image 必填")
+            raise HTTPException(status_code=422, detail="此輸入類型需提供 image（base64）")
         try:
             return base64.b64decode(image_b64, validate=True)
         except binascii.Error:
@@ -102,7 +103,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
     @app.post("/recommend")
     def recommend(request: RecommendRequest, conn: sqlite3.Connection = Depends(get_conn)):
         image_bytes: bytes | None = None
-        if request.input_type == "screenshot":
+        if request.input_type in ("screenshot", "meme_battle"):
             image_bytes = _decode_image(request.image)
         elif not request.conversation:
             raise HTTPException(status_code=422, detail="conversation 不可為空")
@@ -116,6 +117,12 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             ) from None
         except ScreenshotParseError as exc:
             raise HTTPException(status_code=422, detail=f"截圖解析失敗：{exc}") from None
+        except OpponentMemeRefusedError:
+            raise HTTPException(
+                status_code=422, detail="模型基於安全政策拒絕解析對方梗圖"
+            ) from None
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"梗圖無法解析：{exc}") from None
 
     @app.post("/parse-screenshot")
     def parse_screenshot_endpoint(request: ParseScreenshotRequest):

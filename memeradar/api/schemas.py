@@ -30,9 +30,9 @@ class ParamsIn(BaseModel):
 
 
 class RecommendRequest(BaseModel):
-    input_type: Literal["text", "screenshot"]
+    input_type: Literal["text", "screenshot", "meme_battle"]
     conversation: list[TurnIn] = Field(default_factory=list)
-    image: str | None = None  # input_type=screenshot 時的 base64（P2-5）
+    image: str | None = None  # screenshot（P2-5）/ meme_battle（對方梗圖）的 base64
     filters: FiltersIn = Field(default_factory=FiltersIn)
     params: ParamsIn = Field(default_factory=ParamsIn)
 
