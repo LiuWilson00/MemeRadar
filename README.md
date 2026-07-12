@@ -90,6 +90,12 @@ python -m memeradar.ingestion.reddit --client praw --subreddit memes --limit 25 
 python -m memeradar.ingestion.pipeline --client praw [--subreddit memes] [--limit 100] [--no-clip]
 ```
 
+seed 配平統計（docs/07：逐策略錨點 / 優先主題列出蒐圖缺口）：
+
+```bash
+python -m memeradar.ingestion.coverage
+```
+
 熱度衰減每日重算（docs/06 §3.1：半衰期 90 天 + 長青基礎分；冪等，排程器每日一次）：
 
 ```bash
