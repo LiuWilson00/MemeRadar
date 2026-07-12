@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { sendFeedback } from "../lib/api";
 import type { ResultItem } from "../types";
+import MemeImage from "./MemeImage";
 
 function ScoreMeter({ label, value }: { label: string; value: number }) {
   return (
@@ -42,14 +43,12 @@ export default function ResultCard({ item, queryId }: { item: ResultItem; queryI
   return (
     <article className="flex flex-col overflow-hidden rounded-lg border border-line bg-panel">
       <div className="relative bg-ink">
-        <a href={item.image_url} target="_blank" rel="noreferrer" title="開新分頁檢視原圖">
-          <img
-            src={item.image_url}
-            alt={`推薦梗圖第 ${item.rank} 名`}
-            className="mx-auto max-h-48 object-contain"
-            loading="lazy"
-          />
-        </a>
+        <MemeImage
+          src={item.image_url}
+          href={item.image_url}
+          alt={`推薦梗圖第 ${item.rank} 名`}
+          className="mx-auto max-h-48 object-contain"
+        />
         <span className="absolute left-2 top-2 rounded bg-ink/80 px-1.5 font-mono text-sm text-amber">
           #{item.rank}
         </span>

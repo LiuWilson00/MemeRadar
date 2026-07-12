@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchDedupReviews, fetchMemes, resolveDedup, reviewAnnotation } from "../lib/api";
 import type { DedupReviewItem, LibraryMeme, Meta } from "../types";
+import MemeImage from "./MemeImage";
 
 function toggle(list: string[], value: string): string[] {
   return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
@@ -51,7 +52,7 @@ function AnnotationCard({
 
   return (
     <article className="flex gap-4 rounded-lg border border-line bg-panel p-4">
-      <img src={meme.image_url} alt="" className="max-h-52 max-w-44 self-start object-contain" />
+      <MemeImage src={meme.image_url} alt="" className="max-h-52 max-w-44 self-start object-contain" />
       <div className="min-w-0 flex-1 space-y-2 text-sm">
         {ann === null ? (
           <p className="text-muted">此圖尚無標註（可能為模型拒答）——只能通過（原樣）或淘汰</p>
@@ -144,7 +145,7 @@ function DedupCard({ item, onDone }: { item: DedupReviewItem; onDone: () => void
 
   const side = (label: string, info: DedupReviewItem["meme"]) => (
     <figure className="flex-1 text-center">
-      <img src={info.image_url} alt="" className="mx-auto max-h-44 object-contain" />
+      <MemeImage src={info.image_url} alt="" className="mx-auto max-h-44 object-contain" />
       <figcaption className="mt-1 text-xs">
         <span className="text-muted">{label}：</span>
         {info.ocr_text || "（無文字）"}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { fetchMemes, uploadMeme } from "../lib/api";
 import { fileToBase64 } from "../lib/files";
 import type { LibraryMeme, Meta } from "../types";
+import MemeImage from "./MemeImage";
 
 const STATUS_LABEL: Record<string, string> = {
   active: "可檢索",
@@ -105,8 +106,8 @@ export default function LibraryView({ meta }: { meta: Meta | null }) {
             onClick={() => setSelected(meme)}
             className="rounded-lg border border-line bg-panel p-2 text-left hover:border-amber"
           >
-            <img src={meme.image_url} alt={meme.annotation?.ocr_text || meme.meme_id}
-              loading="lazy" className="mx-auto max-h-28 object-contain" />
+            <MemeImage src={meme.image_url} alt={meme.annotation?.ocr_text || meme.meme_id}
+              className="mx-auto max-h-28 object-contain" />
             <p className="mt-1.5 truncate text-xs">{meme.annotation?.ocr_text || "（未標註）"}</p>
             <p className="truncate text-[10px] text-muted">
               {meme.annotation?.franchise ?? "—"} ·{" "}
@@ -126,7 +127,7 @@ export default function LibraryView({ meta }: { meta: Meta | null }) {
                        border border-line bg-panel p-5"
             onClick={(e) => e.stopPropagation()}
           >
-            <img src={selected.image_url} alt="" className="max-h-72 max-w-60 object-contain" />
+            <MemeImage src={selected.image_url} alt="" className="max-h-72 max-w-60 object-contain" />
             <div className="min-w-0 flex-1 space-y-1.5 text-sm">
               <p className="font-mono text-xs text-muted">
                 {selected.meme_id} · {STATUS_LABEL[selected.status]} · 熱度 {selected.hotness}
