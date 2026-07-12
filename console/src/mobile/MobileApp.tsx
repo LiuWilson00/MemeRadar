@@ -124,7 +124,6 @@ export default function MobileApp() {
         ref={fileRef}
         type="file"
         accept="image/png,image/jpeg,image/webp"
-        capture="environment"
         className="hidden"
         onChange={(e) => {
           void onFile(e.target.files?.[0]);
