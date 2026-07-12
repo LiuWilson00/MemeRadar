@@ -15,6 +15,7 @@ export default function LibraryView({ meta }: { meta: Meta | null }) {
   const [franchise, setFranchise] = useState("");
   const [category, setCategory] = useState("");
   const [emotion, setEmotion] = useState("");
+  const [limit, setLimit] = useState(200);
   const [memes, setMemes] = useState<LibraryMeme[] | null>(null);
   const [selected, setSelected] = useState<LibraryMeme | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -22,14 +23,23 @@ export default function LibraryView({ meta }: { meta: Meta | null }) {
   const [titleHint, setTitleHint] = useState("");
 
   const reload = useCallback(() => {
-    fetchMemes({
-      franchise: franchise || undefined,
-      category: category || undefined,
-      emotion: emotion || undefined,
-    })
+    fetchMemes(
+      {
+        franchise: franchise || undefined,
+        category: category || undefined,
+        emotion: emotion || undefined,
+      },
+      limit,
+    )
       .then(setMemes)
       .catch((e) => setNotice(`✕ ${e instanceof Error ? e.message : "載入失敗"}`));
-  }, [franchise, category, emotion]);
+  }, [franchise, category, emotion, limit]);
+
+  // 換篩選條件時把分頁歸零（重新從前 200 張看起）
+  const onFilterChange = (setter: (v: string) => void) => (value: string) => {
+    setLimit(200);
+    setter(value);
+  };
 
   useEffect(reload, [reload]);
 
@@ -56,24 +66,26 @@ export default function LibraryView({ meta }: { meta: Meta | null }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
       <div className="flex flex-wrap items-center gap-2 text-sm">
-        <select value={franchise} onChange={(e) => setFranchise(e.target.value)}
+        <select value={franchise} onChange={(e) => onFilterChange(setFranchise)(e.target.value)}
           className="rounded border border-line bg-raised px-2 py-1">
           <option value="">全部梗圖包</option>
           {meta?.franchises.map((f) => (
             <option key={f.name} value={f.name}>{f.name}（{f.count}）</option>
           ))}
         </select>
-        <select value={category} onChange={(e) => setCategory(e.target.value)}
+        <select value={category} onChange={(e) => onFilterChange(setCategory)(e.target.value)}
           className="rounded border border-line bg-raised px-2 py-1">
           <option value="">全部分類</option>
           {meta?.categories.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
-        <select value={emotion} onChange={(e) => setEmotion(e.target.value)}
+        <select value={emotion} onChange={(e) => onFilterChange(setEmotion)(e.target.value)}
           className="rounded border border-line bg-raised px-2 py-1">
           <option value="">全部情緒</option>
           {emotions.map((e) => <option key={e} value={e}>{e}</option>)}
         </select>
-        <span className="font-mono text-xs text-muted">{memes?.length ?? "…"} 張</span>
+        <span className="font-mono text-xs text-muted">
+          {memes?.length ?? "…"} 張{memes && memes.length === limit ? "＋" : ""}
+        </span>
 
         <span className="ml-auto flex items-center gap-2">
           <input
@@ -116,6 +128,16 @@ export default function LibraryView({ meta }: { meta: Meta | null }) {
           </button>
         ))}
       </div>
+
+      {memes && memes.length === limit && (
+        <button
+          onClick={() => setLimit((n) => n + 300)}
+          className="mx-auto rounded-full border border-line px-5 py-1.5 text-xs text-muted
+                     hover:border-amber hover:text-amber"
+        >
+          載入更多（目前 {limit} 張）
+        </button>
+      )}
 
       {selected && (
         <div

@@ -134,15 +134,19 @@ export async function fetchHistoryDetail(queryId: string): Promise<HistoryDetail
   return unwrap<HistoryDetail>(await fetch(`/history/${queryId}`));
 }
 
-export async function fetchMemes(filters: {
-  franchise?: string;
-  category?: string;
-  emotion?: string;
-  status?: string;
-}): Promise<LibraryMeme[]> {
+export async function fetchMemes(
+  filters: {
+    franchise?: string;
+    category?: string;
+    emotion?: string;
+    status?: string;
+  },
+  limit = 200,
+): Promise<LibraryMeme[]> {
   const query = new URLSearchParams(
     Object.entries(filters).filter(([, v]) => v) as [string, string][],
   );
+  query.set("limit", String(limit));
   return unwrap<LibraryMeme[]>(await fetch(`/memes?${query}`));
 }
 
