@@ -51,9 +51,13 @@ class TestAnnotationResultSchema:
         with pytest.raises(ValidationError):
             AnnotationResult(**valid_payload(emotions=["開心到飛起"]))
 
-    def test_unknown_category_rejected(self):
-        with pytest.raises(ValidationError):
-            AnnotationResult(**valid_payload(categories=["迷因學"]))
+    def test_category_alias_normalized(self):
+        # 開放集 + 正規化：別名收斂到正規名
+        assert AnnotationResult(**valid_payload(categories=["佛法"])).categories == ["宗教心靈"]
+
+    def test_unknown_category_passthrough(self):
+        # 開放集：模型自創的新分類原樣保留（不再驗證失敗）
+        assert AnnotationResult(**valid_payload(categories=["運動賽事"])).categories == ["運動賽事"]
 
     def test_franchise_normalized_via_taxonomy(self):
         result = AnnotationResult(**valid_payload(franchise="SpongeBob"))

@@ -11,15 +11,35 @@ TAX = load_taxonomy()
 
 class TestBuiltinTaxonomy:
     def test_closed_set_sizes_match_spec(self):
-        # docs/03 §2.3：情緒 20、策略錨點 14、分類 10
+        # docs/03 §2.3：情緒 20、策略錨點 14 為封閉集；分類改為開放集（franchise 式）
         assert len(TAX.emotions) == 20
         assert len(TAX.strategies) == 14
-        assert len(TAX.categories) == 10
+        # 分類為開放集：taxonomy 的清單只是「已知種子」，模型可自創新分類
+        assert len(TAX.categories) >= 11  # 原 10 + 宗教心靈
 
     def test_required_labels_present(self):
         assert "擺爛" in TAX.emotions
         assert "理直氣壯" in TAX.emotions
         assert {c.label for c in TAX.categories} >= {"卡通動畫", "戲劇影視", "名人政治", "其他"}
+        assert "宗教心靈" in {c.label for c in TAX.categories}
+
+    def test_known_categories_are_canonical_labels(self):
+        known = TAX.known_categories
+        assert "卡通動畫" in known
+        assert "宗教心靈" in known
+        assert isinstance(known, tuple)
+
+    def test_category_normalization(self):
+        # 開放集 + 正規化表：同義詞收斂到單一正規名，避免分裂
+        assert TAX.normalize_category("佛法") == "宗教心靈"
+        assert TAX.normalize_category(" 卡通 ") == "卡通動畫"  # 別名 + 前後空白
+        assert TAX.normalize_category("卡通動畫") == "卡通動畫"  # 正規名自身可解析
+
+    def test_category_unknown_passthrough(self):
+        # 模型自創的新分類原樣保留（成為新的正規名）
+        assert TAX.normalize_category("運動賽事") == "運動賽事"
+        assert TAX.normalize_category(None) is None
+        assert TAX.normalize_category("   ") is None
 
     def test_only_comfort_is_sensitive_safe(self):
         # docs/04 §4：敏感情境僅保留「安撫」
@@ -98,6 +118,21 @@ categories:
 franchises:
   海綿寶寶: [SpongeBob]
   派大星宇宙: [spongebob]
+""",
+            )
+
+    def test_conflicting_category_alias_rejected(self, tmp_path):
+        with pytest.raises(TaxonomyError, match="別名衝突"):
+            self._load(
+                tmp_path,
+                """
+version: 1
+emotions: [無奈]
+strategies:
+  - {id: comfort, label: 安撫, sensitive_safe: true}
+categories:
+  - {label: 卡通動畫, aliases: [動畫]}
+  - {label: 繪圖創作, aliases: [動畫]}
 """,
             )
 

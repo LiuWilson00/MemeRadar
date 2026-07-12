@@ -32,6 +32,7 @@ class Strategy:
 class Category:
     label: str
     default_excluded: bool = False
+    aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -39,11 +40,13 @@ class Taxonomy:
     version: int
     emotions: tuple[str, ...]
     strategies: tuple[Strategy, ...]
+    # 分類為開放集（franchise 式）：taxonomy 清單只是已知種子，模型可自創新分類
     categories: tuple[Category, ...]
     # 正規名稱 -> 別名列表（原始資料，供展示 / 維護）
     franchises: dict[str, tuple[str, ...]]
     # 比對鍵（casefold + strip 後的別名或正規名）-> 正規名稱
     _franchise_lookup: dict[str, str] = field(repr=False, default_factory=dict)
+    _category_lookup: dict[str, str] = field(repr=False, default_factory=dict)
 
     # -- 查詢介面 ---------------------------------------------------------
 
@@ -55,6 +58,20 @@ class Taxonomy:
         if not cleaned:
             return None
         return self._franchise_lookup.get(cleaned.casefold(), cleaned)
+
+    def normalize_category(self, name: str | None) -> str | None:
+        """把分類正規化為庫內唯一寫法；查無別名時原樣返回（模型自創的新分類）。"""
+        if name is None:
+            return None
+        cleaned = name.strip()
+        if not cleaned:
+            return None
+        return self._category_lookup.get(cleaned.casefold(), cleaned)
+
+    @property
+    def known_categories(self) -> tuple[str, ...]:
+        """已知分類的正規名（餵給標註 prompt 當優先沿用詞彙）。"""
+        return tuple(c.label for c in self.categories)
 
     def strategy_by_label(self, label: str) -> Strategy | None:
         needle = label.strip()
@@ -115,10 +132,24 @@ def _parse(raw: dict) -> Taxonomy:
     if not categories_raw:
         raise TaxonomyError("categories 不可為空")
     categories = tuple(
-        Category(label=c["label"], default_excluded=bool(c.get("default_excluded", False)))
+        Category(
+            label=c["label"],
+            default_excluded=bool(c.get("default_excluded", False)),
+            aliases=tuple(c.get("aliases") or ()),
+        )
         for c in categories_raw
     )
     _require_unique([c.label for c in categories], "分類標籤")
+    category_lookup: dict[str, str] = {}
+    for category in categories:
+        for key_source in (category.label, *category.aliases):
+            key = key_source.strip().casefold()
+            existing = category_lookup.get(key)
+            if existing is not None and existing != category.label:
+                raise TaxonomyError(
+                    f"分類別名衝突：{key_source!r} 同時指向 {existing!r} 與 {category.label!r}"
+                )
+            category_lookup[key] = category.label
 
     franchises_raw: dict[str, list[str]] = raw.get("franchises") or {}
     franchises = {name: tuple(aliases or ()) for name, aliases in franchises_raw.items()}
@@ -140,6 +171,7 @@ def _parse(raw: dict) -> Taxonomy:
         categories=categories,
         franchises=franchises,
         _franchise_lookup=lookup,
+        _category_lookup=category_lookup,
     )
 
 

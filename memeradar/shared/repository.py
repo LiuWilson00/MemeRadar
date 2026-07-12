@@ -224,6 +224,22 @@ def franchise_counts(conn: sqlite3.Connection) -> dict[str, int]:
     return {r["name"]: r["n"] for r in rows}
 
 
+def category_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """各分類的可檢索梗圖數（開放集：直接由庫內實際出現的值統計，含模型自創）。"""
+    rows = conn.execute(
+        """
+        SELECT json_each.value AS name, COUNT(*) AS n
+        FROM meme_annotations a
+        JOIN memes m ON m.meme_id = a.meme_id
+        JOIN json_each(a.categories)
+        WHERE m.status = 'active' AND a.is_meme = 1
+        GROUP BY json_each.value
+        ORDER BY n DESC, name
+        """
+    ).fetchall()
+    return {r["name"]: r["n"] for r in rows}
+
+
 def list_memes_missing_embedding(
     conn: sqlite3.Connection, kind: str, model: str, limit: int | None = None
 ) -> list[Meme]:

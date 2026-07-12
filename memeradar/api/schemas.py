@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from memeradar.shared.labels import CategoryLabel, EmotionLabel
+from memeradar.shared.labels import EmotionLabel
+from memeradar.shared.taxonomy import get_taxonomy
 
 
 class TurnIn(BaseModel):
@@ -48,7 +49,10 @@ class UploadMemeRequest(BaseModel):
 
 
 class AnnotationPatch(BaseModel):
-    """人工複核的標籤修補（僅覆蓋有提供的欄位；封閉集欄位鎖 taxonomy）。"""
+    """人工複核的標籤修補（僅覆蓋有提供的欄位）。
+
+    情緒為封閉集（enum 鎖 taxonomy）；分類為開放集，經 normalize_category 收斂同義詞。
+    """
 
     ocr_text: str | None = None
     description: str | None = None
@@ -56,9 +60,22 @@ class AnnotationPatch(BaseModel):
     template_name: str | None = None
     emotions: list[EmotionLabel] | None = None
     usage_hints: list[str] | None = None
-    categories: list[CategoryLabel] | None = None
+    categories: list[str] | None = None
     nsfw: bool | None = None
     is_meme: bool | None = None
+
+    @field_validator("categories")
+    @classmethod
+    def _normalize_categories(cls, values: list[str] | None) -> list[str] | None:
+        if values is None:
+            return None
+        tax = get_taxonomy()
+        seen: dict[str, None] = {}
+        for value in values:
+            normalized = tax.normalize_category(value)
+            if normalized is not None:
+                seen.setdefault(normalized, None)
+        return list(seen)
 
 
 class ReviewAnnotationRequest(BaseModel):

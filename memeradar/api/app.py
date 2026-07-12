@@ -311,7 +311,8 @@ def create_app(deps: Deps | None = None) -> FastAPI:
                 {"name": name, "count": count}
                 for name, count in repo.franchise_counts(conn).items()
             ],
-            "categories": [c.label for c in taxonomy.categories],
+            # 分類為開放集：列出庫內實際出現的值（含模型自創），非整份 taxonomy
+            "categories": list(repo.category_counts(conn).keys()),
             "strategies": [s.label for s in taxonomy.strategies],
             "emotions": list(taxonomy.emotions),
         }

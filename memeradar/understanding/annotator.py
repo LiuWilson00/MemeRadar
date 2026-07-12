@@ -2,7 +2,8 @@
 
 設計要點：
 - Claude vision + structured outputs（``client.messages.parse`` + pydantic），
-  情緒與分類以 taxonomy 動態 enum 進 JSON schema，由 API 端保證標籤合法。
+  情緒以 taxonomy 動態 enum 進 JSON schema（封閉集，API 端保證合法）；
+  分類為開放集（franchise 式）：自由文字 + ``normalize_category`` 正規化收斂同義詞。
 - 貼文上下文（標題 / 熱門留言）注入 user turn，prompt 明示其為旁證。
 - system prompt 為穩定字串（由 taxonomy 決定性生成），掛 cache_control 吃 prompt caching。
 - 版本化：``model_version = {ANNOTATION_PROMPT_VERSION}@{model}`` 寫入標註列。
@@ -22,7 +23,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from memeradar.shared import repository as repo
 from memeradar.shared.config import get_settings
-from memeradar.shared.labels import CategoryLabel, EmotionLabel
+from memeradar.shared.labels import EmotionLabel
 from memeradar.shared.models import Meme, MemeAnnotation, MemeSource
 from memeradar.shared.taxonomy import get_taxonomy
 
@@ -47,7 +48,9 @@ class AnnotationResult(BaseModel):
     usage_hints: list[str] = Field(
         description="1–3 條使用情境：這張圖通常什麼時候丟出來，以動作語彙開頭"
     )
-    categories: list[CategoryLabel] = Field(description="分類目錄，限用字典，通常單選")
+    categories: list[str] = Field(
+        description="媒材類型分類，通常單選；優先沿用已知分類，沒有合適的才自創簡短新詞"
+    )
     confidence: float = Field(description="整體標註信心 0–1")
 
     @field_validator("franchise")
@@ -55,12 +58,24 @@ class AnnotationResult(BaseModel):
     def _normalize_franchise(cls, value: str | None) -> str | None:
         return get_taxonomy().normalize_franchise(value)
 
+    @field_validator("categories")
+    @classmethod
+    def _normalize_categories(cls, values: list[str]) -> list[str]:
+        tax = get_taxonomy()
+        # 正規化 + 去重（保序）：同義詞收斂後可能重複
+        seen: dict[str, None] = {}
+        for value in values:
+            normalized = tax.normalize_category(value)
+            if normalized is not None:
+                seen.setdefault(normalized, None)
+        return list(seen)
+
 
 def build_system_prompt() -> str:
     """由 taxonomy 決定性生成標註指引（穩定字串，供 prompt caching）。"""
     tax = get_taxonomy()
     emotions = "、".join(tax.emotions)
-    categories = "、".join(c.label for c in tax.categories)
+    categories = "、".join(tax.known_categories)
     strategies = "、".join(s.label for s in tax.strategies)
     return f"""你是梗圖標註專家，為「對話梗圖推薦系統」建立檢索資料。對每張圖片，在同一次判讀中綜合三件事：圖中文字、人物表情動作、文化典故。
 
@@ -69,7 +84,7 @@ def build_system_prompt() -> str:
 - description：客觀描述畫面（人物、表情、動作、構圖），不加入使用建議。
 - usage_hints：最重要的欄位。寫 1–3 條「這張圖通常什麼時候丟出來」，以動作語彙開頭，盡量對齊以下回應策略詞彙：{strategies}。
 - emotions：限用固定字典：{emotions}。
-- categories：限用固定字典：{categories}。
+- categories：媒材類型（通常單選）。優先沿用既有分類：{categories}；只有都不合適時才自創一個簡短新分類詞（例如「運動賽事」「音樂」）。宗教、佛法、勸世語錄類請用「宗教心靈」；政治、時事、爭議公眾人物一律用「名人政治」。
 - franchise：作品來源；不確定時給 null，不要猜。
 - template_name：僅在是廣為流傳的知名模板時填寫，否則 null。
 
@@ -182,7 +197,7 @@ def annotate_meme(
         template_name=result.template_name,
         emotions=[e.value for e in result.emotions],
         usage_hints=result.usage_hints,
-        categories=[c.value for c in result.categories],
+        categories=result.categories,  # 已由 validator 正規化為開放集正規名
         confidence=result.confidence,
     )
     repo.upsert_annotation(conn, annotation)

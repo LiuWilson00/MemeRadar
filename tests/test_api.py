@@ -552,5 +552,7 @@ class TestImagesAndMeta:
         body = client.get("/meta").json()
         franchises = {f["name"]: f["count"] for f in body["franchises"]}
         assert franchises == {"海綿寶寶": 2, "甄嬛傳": 1}
-        assert "卡通動畫" in body["categories"]
-        assert "擺爛" in body["emotions"]  # 複核頁標籤編修的字典來源
+        # 分類為開放集：來自庫內實際出現的值（非整份 taxonomy），新分類自動現身
+        assert "卡通動畫" in body["categories"]  # 種子圖都標這類
+        assert "綜藝" not in body["categories"]  # taxonomy 有、但庫內無 → 不列
+        assert "擺爛" in body["emotions"]  # 複核頁標籤編修的字典來源（情緒仍為封閉集）
