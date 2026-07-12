@@ -73,6 +73,30 @@ def make_seed_meme() -> tuple[Meme, MemeAnnotation, MemeSource, Embedding]:
     return meme, annotation, source, embedding
 
 
+class TestThreadSafety:
+    def test_connection_can_close_from_another_thread(self, tmp_path):
+        """FastAPI 的 sync yield 依賴會在不同 threadpool 執行緒 setup/teardown：
+        連線在 A 執行緒建立、B 執行緒關閉；預設 check_same_thread=True 會丟
+        ProgrammingError → 端點在並發下 500（圖片牆一次載多張即引爆）。"""
+        import threading
+
+        c = connect(tmp_path / "cross.sqlite3")
+        migrate(c)
+        errors: list[Exception] = []
+
+        def close_elsewhere():
+            try:
+                c.execute("SELECT 1").fetchone()  # 跨執行緒查詢
+                c.close()  # 跨執行緒關閉（原 bug 觸發點）
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        t = threading.Thread(target=close_elsewhere)
+        t.start()
+        t.join()
+        assert not errors, errors
+
+
 class TestMigration:
     def test_migrate_creates_all_tables(self, conn):
         rows = conn.execute(

@@ -25,7 +25,10 @@ def default_db_path() -> Path:
 def connect(path: Path | str | None = None) -> sqlite3.Connection:
     target = Path(path) if path is not None else default_db_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(target)
+    # check_same_thread=False：FastAPI 的 sync yield 依賴（get_conn）可能在不同
+    # threadpool 執行緒 setup/teardown，連線需能跨執行緒關閉。每個請求各自一條
+    # 連線、請求內單執行緒使用，故放寬執行緒檢查安全（並發下不會共用同一連線）。
+    conn = sqlite3.connect(target, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
