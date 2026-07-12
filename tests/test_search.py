@@ -97,11 +97,14 @@ class TestTopKAndScoring:
         assert hits[0].annotation.usage_hints == ["被指責時自嘲"]
 
     def test_hit_carries_hotness_for_final_scoring(self, conn):
+        from memeradar.shared.hotness import record_engagement
+
         meme = seed_meme(conn, [1.0, 0.0])
-        repo.add_hotness(conn, meme.meme_id, 3.5)
+        record_engagement(conn, meme.meme_id, 3.5)
+        expected = repo.get_meme(conn, meme.meme_id).hotness
         searcher = SqliteBruteForceSearcher(conn, signature=SIGNATURE)
         hits = searcher.search([1.0, 0.0], k=1, filters=SearchFilters())
-        assert hits[0].hotness == pytest.approx(3.5)
+        assert hits[0].hotness == pytest.approx(expected)
 
 
 class TestMetadataFilters:

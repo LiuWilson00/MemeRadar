@@ -34,8 +34,8 @@ def insert_meme(conn: sqlite3.Connection, meme: Meme) -> None:
     conn.execute(
         """
         INSERT INTO memes (meme_id, image_uri, sha256, phash, width, height,
-                           hotness, status, first_seen_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                           hotness, status, first_seen_at, engagement, last_seen_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             meme.meme_id,
@@ -47,6 +47,8 @@ def insert_meme(conn: sqlite3.Connection, meme: Meme) -> None:
             meme.hotness,
             meme.status,
             meme.first_seen_at,
+            meme.engagement,
+            meme.last_seen_at,
         ),
     )
     conn.commit()
@@ -63,6 +65,8 @@ def _row_to_meme(row: sqlite3.Row) -> Meme:
         hotness=row["hotness"],
         status=row["status"],
         first_seen_at=row["first_seen_at"],
+        engagement=row["engagement"],
+        last_seen_at=row["last_seen_at"],
     )
 
 
@@ -78,11 +82,6 @@ def find_meme_by_sha256(conn: sqlite3.Connection, sha256: str) -> Meme | None:
 
 def set_status(conn: sqlite3.Connection, meme_id: str, status: str) -> None:
     conn.execute("UPDATE memes SET status = ? WHERE meme_id = ?", (status, meme_id))
-    conn.commit()
-
-
-def add_hotness(conn: sqlite3.Connection, meme_id: str, delta: float) -> None:
-    conn.execute("UPDATE memes SET hotness = hotness + ? WHERE meme_id = ?", (delta, meme_id))
     conn.commit()
 
 

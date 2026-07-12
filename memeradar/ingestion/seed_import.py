@@ -105,7 +105,13 @@ def import_image_bytes(
             posted_at=posted_at,
         ),
     )
-    return meme, "imported"
+    # 首個來源即計入互動分：hotness 按 Σ(來源互動分) 起算（docs/06 §3.1），
+    # 與 merge 轉移「重複者全部來源」的邏輯一致
+    from memeradar.ingestion.dedup import hotness_gain
+    from memeradar.shared.hotness import record_engagement
+
+    record_engagement(conn, meme_id, hotness_gain(upvotes))
+    return repo.get_meme(conn, meme_id), "imported"
 
 
 def import_seed_folder(

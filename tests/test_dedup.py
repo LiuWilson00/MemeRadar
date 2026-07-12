@@ -19,6 +19,7 @@ from memeradar.ingestion.dedup import (
 from memeradar.ingestion.seed_import import import_image_bytes
 from memeradar.shared import repository as repo
 from memeradar.shared.db import connect, migrate
+from memeradar.shared.hotness import compute_hotness
 from memeradar.shared.models import MemeAnnotation, MemeSource, new_id
 
 
@@ -179,7 +180,14 @@ class TestAbsorbAndUpgrade:
         sources = repo.list_sources(conn, meme.meme_id)
         assert len(sources) == 2  # 原 manual + 新 reddit
         assert sources[-1].platform == "reddit"
-        assert repo.get_meme(conn, meme.meme_id).hotness == pytest.approx(hotness_gain(900))
+        # 同圖再現＝「這梗還活著」：互動分累加、刷新最後出現時間（docs/06 §3.1）
+        # engagement = 首次匯入 manual 來源 + 再現的 reddit(900 讚)
+        after = repo.get_meme(conn, meme.meme_id)
+        assert after.engagement == pytest.approx(hotness_gain(None) + hotness_gain(900))
+        assert after.last_seen_at is not None
+        assert after.hotness == pytest.approx(
+            compute_hotness(after.engagement, after.last_seen_at)
+        )
 
     def test_hotness_gain_monotonic_and_log_scaled(self):
         assert hotness_gain(0) == pytest.approx(1.0)  # 重複出現本身就是訊號
@@ -263,7 +271,13 @@ class TestPostAnnotationResolution:
         # 來源已搬到保留的主圖、熱度累加
         platforms = {s.platform for s in repo.list_sources(conn, kept.meme_id)}
         assert "reddit" in platforms
-        assert repo.get_meme(conn, kept.meme_id).hotness > 0
+        kept_after = repo.get_meme(conn, kept.meme_id)
+        # 保留者自己的 manual 來源 + 轉移重複者全部來源（manual + reddit 99 讚）
+        assert kept_after.engagement == pytest.approx(
+            2 * hotness_gain(None) + hotness_gain(99)
+        )
+        assert kept_after.last_seen_at is not None
+        assert kept_after.hotness > 0
         assert repo.list_dedup_reviews(conn, resolution="merged")
 
     def test_different_ocr_resolved_distinct(self, conn, data_dir):

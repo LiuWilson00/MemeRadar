@@ -136,6 +136,20 @@ class TestImportImageBytes:
         assert (data_dir / meme.image_uri).exists()
         assert repo.list_sources(conn, meme.meme_id)[0].post_title == "Console 上傳"
 
+    def test_first_source_counts_into_engagement(self, conn, data_dir, tmp_path):
+        """首次匯入即按 Σ(來源互動分) 起算（docs/06 §3.1），與 merge 轉移邏輯一致。"""
+        from memeradar.ingestion.dedup import hotness_gain
+
+        make_image(tmp_path / "a.png")
+        content = (tmp_path / "a.png").read_bytes()
+
+        meme, _ = import_image_bytes(conn, content, data_dir=data_dir, upvotes=99)
+
+        got = repo.get_meme(conn, meme.meme_id)
+        assert got.engagement == pytest.approx(hotness_gain(99))
+        assert got.last_seen_at is not None
+        assert got.hotness > 0
+
     def test_duplicate_returns_existing_meme(self, conn, data_dir, tmp_path):
         make_image(tmp_path / "a.png")
         content = (tmp_path / "a.png").read_bytes()

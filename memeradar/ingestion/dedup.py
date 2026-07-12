@@ -32,6 +32,7 @@ import imagehash
 from PIL import Image
 
 from memeradar.shared import repository as repo
+from memeradar.shared.hotness import record_engagement
 from memeradar.shared.models import Embedding, Meme, MemeSource
 
 DEFAULT_PHASH_MAX_DISTANCE = 8  # docs/02 §4 起始閾值，依誤判調整
@@ -195,7 +196,8 @@ def absorb_duplicate(conn: sqlite3.Connection, existing_meme_id: str, source: Me
         crawled_at=source.crawled_at,
     )
     repo.add_source(conn, merged)
-    repo.add_hotness(conn, existing_meme_id, hotness_gain(source.upvotes))
+    # 同圖再現＝「這梗還活著」：累加互動分並刷新最後出現時間（docs/06 §3.1）
+    record_engagement(conn, existing_meme_id, hotness_gain(source.upvotes))
 
 
 def _normalized_ocr(text: str) -> str:
@@ -230,7 +232,7 @@ def merge_duplicate_into(conn: sqlite3.Connection, dup_meme_id: str, kept_meme_i
     """把重複梗圖併入保留者：來源搬移、熱度累加、重複者下架。"""
     gain = sum(hotness_gain(s.upvotes) for s in repo.list_sources(conn, dup_meme_id)) or 1.0
     repo.move_sources(conn, from_meme_id=dup_meme_id, to_meme_id=kept_meme_id)
-    repo.add_hotness(conn, kept_meme_id, gain)
+    record_engagement(conn, kept_meme_id, gain)
     repo.set_status(conn, dup_meme_id, "removed")
 
 

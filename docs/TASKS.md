@@ -82,7 +82,8 @@
   - 驗收 ✅：後端 `GET /report/feedback`（`shared/reporting.py` 聚合：totals / 每日 / 策略 / franchise / 名次 / 參數組合 / 👎 備註，6+1 測試）；Console「報表」頁籤——KPI 磚（👍 率為北極星）、每日 👍👎 分組長條（含數據表備援）、四張分組通過率表（琥珀率條 + 直接標籤）、👎 備註列表附五類歸因指引；圖表標記色通過 dataviz 六項檢核（亮度帶 / CVD ΔE18.9 / 對比）
 - [x] **P4-2** 人工複核佇列頁：`pending_review` 標註審核 + 去重裁決 — **M**（依賴 P2-7）
   - 驗收 ✅：Console「複核」頁籤兩區塊——標註待審（可編修 OCR / 出處 / 情緒 chips / 用途 / is_meme / NSFW，通過即重建檢索向量、model_version 加 +human 溯源；或淘汰）與去重裁決（並排比圖，合併=來源搬移+熱度轉移+下架、不同梗=兩張保留）；後端 +9 契約測試（201 全綠）、/meta 補 emotions 字典
-- [ ] **P4-3** 熱度衰減上線：hotness 公式 + 每日重算 job + 排序端接入（06 文件 §3.1）— **M**（依賴 P3-3）
+- [x] **P4-3** 熱度衰減上線：hotness 公式 + 每日重算 job + 排序端接入（06 文件 §3.1）— **M**（依賴 P3-3）
+  - 驗收 ✅：migration 0005 拆出事實來源 `engagement`/`last_seen_at`（既有 hotness 回填為 engagement）；`shared/hotness.py` 公式 `engagement×e^(−λ·天數)+0.1×log10(1+engagement)`（半衰期 90 天 + 長青基礎分）、重算冪等；每日 job `python -m memeradar.shared.hotness`；去重命中 / 合併改走 `record_engagement`（累加互動分 + 刷新 last_seen_at + 即時重算）；排序端經 memes.hotness（α=0.1）自動吃到衰減值，10 例新測試
 - [ ] **P4-4** 回饋驅動調優第一輪：以 ≥ 500 筆回饋歸因結果調 rerank prompt / 參數預設值，golden set 前後對照 — **M**（依賴 P4-1）
 - [ ] **P4-5** 消融實驗：策略展開 / rerank / 熱度各自貢獻度量測，砍掉無貢獻環節 — **S**（依賴 P2-8）
 - [ ] **P4-6** Hybrid search 評估（選做，僅當關鍵詞漏召回明顯）— **M**

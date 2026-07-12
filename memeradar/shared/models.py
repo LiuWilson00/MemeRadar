@@ -32,9 +32,11 @@ class Meme:
     phash: str | None = None
     width: int | None = None
     height: int | None = None
-    hotness: float = 0.0
+    hotness: float = 0.0  # 推導值：每日 job 依 engagement/last_seen_at 重算（docs/06 §3.1）
     status: str = "active"
     first_seen_at: str = field(default_factory=_now_iso)
+    engagement: float = 0.0  # 互動總分 Σ(來源互動分)，只增不減
+    last_seen_at: str | None = None  # 最後出現時間（去重命中刷新）
 
 
 @dataclass

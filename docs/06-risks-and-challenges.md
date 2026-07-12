@@ -35,6 +35,13 @@ hotness = Σ(來源互動分) × e^(−λ · 距最後一次被轉貼的天數)
 - 排序端以低權重（α=0.1）納入，避免熱度壓過情境相關性。
 - 經典長青梗（海綿寶寶類模板）衰減後仍有基礎分，不會歸零消失。
 
+> **實作（P4-3）**：`memeradar/shared/hotness.py`。事實來源拆成 `memes.engagement`
+> （互動總分 Σ，只增不減）與 `memes.last_seen_at`（去重命中刷新），`hotness` 為推導值：
+> `hotness = engagement × e^(−λ·天數) + 0.1 × log10(1 + engagement)`——第二項即長青基礎分，
+> 與歷史累積互動成正比、不衰減。重算冪等；每日 job：`python -m memeradar.shared.hotness`
+> （Windows 工作排程器 / cron 每日一次）。去重命中走 `record_engagement` 即時刷新，
+> 兩次 job 之間的熱度也不會過期。
+
 ### 3.2 冷啟動
 
 - 庫太小時「檢索空手」頻繁 → Phase 0 的 seed 集必須**針對策略錨點字典配平**（每個情境類別至少 8–10 張），而不是隨機收集 300 張。

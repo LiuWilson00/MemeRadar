@@ -150,13 +150,18 @@ class TestSeedRoundtrip:
         assert got.model_version == "labeler-v2@claude-opus-4-8"
         assert got.emotions == ["擺爛"]
 
-    def test_status_update_and_hotness_accumulation(self, conn):
+    def test_status_update_and_engagement_accumulation(self, conn):
+        from memeradar.shared.hotness import compute_hotness, record_engagement
+
         meme, *_ = make_seed_meme()
         repo.insert_meme(conn, meme)
 
-        repo.add_hotness(conn, meme.meme_id, 1.5)
-        repo.add_hotness(conn, meme.meme_id, 0.5)
-        assert repo.get_meme(conn, meme.meme_id).hotness == 2.0
+        record_engagement(conn, meme.meme_id, 1.5)
+        record_engagement(conn, meme.meme_id, 0.5)
+        got = repo.get_meme(conn, meme.meme_id)
+        assert got.engagement == 2.0
+        # hotness 為推導值：f(engagement, last_seen_at)（docs/06 §3.1）
+        assert got.hotness == pytest.approx(compute_hotness(2.0, got.last_seen_at))
 
         repo.set_status(conn, meme.meme_id, "removed")
         assert repo.get_meme(conn, meme.meme_id).status == "removed"

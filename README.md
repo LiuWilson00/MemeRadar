@@ -90,6 +90,12 @@ python -m memeradar.ingestion.reddit --client praw --subreddit memes --limit 25 
 python -m memeradar.ingestion.pipeline --client praw [--subreddit memes] [--limit 100] [--no-clip]
 ```
 
+熱度衰減每日重算（docs/06 §3.1：半衰期 90 天 + 長青基礎分；冪等，排程器每日一次）：
+
+```bash
+python -m memeradar.shared.hotness
+```
+
 意圖分析驗證：對話 → 意圖 JSON（需 `ANTHROPIC_API_KEY`；每個參數一則訊息）：
 
 ```bash
