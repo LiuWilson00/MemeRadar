@@ -634,11 +634,18 @@ def get_recommendation_log(conn: sqlite3.Connection, query_id: str) -> Recommend
 
 
 def insert_feedback(conn: sqlite3.Connection, fb: FeedbackEvent) -> None:
+    """寫入回饋；同一查詢的同一張圖冪等（改投以最新為準，不重複計數）。"""
     conn.execute(
         """
         INSERT INTO feedback_events (feedback_id, query_id, meme_id, rank, rating,
                                      note, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (query_id, meme_id) DO UPDATE SET
+            feedback_id = excluded.feedback_id,
+            rank        = excluded.rank,
+            rating      = excluded.rating,
+            note        = excluded.note,
+            created_at  = excluded.created_at
         """,
         (fb.feedback_id, fb.query_id, fb.meme_id, fb.rank, fb.rating, fb.note, fb.created_at),
     )

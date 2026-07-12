@@ -63,11 +63,15 @@ def feedback(conn, log, meme, *, rating: str, rank: int = 1, note: str | None = 
 
 class TestFeedbackReport:
     def test_totals_and_up_rate(self, conn):
-        sponge = seed_meme(conn, ocr="我就爛", franchise="海綿寶寶")
-        log = seed_query(conn, [(sponge, "自嘲")], created_at="2026-07-10T10:00:00+00:00")
-        feedback(conn, log, sponge, rating="up")
-        feedback(conn, log, sponge, rating="up")
-        feedback(conn, log, sponge, rating="down")
+        # 回饋對每組 query+meme 冪等 → 三張不同梗圖各一票（up/up/down）
+        m1 = seed_meme(conn, ocr="甲", franchise="海綿寶寶")
+        m2 = seed_meme(conn, ocr="乙", franchise="海綿寶寶")
+        m3 = seed_meme(conn, ocr="丙", franchise="海綿寶寶")
+        log = seed_query(conn, [(m1, "自嘲"), (m2, "自嘲"), (m3, "自嘲")],
+                         created_at="2026-07-10T10:00:00+00:00")
+        feedback(conn, log, m1, rating="up")
+        feedback(conn, log, m2, rating="up")
+        feedback(conn, log, m3, rating="down")
 
         report = build_feedback_report(conn)
 
@@ -76,11 +80,14 @@ class TestFeedbackReport:
         assert report["queries_with_feedback"] == 1
 
     def test_daily_trend_buckets(self, conn):
-        sponge = seed_meme(conn, ocr="我就爛", franchise="海綿寶寶")
-        log = seed_query(conn, [(sponge, "自嘲")], created_at="2026-07-10T10:00:00+00:00")
-        feedback(conn, log, sponge, rating="up", created_at="2026-07-10T11:00:00+00:00")
-        feedback(conn, log, sponge, rating="down", created_at="2026-07-11T09:00:00+00:00")
-        feedback(conn, log, sponge, rating="up", created_at="2026-07-11T10:00:00+00:00")
+        m1 = seed_meme(conn, ocr="甲", franchise="海綿寶寶")
+        m2 = seed_meme(conn, ocr="乙", franchise="海綿寶寶")
+        m3 = seed_meme(conn, ocr="丙", franchise="海綿寶寶")
+        log = seed_query(conn, [(m1, "自嘲"), (m2, "自嘲"), (m3, "自嘲")],
+                         created_at="2026-07-10T10:00:00+00:00")
+        feedback(conn, log, m1, rating="up", created_at="2026-07-10T11:00:00+00:00")
+        feedback(conn, log, m2, rating="down", created_at="2026-07-11T09:00:00+00:00")
+        feedback(conn, log, m3, rating="up", created_at="2026-07-11T10:00:00+00:00")
 
         report = build_feedback_report(conn)
 
@@ -128,10 +135,13 @@ class TestFeedbackReport:
 
     def test_down_notes_for_manual_attribution(self, conn):
         sponge = seed_meme(conn, ocr="我就爛", franchise="海綿寶寶")
-        log = seed_query(conn, [(sponge, "自嘲")], created_at="2026-07-10T10:00:00+00:00")
+        m2 = seed_meme(conn, ocr="乙", franchise="海綿寶寶")
+        m3 = seed_meme(conn, ocr="丙", franchise="海綿寶寶")
+        log = seed_query(conn, [(sponge, "自嘲"), (m2, "看戲"), (m3, "附和")],
+                         created_at="2026-07-10T10:00:00+00:00")
         feedback(conn, log, sponge, rating="down", note="梗太老了")
-        feedback(conn, log, sponge, rating="down")  # 無備註者不列
-        feedback(conn, log, sponge, rating="up", note="讚")  # 👍 備註不列
+        feedback(conn, log, m2, rating="down")  # 無備註者不列
+        feedback(conn, log, m3, rating="up", note="讚")  # 👍 備註不列
 
         report = build_feedback_report(conn)
 

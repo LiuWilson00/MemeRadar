@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   Camera,
+  Download,
   RotateCcw,
   SearchX,
   Swords,
@@ -22,6 +23,30 @@ import type { RecommendResponse, ResultItem } from "../types";
 
 type Phase = "idle" | "loading" | "results" | "error";
 type Mode = "screenshot" | "battle";
+
+const EXT: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/webp": "webp",
+};
+
+/** 下載梗圖：抓成 blob 再觸發存檔，免得使用者長按。iOS 失敗時退回開新分頁。 */
+async function downloadImage(url: string, name: string) {
+  try {
+    const res = await fetch(url);
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objectUrl;
+    a.download = `${name}.${EXT[blob.type] ?? "png"}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(objectUrl);
+  } catch {
+    window.open(url, "_blank");
+  }
+}
 
 export default function MobileApp() {
   const [phase, setPhase] = useState<Phase>("idle");
@@ -352,12 +377,19 @@ function Slide({
 }) {
   const [sent, setSent] = useState<"up" | "down" | null>(null);
 
-  const rate = async (rating: "up" | "down") => {
-    setSent(rating);
-    try {
-      await sendFeedback({ query_id: queryId, meme_id: item.meme_id, rank: item.rank, rating });
-    } catch {
-      /* 靜默：手機端回饋失敗不打擾使用者 */
+  // 可改投：點另一顆即切換，最新一次為準（後端對每組 query+meme 冪等，不重複計數）
+  const rate = (rating: "up" | "down") => {
+    const next = sent === rating ? null : rating; // 再點同一顆＝取消
+    setSent(next);
+    if (next) {
+      void sendFeedback({
+        query_id: queryId,
+        meme_id: item.meme_id,
+        rank: item.rank,
+        rating: next,
+      }).catch(() => {
+        /* 靜默：手機端回饋失敗不打擾使用者 */
+      });
     }
   };
 
@@ -366,7 +398,6 @@ function Slide({
       <div className="relative flex flex-1 items-center justify-center rounded-3xl border border-line bg-ink">
         <MemeImage
           src={item.image_url}
-          href={item.image_url}
           alt={`推薦梗圖第 ${item.rank} 名`}
           className="max-h-[52vh] w-full rounded-3xl object-contain"
         />
@@ -376,26 +407,33 @@ function Slide({
         <span className="absolute right-3 top-3 rounded-full border border-amber/70 bg-ink/70 px-2.5 py-0.5 text-xs text-amber">
           {item.matched_strategy}
         </span>
+        <button
+          onClick={() => downloadImage(item.image_url, `memeradar-${item.meme_id.slice(2, 10)}`)}
+          className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-full bg-ink/80 px-3 py-1.5 text-xs text-fg active:bg-ink"
+          aria-label="下載這張梗圖"
+        >
+          <Download className="size-4" strokeWidth={1.75} /> 下載
+        </button>
       </div>
 
       <div className="mt-3 flex items-center gap-2">
         <button
           onClick={() => rate("up")}
-          disabled={sent !== null}
           className={`flex flex-1 items-center justify-center rounded-full border py-3 active:scale-95 ${
             sent === "up" ? "border-signal bg-signal/15 text-signal" : "border-line text-fg"
           }`}
           aria-label="這張讚"
+          aria-pressed={sent === "up"}
         >
           <ThumbsUp className="size-5" strokeWidth={sent === "up" ? 2.4 : 1.75} />
         </button>
         <button
           onClick={() => rate("down")}
-          disabled={sent !== null}
           className={`flex flex-1 items-center justify-center rounded-full border py-3 active:scale-95 ${
             sent === "down" ? "border-danger bg-danger/15 text-danger" : "border-line text-fg"
           }`}
           aria-label="這張不行"
+          aria-pressed={sent === "down"}
         >
           <ThumbsDown className="size-5" strokeWidth={sent === "down" ? 2.4 : 1.75} />
         </button>

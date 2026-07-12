@@ -5,6 +5,7 @@
 """
 
 import sqlite3
+from dataclasses import replace
 
 import pytest
 
@@ -250,8 +251,13 @@ class TestMissingAnnotationQuery:
 
 class TestHistoryQuery:
     def test_list_logs_newest_first_with_feedback_counts(self, conn):
-        meme, *_ = make_seed_meme()
-        repo.insert_meme(conn, meme)
+        # 三張不同梗圖各一票（回饋對每組 query+meme 冪等，不同 meme 各自計數）
+        memes = []
+        for i in range(3):
+            m, *_ = make_seed_meme()
+            m = replace(m, meme_id=new_id("m"), sha256=f"{i}".ljust(64, "0")[:64])
+            repo.insert_meme(conn, m)
+            memes.append(m)
         older = RecommendationLog(
             query_id=new_id("q"), conversation=[{"speaker": "other", "text": "早的"}],
             params_snapshot={"params": {"top_n": 5}}, created_at="2026-07-10T10:00:00+00:00",
@@ -259,15 +265,15 @@ class TestHistoryQuery:
         newer = RecommendationLog(
             query_id=new_id("q"), conversation=[{"speaker": "other", "text": "晚的"}],
             params_snapshot={"params": {"top_n": 3}}, latency_ms=1234,
-            final_results=[{"meme_id": meme.meme_id, "rank": 1}],
+            final_results=[{"meme_id": memes[0].meme_id, "rank": 1}],
             created_at="2026-07-11T10:00:00+00:00",
         )
         repo.insert_recommendation_log(conn, older)
         repo.insert_recommendation_log(conn, newer)
-        for rating in ("up", "up", "down"):
+        for m, rating in zip(memes, ("up", "up", "down"), strict=True):
             repo.insert_feedback(conn, FeedbackEvent(
                 feedback_id=new_id("f"), query_id=newer.query_id,
-                meme_id=meme.meme_id, rank=1, rating=rating,
+                meme_id=m.meme_id, rank=1, rating=rating,
             ))
 
         logs = repo.list_recommendation_logs(conn)
@@ -363,6 +369,26 @@ class TestRecommendationAndFeedback:
         assert len(events) == 1
         assert events[0].rating == "up"
         assert events[0].meme_id == meme.meme_id
+
+    def test_feedback_is_idempotent_per_query_meme(self, conn):
+        """同一查詢的同一張圖只保留一筆回饋，改投以最新為準（避免報表重複計數）。"""
+        meme, *_ = make_seed_meme()
+        repo.insert_meme(conn, meme)
+        log = self._seed_log(conn, meme.meme_id)
+
+        repo.insert_feedback(conn, FeedbackEvent(
+            feedback_id=new_id("f"), query_id=log.query_id, meme_id=meme.meme_id,
+            rank=1, rating="up",
+        ))
+        repo.insert_feedback(conn, FeedbackEvent(
+            feedback_id=new_id("f"), query_id=log.query_id, meme_id=meme.meme_id,
+            rank=1, rating="down", note="改主意了",
+        ))
+
+        events = repo.list_feedback(conn, query_id=log.query_id)
+        assert len(events) == 1  # 不重複計數
+        assert events[0].rating == "down"  # 最新一次為準
+        assert events[0].note == "改主意了"
 
     def test_feedback_requires_existing_query(self, conn):
         meme, *_ = make_seed_meme()
