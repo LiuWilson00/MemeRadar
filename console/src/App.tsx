@@ -8,14 +8,16 @@ import RadarLoading from "./components/RadarLoading";
 import ReportView from "./components/ReportView";
 import ResultCard from "./components/ResultCard";
 import ReviewView from "./components/ReviewView";
+import UploadView from "./components/UploadView";
 import { DEFAULT_FILTERS, DEFAULT_PARAMS, fetchMeta, recommend } from "./lib/api";
 import type { Filters, HistoryDetail, Meta, Params, RecommendResponse, Turn } from "./types";
 
-type Tab = "work" | "history" | "library" | "review" | "report";
+type Tab = "work" | "history" | "library" | "upload" | "review" | "report";
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "work", label: "工作台" },
   { id: "history", label: "查詢歷史" },
   { id: "library", label: "梗圖庫" },
+  { id: "upload", label: "上傳" },
   { id: "review", label: "複核" },
   { id: "report", label: "報表" },
 ];
@@ -112,6 +114,9 @@ export default function App() {
 
       {tab === "history" && <HistoryView onReplay={replay} />}
       {tab === "library" && <LibraryView meta={meta} />}
+      {tab === "upload" && (
+        <UploadView onDone={() => fetchMeta().then(setMeta).catch(() => {})} />
+      )}
       {tab === "review" && <ReviewView meta={meta} />}
       {tab === "report" && <ReportView />}
 

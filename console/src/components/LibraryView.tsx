@@ -1,16 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchMemes, uploadMeme } from "../lib/api";
+import { fileToBase64 } from "../lib/files";
 import type { LibraryMeme, Meta } from "../types";
-
-async function fileToBase64(file: File): Promise<string> {
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(new Error("讀取檔案失敗"));
-    reader.readAsDataURL(file);
-  });
-  return dataUrl.slice(dataUrl.indexOf(",") + 1);
-}
 
 const STATUS_LABEL: Record<string, string> = {
   active: "可檢索",

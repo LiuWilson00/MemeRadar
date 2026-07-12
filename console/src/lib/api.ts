@@ -13,6 +13,7 @@ import type {
   Turn,
   UploadResult,
 } from "../types";
+import type { UploadOutcome } from "./uploadQueue";
 
 export const DEFAULT_FILTERS: Filters = {
   franchises: [],
@@ -109,6 +110,43 @@ export async function uploadMeme(imageBase64: string, titleHint: string): Promis
     body: JSON.stringify({ image: imageBase64, title_hint: titleHint || null }),
   });
   return unwrap<UploadResult>(response);
+}
+
+async function errorDetail(response: Response, fallback: string): Promise<string> {
+  return response
+    .json()
+    .then((body) => (typeof body.detail === "string" ? body.detail : fallback))
+    .catch(() => fallback);
+}
+
+/** 分類版上傳（批次佇列用）：以 HTTP 狀態碼區分成功 / 重複 / 失敗，不丟例外。 */
+export async function uploadMemeClassified(
+  imageBase64: string,
+  titleHint: string,
+): Promise<UploadOutcome> {
+  let response: Response;
+  try {
+    response = await fetch("/memes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image: imageBase64, title_hint: titleHint || null }),
+    });
+  } catch (e) {
+    return { kind: "error", message: e instanceof Error ? e.message : "網路錯誤" };
+  }
+  if (response.status === 409) {
+    return { kind: "duplicate", message: await errorDetail(response, "圖片已存在") };
+  }
+  if (!response.ok) {
+    return { kind: "error", message: await errorDetail(response, response.statusText) };
+  }
+  const result = (await response.json()) as UploadResult;
+  return {
+    kind: "done",
+    memeId: result.meme_id,
+    pendingReview: result.meme_status === "pending_review",
+    ocr: result.annotation?.ocr_text ?? "",
+  };
 }
 
 export async function fetchFeedbackReport(): Promise<FeedbackReport> {
