@@ -1,24 +1,25 @@
-"""P1-1 標註器測試（規格：docs/03 §2）。
+"""P1-1 標註器測試（規格：docs/03 §2；VLM 搬 NVIDIA 後）。
 
-不打真實 API：以 stub client 驗證 orchestration（prompt 組裝、上下文注入、
-版本化、pending_review 規則）；schema 合法性由 pydantic 模型自身驗證。
+不打真實 API：以 stub VLM（回傳原始 JSON 文字）驗證 orchestration（prompt 組裝、
+上下文注入、JSON 解析 + 重試、版本化、pending_review 規則）。
 """
+
+import json
 
 import pytest
 from PIL import Image
-from pydantic import ValidationError
 
 from memeradar.shared import repository as repo
 from memeradar.shared.db import connect, migrate
 from memeradar.shared.models import Meme, MemeSource, new_id
 from memeradar.understanding.annotator import (
     ANNOTATION_PROMPT_VERSION,
-    DEFAULT_ANNOTATION_MODEL,
     AnnotationResult,
     annotate_meme,
     build_system_prompt,
-    build_user_content,
+    build_user_text,
     media_type_for,
+    parse_annotation,
 )
 
 
@@ -44,12 +45,12 @@ class TestAnnotationResultSchema:
     def test_valid_payload_parses(self):
         result = AnnotationResult(**valid_payload())
         assert result.is_meme is True
-        assert [e.value for e in result.emotions] == ["擺爛", "理直氣壯"]
+        assert result.emotions == ["擺爛", "理直氣壯"]
 
-    def test_unknown_emotion_rejected(self):
-        # 封閉集：taxonomy 之外的情緒直接驗證失敗（enum 也會進 API 的 JSON schema）
-        with pytest.raises(ValidationError):
-            AnnotationResult(**valid_payload(emotions=["開心到飛起"]))
+    def test_unknown_emotion_filtered_not_rejected(self):
+        # NVIDIA 不像 Claude 能鎖 enum → 事後濾：字典外的丟掉、字典內的保留（不整筆失敗）
+        result = AnnotationResult(**valid_payload(emotions=["開心到飛起", "擺爛", "無奈"]))
+        assert result.emotions == ["擺爛", "無奈"]
 
     def test_category_alias_normalized(self):
         # 開放集 + 正規化：別名收斂到正規名
@@ -85,23 +86,31 @@ class TestPromptBuilding:
         # 穩定前綴才能吃到 prompt caching（docs/03 §2.1）
         assert build_system_prompt() == build_system_prompt()
 
-    def test_user_content_image_first_then_text_with_context(self):
-        content = build_user_content(
-            image_bytes=b"fake-bytes",
-            media_type="image/png",
-            context_text="標題：上班的我\n熱門留言：笑死這就是我",
-        )
-        assert content[0]["type"] == "image"
-        assert content[0]["source"]["type"] == "base64"
-        assert content[0]["source"]["media_type"] == "image/png"
-        assert content[1]["type"] == "text"
-        assert "上班的我" in content[1]["text"]
-        assert "旁證" in content[1]["text"]  # 上下文標明為旁證而非事實
+    def test_system_prompt_asks_for_json(self):
+        assert "JSON" in build_system_prompt()
 
-    def test_user_content_without_context(self):
-        content = build_user_content(image_bytes=b"x", media_type="image/png", context_text=None)
-        assert len(content) == 2
-        assert "旁證" not in content[1]["text"]
+    def test_user_text_includes_context_as_hearsay(self):
+        text = build_user_text("標題：上班的我\n熱門留言：笑死這就是我")
+        assert "上班的我" in text
+        assert "旁證" in text  # 上下文標明為旁證而非事實
+
+    def test_user_text_without_context(self):
+        assert "旁證" not in build_user_text(None)
+
+
+class TestParseAnnotation:
+    def test_parses_plain_json(self):
+        result = parse_annotation(json.dumps(valid_payload()))
+        assert result is not None and result.ocr_text == "我就爛"
+
+    def test_tolerates_markdown_fences_and_preamble(self):
+        raw = "這是標註：\n```json\n" + json.dumps(valid_payload()) + "\n```"
+        result = parse_annotation(raw)
+        assert result is not None and result.is_meme is True
+
+    def test_non_json_returns_none(self):
+        assert parse_annotation("抱歉，我無法標註這張圖片。") is None
+        assert parse_annotation("") is None
 
 
 class TestMediaType:
@@ -115,27 +124,30 @@ class TestMediaType:
             media_type_for("images/a.gif")
 
 
-# ── annotate_meme orchestration（stub client）─────────────────────────
+# ── annotate_meme orchestration（stub VLM）────────────────────────────
 
 
-class StubResponse:
-    def __init__(self, parsed_output, stop_reason="end_turn"):
-        self.parsed_output = parsed_output
-        self.stop_reason = stop_reason
+class StubVlm:
+    """回傳固定原始文字（模擬 NVIDIA VLM）；記錄呼叫參數供斷言。"""
 
+    model = "qwen/test-model"
 
-class StubClient:
-    def __init__(self, response):
-        self.response = response
+    def __init__(self, raw: str):
+        self.raw = raw
         self.calls: list[dict] = []
-        outer = self
 
-        class _Messages:
-            def parse(self, **kwargs):
-                outer.calls.append(kwargs)
-                return outer.response
+    def annotate(self, image_b64, media_type, system, user_text, *, log=None, **kwargs):
+        self.calls.append({"system": system, "user_text": user_text, **kwargs})
+        if log is not None:  # 比照 NvidiaVlm：每次呼叫回報用量
+            log({"key_id": "…test", "model": kwargs.get("model") or self.model,
+                 "task": "annotate", "meme_id": kwargs.get("meme_id"), "status": "ok",
+                 "latency_ms": 100, "prompt_tokens": 200, "completion_tokens": 80,
+                 "error": None})
+        return self.raw
 
-        self.messages = _Messages()
+
+def vlm_returning(**payload_overrides) -> StubVlm:
+    return StubVlm(json.dumps(valid_payload(**payload_overrides)))
 
 
 @pytest.fixture
@@ -174,52 +186,53 @@ def seeded_meme(conn, data_dir) -> Meme:
 
 class TestAnnotateMeme:
     def test_happy_path_persists_annotation(self, conn, data_dir, seeded_meme):
-        client = StubClient(StubResponse(AnnotationResult(**valid_payload())))
+        vlm = vlm_returning()
 
-        result = annotate_meme(conn, client, seeded_meme, data_dir=data_dir)
+        result = annotate_meme(conn, vlm, seeded_meme, data_dir=data_dir)
 
         assert result is not None
         stored = repo.get_annotation(conn, seeded_meme.meme_id)
         assert stored.ocr_text == "我就爛"
-        assert stored.emotions == ["擺爛", "理直氣壯"]  # 存回純字串
+        assert stored.emotions == ["擺爛", "理直氣壯"]
         assert stored.franchise == "海綿寶寶"  # 已正規化
-        assert stored.model_version == f"{ANNOTATION_PROMPT_VERSION}@{DEFAULT_ANNOTATION_MODEL}"
+        assert stored.model_version == f"{ANNOTATION_PROMPT_VERSION}@{vlm.model}"
         assert repo.get_meme(conn, seeded_meme.meme_id).status == "active"
 
-        # 呼叫參數：預設模型 + structured output schema + 上下文注入
-        call = client.calls[0]
-        assert call["model"] == DEFAULT_ANNOTATION_MODEL
-        assert call["output_format"] is AnnotationResult
-        user_text = call["messages"][0]["content"][1]["text"]
-        assert "海綿寶寶" in user_text and "笑死這就是我" in user_text
+        # 上下文注入 user turn
+        call = vlm.calls[0]
+        assert "海綿寶寶" in call["user_text"] and "笑死這就是我" in call["user_text"]
 
-    def test_refusal_marks_pending_review_without_annotation(self, conn, data_dir, seeded_meme):
-        client = StubClient(StubResponse(parsed_output=None, stop_reason="refusal"))
+    def test_logs_vlm_call(self, conn, data_dir, seeded_meme):
+        annotate_meme(conn, vlm_returning(), seeded_meme, data_dir=data_dir)
+        stats = repo.vlm_call_stats(conn)
+        assert any(s["status"] == "ok" for s in stats)
 
-        result = annotate_meme(conn, client, seeded_meme, data_dir=data_dir)
+    def test_model_override_recorded_in_version(self, conn, data_dir, seeded_meme):
+        annotate_meme(conn, vlm_returning(), seeded_meme, data_dir=data_dir,
+                      model="meta/llama-4-maverick")
+        stored = repo.get_annotation(conn, seeded_meme.meme_id)
+        assert stored.model_version.endswith("@meta/llama-4-maverick")
 
+    def test_non_json_response_marks_pending_review(self, conn, data_dir, seeded_meme):
+        vlm = StubVlm("抱歉，我無法標註這張圖片。")
+        result = annotate_meme(conn, vlm, seeded_meme, data_dir=data_dir, retries=1)
         assert result is None
         assert repo.get_annotation(conn, seeded_meme.meme_id) is None
         assert repo.get_meme(conn, seeded_meme.meme_id).status == "pending_review"
 
     def test_non_meme_marks_pending_review(self, conn, data_dir, seeded_meme):
-        client = StubClient(
-            StubResponse(AnnotationResult(**valid_payload(is_meme=False, confidence=0.95)))
-        )
-        annotate_meme(conn, client, seeded_meme, data_dir=data_dir)
+        annotate_meme(conn, vlm_returning(is_meme=False, confidence=0.95),
+                      seeded_meme, data_dir=data_dir)
         # 標註仍落庫（人工複核要看得到判定內容），但狀態轉待審
         assert repo.get_annotation(conn, seeded_meme.meme_id) is not None
         assert repo.get_meme(conn, seeded_meme.meme_id).status == "pending_review"
 
     def test_very_low_confidence_marks_pending_review(self, conn, data_dir, seeded_meme):
         # 門檻 0.5：真正很低（< 0.5）才進複核
-        client = StubClient(StubResponse(AnnotationResult(**valid_payload(confidence=0.4))))
-        annotate_meme(conn, client, seeded_meme, data_dir=data_dir)
+        annotate_meme(conn, vlm_returning(confidence=0.4), seeded_meme, data_dir=data_dir)
         assert repo.get_meme(conn, seeded_meme.meme_id).status == "pending_review"
 
     def test_moderate_confidence_auto_approved(self, conn, data_dir, seeded_meme):
         # 模型對正常梗圖多給 0.6（實證：積壓佇列 79/92 剛好 0.6，全是 is_meme=true 好圖）
-        # → 0.6 不該進複核，否則佇列被正常梗圖灌爆
-        client = StubClient(StubResponse(AnnotationResult(**valid_payload(confidence=0.6))))
-        annotate_meme(conn, client, seeded_meme, data_dir=data_dir)
+        annotate_meme(conn, vlm_returning(confidence=0.6), seeded_meme, data_dir=data_dir)
         assert repo.get_meme(conn, seeded_meme.meme_id).status == "active"

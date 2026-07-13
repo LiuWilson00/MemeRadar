@@ -46,7 +46,8 @@ _MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp"
 
 @dataclass
 class Deps:
-    client: Any  # anthropic client（或測試 stub）
+    client: Any  # anthropic client（意圖 / rerank / 截圖 / 對方梗圖）
+    vlm: Any  # NvidiaVlm（標註）
     embedder: Embedder
     db_path: Path
     data_dir: Path
@@ -57,12 +58,14 @@ def _default_deps() -> Deps:
 
     from memeradar.shared.config import get_settings
     from memeradar.shared.db import default_db_path
+    from memeradar.understanding.annotator import build_default_vlm
     from memeradar.understanding.embedding import DEFAULT_BACKEND, get_embedder
 
     settings = get_settings()
     api_key = settings.anthropic_api_key
     return Deps(
         client=anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic(),
+        vlm=build_default_vlm(),
         embedder=get_embedder(DEFAULT_BACKEND),
         db_path=default_db_path(),
         data_dir=settings.memeradar_data_dir,
@@ -193,7 +196,9 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=422, detail="無法讀取圖片（僅支援 PNG / JPEG / WebP）"
             )
-        annotation = annotate_meme(conn, deps.client, meme, data_dir=deps.data_dir)
+        annotation = annotate_meme(
+            conn, deps.vlm, meme, data_dir=deps.data_dir, model=request.model
+        )
         embedded = 0
         if annotation is not None and annotation.is_meme:
             embedded = embed_pending_memes(conn, deps.embedder)

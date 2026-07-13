@@ -5,6 +5,7 @@
 """
 
 import io
+import json
 
 import pytest
 from PIL import Image, ImageDraw
@@ -13,7 +14,6 @@ from memeradar.ingestion.base import Candidate
 from memeradar.ingestion.pipeline import run_pipeline
 from memeradar.shared import repository as repo
 from memeradar.shared.db import connect, migrate
-from memeradar.understanding.annotator import AnnotationResult
 
 SIGNATURE = "fake-embed@v1|doc-v1"
 
@@ -54,35 +54,26 @@ class FakeAdapter:
         return self.candidates, "2026-07-11T12:00:00+00:00"
 
 
-class StubResponse:
-    def __init__(self, parsed_output):
-        self.parsed_output = parsed_output
-        self.stop_reason = "end_turn"
+class StubVlm:
+    """標註 stub（NVIDIA VLM 介面）：回傳原始 JSON 文字，OCR 依圖片內容路由。"""
 
-
-class StubClient:
-    """標註 stub：OCR 依圖片內容路由（供佇列裁決測試）。"""
+    model = "qwen/test"
 
     def __init__(self, ocr_by_marker: dict[str, str] | None = None):
         self.ocr_by_marker = ocr_by_marker or {}
-        outer = self
 
-        class _Messages:
-            def parse(self, **kwargs):
-                image_b64 = kwargs["messages"][0]["content"][0]["source"]["data"]
-                ocr = "預設文字"
-                for marker, text in outer.ocr_by_marker.items():
-                    if image_b64.startswith(marker[:24]) or marker in image_b64[:400]:
-                        ocr = text
-                        break
-                return StubResponse(AnnotationResult(
-                    is_meme=True, nsfw=False, ocr_text=ocr, description="測試",
-                    characters=[], franchise="海綿寶寶", template_name=None,
-                    emotions=["無奈"], usage_hints=["測試用途"], categories=["卡通動畫"],
-                    confidence=0.9,
-                ))
-
-        self.messages = _Messages()
+    def annotate(self, image_b64, media_type, system, user_text, **kwargs):
+        ocr = "預設文字"
+        for marker, text in self.ocr_by_marker.items():
+            if image_b64.startswith(marker[:24]) or marker in image_b64[:400]:
+                ocr = text
+                break
+        return json.dumps({
+            "is_meme": True, "nsfw": False, "ocr_text": ocr, "description": "測試",
+            "characters": [], "franchise": "海綿寶寶", "template_name": None,
+            "emotions": ["無奈"], "usage_hints": ["測試用途"], "categories": ["卡通動畫"],
+            "confidence": 0.9,
+        })
 
 
 class FakeEmbedder:
@@ -130,7 +121,7 @@ class TestPipeline:
         report = run_pipeline(
             conn, [adapter],
             data_dir=tmp / "data",
-            client=StubClient(),
+            vlm=StubVlm(),
             embedder=FakeEmbedder(),
             image_fetcher=make_fetcher(images),
         )
@@ -173,7 +164,7 @@ class TestPipeline:
         report = run_pipeline(
             conn, [adapter],
             data_dir=tmp / "data",
-            client=StubClient(),  # 兩張 OCR 皆為預設文字 → 相同 → 自動合併
+            vlm=StubVlm(),  # 兩張 OCR 皆為預設文字 → 相同 → 自動合併
             embedder=FakeEmbedder(),
             image_fetcher=make_fetcher(images),
         )
@@ -192,7 +183,7 @@ class TestPipeline:
         report = run_pipeline(
             conn, [bad, good],
             data_dir=tmp / "data",
-            client=StubClient(),
+            vlm=StubVlm(),
             embedder=FakeEmbedder(),
             image_fetcher=make_fetcher({"https://i.redd.it/a.png": png(1)}),
         )
@@ -203,16 +194,16 @@ class TestPipeline:
         assert repo.get_watermark(conn, "dcard") is None  # 失敗不推水位
 
         # 連續第 3 次失敗觸發告警旗標
-        run_pipeline(conn, [bad], data_dir=tmp / "data", client=StubClient(),
+        run_pipeline(conn, [bad], data_dir=tmp / "data", vlm=StubVlm(),
                      embedder=FakeEmbedder(), image_fetcher=make_fetcher({}))
-        report3 = run_pipeline(conn, [bad], data_dir=tmp / "data", client=StubClient(),
+        report3 = run_pipeline(conn, [bad], data_dir=tmp / "data", vlm=StubVlm(),
                                embedder=FakeEmbedder(), image_fetcher=make_fetcher({}))
         assert repo.get_crawl_failures(conn, "dcard") == 3
         assert "dcard" in report3.alerts[0]
 
         # 成功後歸零
         ok_dcard = FakeAdapter("dcard", [])
-        run_pipeline(conn, [ok_dcard], data_dir=tmp / "data", client=StubClient(),
+        run_pipeline(conn, [ok_dcard], data_dir=tmp / "data", vlm=StubVlm(),
                      embedder=FakeEmbedder(), image_fetcher=make_fetcher({}))
         assert repo.get_crawl_failures(conn, "dcard") == 0
 
@@ -224,7 +215,7 @@ class TestPipeline:
 
         adapter = FakeAdapter("reddit", [candidate("p1", ["https://i.redd.it/a.png"])])
         report = run_pipeline(
-            conn, [adapter], data_dir=tmp / "data", client=StubClient(),
+            conn, [adapter], data_dir=tmp / "data", vlm=StubVlm(),
             embedder=FakeEmbedder(), image_fetcher=flaky,
         )
 
@@ -236,7 +227,7 @@ class TestPipeline:
         conn, tmp = env
         adapter = FakeAdapter("reddit", [candidate("p1", ["https://i.redd.it/a.png"])])
         run_pipeline(
-            conn, [adapter], data_dir=tmp / "data", client=StubClient(),
+            conn, [adapter], data_dir=tmp / "data", vlm=StubVlm(),
             embedder=FakeEmbedder(),
             image_fetcher=make_fetcher({"https://i.redd.it/a.png": png(1)}),
         )

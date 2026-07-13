@@ -53,6 +53,19 @@ ANNOTATION_PAYLOAD = AnnotationResult(
     confidence=0.9,
 )
 
+
+class StubVlm:
+    """標註 stub（NVIDIA VLM 介面）：回傳固定 JSON 文字並回報用量。"""
+
+    model = "qwen/test"
+
+    def annotate(self, image_b64, media_type, system, user_text, *, log=None, **kwargs):
+        if log is not None:
+            log({"key_id": "…test", "model": self.model, "task": "annotate",
+                 "meme_id": kwargs.get("meme_id"), "status": "ok", "latency_ms": 100,
+                 "prompt_tokens": 100, "completion_tokens": 50, "error": None})
+        return ANNOTATION_PAYLOAD.model_dump_json()
+
 OPPONENT_PAYLOAD = OpponentMeme(
     ocr_text="我就爛",
     description="海綿寶寶攤手，一臉理直氣壯",
@@ -157,6 +170,7 @@ def env(tmp_path):
     ]
     deps = Deps(
         client=DualStubClient(),
+        vlm=StubVlm(),
         embedder=FakeEmbedder(),
         db_path=db_path,
         data_dir=tmp_path,

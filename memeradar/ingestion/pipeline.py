@@ -102,7 +102,7 @@ def run_pipeline(
     adapters: Sequence[SourceAdapter],
     *,
     data_dir: Path,
-    client,
+    vlm,
     embedder: Embedder,
     image_embedder=None,
     rules: RuleConfig | None = None,
@@ -214,7 +214,7 @@ def run_pipeline(
     # ── 標註（同步版；Batch API 見 P1-2）─────────────────────────────
     for meme in repo.list_memes_missing_annotation(conn):
         try:
-            annotation = annotate_meme(conn, client, meme, data_dir=data_dir)
+            annotation = annotate_meme(conn, vlm, meme, data_dir=data_dir)
         except Exception as exc:  # noqa: BLE001 — 批次不因單張中斷
             report.warnings.append(f"標註失敗：{meme.meme_id}（{exc}）")
             continue
@@ -259,8 +259,6 @@ def format_report(report: PipelineReport) -> str:
 def main(argv: list[str] | None = None) -> None:
     import argparse
 
-    import anthropic
-
     from memeradar.ingestion.reddit import RedditAdapter, build_client
     from memeradar.shared.config import get_settings
     from memeradar.shared.db import connect, migrate
@@ -278,9 +276,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--no-clip", action="store_true", help="跳過 CLIP 去重層（僅 L1/L2）")
     args = parser.parse_args(argv)
 
+    from memeradar.understanding.annotator import build_default_vlm
+
     settings = get_settings()
-    api_key = settings.anthropic_api_key
-    client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+    vlm = build_default_vlm()
     adapters = [
         RedditAdapter(
             build_client(args.client),
@@ -301,7 +300,7 @@ def main(argv: list[str] | None = None) -> None:
             conn,
             adapters,
             data_dir=settings.memeradar_data_dir,
-            client=client,
+            vlm=vlm,
             embedder=get_embedder(DEFAULT_BACKEND),
             image_embedder=image_embedder,
         )

@@ -47,6 +47,7 @@ class UploadMemeRequest(BaseModel):
 
     image: str  # base64（PNG / JPEG / WebP）
     title_hint: str | None = None  # 標註時的上下文提示（如主題名）
+    model: str | None = None  # 覆寫標註用 vision 模型（Console 切換按鈕）
 
 
 class AnnotationPatch(BaseModel):

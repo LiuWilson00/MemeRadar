@@ -85,12 +85,15 @@ class NvidiaVlm:
         task: str = "annotate",
         meme_id: str | None = None,
         log: Callable[[dict], None] | None = None,
+        model: str | None = None,
     ) -> str:
         """送圖 + prompt 給 VLM，回傳原始文字（結構化解析由呼叫端負責）。
 
         ``log`` / ``meme_id`` 為單次呼叫用：讓呼叫端把用量寫進帶當前連線的 log 表。
+        ``model`` 覆寫本次使用的模型（Console 模型切換按鈕用）。
         """
         sink = log or self._log
+        use_model = model or self._model
         messages = [
             {"role": "system", "content": system},
             {
@@ -117,21 +120,21 @@ class NvidiaVlm:
             t0 = self._now()
             try:
                 resp = self._clients[i].chat.completions.create(
-                    model=self._model,
+                    model=use_model,
                     messages=messages,
                     max_tokens=self._max_tokens,
                     temperature=self._temperature,
                 )
                 usage = getattr(resp, "usage", None)
-                self._emit(sink, i, task, meme_id, "ok", t0, usage=usage)
+                self._emit(sink, i, task, meme_id, use_model, "ok", t0, usage=usage)
                 return resp.choices[0].message.content or ""
             except Exception as exc:  # noqa: BLE001 — 依 status_code 分流
                 status = getattr(exc, "status_code", None)
                 if status == 429:
                     self._cool[i] = self._now() + self._cooldown_s
-                    self._emit(sink, i, task, meme_id, "rate_limited", t0)
+                    self._emit(sink, i, task, meme_id, use_model, "rate_limited", t0)
                 else:
-                    self._emit(sink, i, task, meme_id, "error", t0, error=str(exc)[:200])
+                    self._emit(sink, i, task, meme_id, use_model, "error", t0, error=str(exc)[:200])
                 if self._now() >= deadline:
                     break
 
@@ -139,11 +142,11 @@ class NvidiaVlm:
             f"NVIDIA VLM 所有 key 皆不可用且已達等待上限 {self._max_wait_s:.0f}s"
         )
 
-    def _emit(self, sink, i, task, meme_id, status, t0, *, usage=None, error=None) -> None:
+    def _emit(self, sink, i, task, meme_id, model, status, t0, *, usage=None, error=None) -> None:
         sink(
             {
                 "key_id": self._key_ids[i],
-                "model": self._model,
+                "model": model,
                 "task": task,
                 "meme_id": meme_id,
                 "status": status,
