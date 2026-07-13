@@ -76,8 +76,17 @@ class StubVlm:
             return OPPONENT_PAYLOAD.model_dump_json()
         return ANNOTATION_PAYLOAD.model_dump_json()
 
-    def chat(self, system, user_text, **kwargs):  # 意圖/rerank 尚未搬，不會用到
-        raise AssertionError("StubVlm.chat 不應被呼叫（意圖/rerank 仍走 Claude stub）")
+    def chat(self, system, user_text, *, task="text", log=None, **kwargs):
+        if log is not None:
+            log({"key_id": "…test", "model": self.model, "task": task, "status": "ok",
+                 "latency_ms": 50, "prompt_tokens": 80, "completion_tokens": 40, "error": None})
+        if task in self.refuse:
+            return "抱歉，我無法處理。"
+        if task == "intent":
+            return INTENT_PAYLOAD.model_dump_json()
+        if task == "rerank":
+            return RERANK_PAYLOAD.model_dump_json()
+        raise AssertionError(f"StubVlm.chat 未預期的 task: {task}")
 
 OPPONENT_PAYLOAD = OpponentMeme(
     ocr_text="我就爛",
@@ -341,14 +350,14 @@ class TestRecommendContract:
 
     def test_intent_refusal_422(self, env):
         client, conn, memes, deps = env
-        deps.client.refuse = {"intent"}
+        deps.vlm.refuse = {"intent"}
         resp = client.post("/recommend", json=BASE_REQUEST)
         assert resp.status_code == 422
         assert "安全" in resp.json()["detail"]
 
     def test_rerank_refusal_falls_back_to_vector_order(self, env):
         client, conn, memes, deps = env
-        deps.client.refuse = {"rerank"}
+        deps.vlm.refuse = {"rerank"}
         resp = client.post("/recommend", json=BASE_REQUEST)
         assert resp.status_code == 200
         body = resp.json()

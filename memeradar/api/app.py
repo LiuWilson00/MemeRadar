@@ -157,8 +157,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail="conversation 不可為空")
         try:
             return run_recommendation(
-                conn, deps.client, deps.embedder, request,
-                image_bytes=image_bytes, vlm=deps.vlm,
+                conn, deps.vlm, deps.embedder, request, image_bytes=image_bytes
             )
         except IntentRefusedError:
             raise HTTPException(

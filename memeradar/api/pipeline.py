@@ -52,12 +52,11 @@ def _vector_fallback(candidates: list[Candidate], top_n: int) -> list[RankedMeme
 
 def run_recommendation(
     conn: sqlite3.Connection,
-    client,
+    vlm,  # NVIDIA VLM（意圖 / rerank / 截圖 / 對方梗圖，全部走 NVIDIA）
     embedder: Embedder,
     request: RecommendRequest,
     *,
     image_bytes: bytes | None = None,
-    vlm=None,  # NVIDIA VLM（截圖 / 對方梗圖解析用）
 ) -> dict[str, Any]:
     timings: dict[str, int] = {}
     t_start = time.perf_counter()
@@ -82,7 +81,7 @@ def run_recommendation(
 
     turns = [ConversationTurn(t.speaker, t.text) for t in conversation]
     t0 = time.perf_counter()
-    intent = analyze_conversation(client, turns)  # IntentRefusedError 由端點層轉 422
+    intent = analyze_conversation(vlm, turns)  # IntentRefusedError 由端點層轉 422
     timings["intent"] = int((time.perf_counter() - t0) * 1000)
 
     filters = SearchFilters(
@@ -115,7 +114,7 @@ def run_recommendation(
     )
     try:
         ranked = rank_candidates(
-            client,
+            vlm,
             intent,
             retrieval.candidates,
             params=RankingParams(

@@ -79,7 +79,9 @@ def build_system_prompt() -> str:
 - 低分（<40）：無關、勉強、或在此情境丟出來會失禮尷尬。無關的圖務必給低分，不要客氣。
 - reason：一句話（25 字內）說明為何適合（或不適合要點到為止），會直接顯示給使用者看，用繁體中文、口語但精準。**分數低於 60 的候選 reason 一律給空字串**（反正不會被推薦，省輸出）。
 
-必須為每個候選編號各給一筆評分，不可遺漏、不可虛構編號。"""
+必須為每個候選編號各給一筆評分，不可遺漏、不可虛構編號。
+
+只輸出一個 JSON 物件，不要多餘文字或圍欄。格式：{"scores": [{"candidate_id": 整數編號, "score": 0~100 整數, "reason": 字串}, ...]}。"""
 
 
 def _candidate_digest(index: int, candidate: Candidate) -> str:
@@ -98,7 +100,7 @@ def _candidate_digest(index: int, candidate: Candidate) -> str:
 
 def build_user_content(intent: IntentResult, candidates: list[Candidate]) -> str:
     strategy_lines = "\n".join(
-        f"- {s.name.value}：{s.rationale}" for s in intent.strategies
+        f"- {s.name}：{s.rationale}" for s in intent.strategies
     )
     digests = "\n".join(
         _candidate_digest(i, c) for i, c in enumerate(candidates, start=1)
@@ -155,41 +157,32 @@ def _mmr_select(
 
 
 def rank_candidates(
-    client,
+    vlm,
     intent: IntentResult,
     candidates: list[Candidate],
     *,
     params: RankingParams | None = None,
     vectors_by_id: dict[str, list[float]] | None = None,
-    model: str = DEFAULT_RERANK_MODEL,
+    model: str | None = None,
 ) -> list[RankedMeme]:
+    from memeradar.understanding.nvidia_vlm import call_structured
+
     params = params if params is not None else RankingParams()
     if not candidates:
         return []
 
     pool = candidates[: params.rerank_pool]
 
-    response = client.messages.parse(
-        model=model,
-        max_tokens=MAX_OUTPUT_TOKENS,
-        # 線上延遲敏感路徑：關閉 thinking（sonnet-5 預設 adaptive，實測多耗 ~15s）
-        thinking={"type": "disabled"},
-        system=[
-            {
-                "type": "text",
-                "text": build_system_prompt(),
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-        messages=[{"role": "user", "content": build_user_content(intent, pool)}],
-        output_format=RerankResult,
+    result = call_structured(
+        vlm, RerankResult, build_system_prompt(), build_user_content(intent, pool),
+        task="rerank", model=model,
     )
-    if getattr(response, "stop_reason", None) == "refusal" or response.parsed_output is None:
-        raise RerankRefusedError("模型拒絕重排序")
+    if result is None:
+        raise RerankRefusedError("模型無法重排序")
 
     # 編號 → 分數與理由（重複取第一筆；幻覺編號忽略；漏評者淘汰）
     by_id: dict[int, CandidateScore] = {}
-    for item in response.parsed_output.scores:
+    for item in result.scores:
         if 1 <= item.candidate_id <= len(pool):
             by_id.setdefault(item.candidate_id, item)
 

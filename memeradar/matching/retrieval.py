@@ -67,7 +67,7 @@ def retrieve_candidates(
     pool: dict[str, tuple[MemeAnnotation, float, dict[str, float]]] = {}
 
     for plan, vector in zip(strategies, query_vectors, strict=True):
-        name = plan.name.value
+        name = plan.name
         hits = searcher.search(
             vector, k=params.candidate_k, filters=filters, min_similarity=params.min_similarity
         )

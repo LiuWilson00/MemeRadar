@@ -8,7 +8,6 @@ import pytest
 from pydantic import ValidationError
 
 from memeradar.matching.intent import (
-    DEFAULT_INTENT_MODEL,
     ConversationTurn,
     IntentRefusedError,
     IntentResult,
@@ -55,19 +54,19 @@ class TestIntentSchema:
     def test_valid_payload_parses(self):
         result = IntentResult(**valid_payload())
         assert result.punchline == "每次都這樣，你到底行不行"
-        assert [s.name.value for s in result.strategies] == ["滑跪求饒", "自嘲"]
+        assert [s.name for s in result.strategies] == ["滑跪求饒", "自嘲"]
 
-    def test_strategy_name_locked_to_taxonomy_anchors(self):
-        with pytest.raises(ValidationError):
-            IntentResult(
-                **valid_payload(
-                    strategies=[{"name": "冷嘲熱諷", "rationale": "x", "query": "y"}]
-                )
-            )
+    def test_strategy_name_normalized_via_aliases(self):
+        # NVIDIA 不鎖 enum：別名收斂到正規名（「滑跪」→「滑跪求饒」），查無則原樣
+        result = IntentResult(
+            **valid_payload(strategies=[{"name": "滑跪", "rationale": "x", "query": "y"}])
+        )
+        assert result.strategies[0].name == "滑跪求饒"
 
-    def test_emotion_locked_to_dictionary(self):
-        with pytest.raises(ValidationError):
-            IntentResult(**valid_payload(other_party_emotion=["暴怒到升天"]))
+    def test_emotion_filtered_to_dictionary(self):
+        # 字典外情緒事後濾掉、字典內保留（不整筆失敗）
+        result = IntentResult(**valid_payload(other_party_emotion=["暴怒到升天", "憤怒"]))
+        assert result.other_party_emotion == ["憤怒"]
 
 
 class TestPromptAndSerialization:
@@ -104,54 +103,40 @@ class TestPromptAndSerialization:
         assert "對方2：+1" in serialize_conversation(turns)
 
 
-class StubResponse:
-    def __init__(self, parsed_output, stop_reason="end_turn"):
-        self.parsed_output = parsed_output
-        self.stop_reason = stop_reason
+class StubVlm:
+    """NVIDIA 文字模型 stub：chat 回傳固定原始 JSON 文字。"""
 
+    model = "qwen/test"
 
-class StubClient:
-    def __init__(self, response):
-        self.response = response
+    def __init__(self, raw: str):
+        self.raw = raw
         self.calls: list[dict] = []
-        outer = self
 
-        class _Messages:
-            def parse(self, **kwargs):
-                outer.calls.append(kwargs)
-                return outer.response
+    def chat(self, system, user_text, **kwargs):
+        self.calls.append({"system": system, "user_text": user_text, **kwargs})
+        return self.raw
 
-        self.messages = _Messages()
+
+def vlm_returning(**overrides) -> StubVlm:
+    return StubVlm(IntentResult(**valid_payload(**overrides)).model_dump_json())
 
 
 class TestAnalyzeConversation:
-    def test_default_model_is_cost_optimized_haiku(self):
-        # 意圖分析改用 haiku-4.5：品質相當、成本約 sonnet 的 1/3（實測 A/B）
-        assert DEFAULT_INTENT_MODEL == "claude-haiku-4-5"
-
     def test_happy_path(self):
-        client = StubClient(StubResponse(IntentResult(**valid_payload())))
-
-        result = analyze_conversation(client, CONVO)
-
+        vlm = vlm_returning()
+        result = analyze_conversation(vlm, CONVO)
         assert result.conversation_type == "指責"
-        call = client.calls[0]
-        assert call["model"] == DEFAULT_INTENT_MODEL
-        assert call["output_format"] is IntentResult
-        assert call["system"][0]["cache_control"] == {"type": "ephemeral"}
-        # 線上延遲敏感路徑：顯式關閉 thinking（sonnet-5 預設 adaptive 會拖慢數秒）
-        assert call["thinking"] == {"type": "disabled"}
-        user_text = call["messages"][0]["content"]
-        assert "你報告又遲交了" in user_text
+        call = vlm.calls[0]
+        assert call["task"] == "intent"
+        assert "你報告又遲交了" in call["user_text"]
 
-    def test_refusal_raises(self):
-        client = StubClient(StubResponse(parsed_output=None, stop_reason="refusal"))
+    def test_non_json_raises_refused(self):
         with pytest.raises(IntentRefusedError):
-            analyze_conversation(client, CONVO)
+            analyze_conversation(StubVlm("抱歉我無法分析"), CONVO)
 
     def test_sensitive_filters_to_safe_strategies_only(self):
         # 模型標了 sensitive 但仍給出嗆聲策略 → 程式層必須剔除
-        payload = valid_payload(
+        vlm = vlm_returning(
             sensitive=True,
             strategies=[
                 {"name": "嗆聲反擊", "rationale": "x", "query": "嗆回去"},
@@ -159,29 +144,22 @@ class TestAnalyzeConversation:
                 {"name": "看戲", "rationale": "z", "query": "吃瓜圍觀"},
             ],
         )
-        client = StubClient(StubResponse(IntentResult(**payload)))
-
-        result = analyze_conversation(client, CONVO)
-
-        assert [s.name.value for s in result.strategies] == ["安撫"]
+        result = analyze_conversation(vlm, CONVO)
+        assert [s.name for s in result.strategies] == ["安撫"]
 
     def test_sensitive_with_no_safe_strategy_gets_comfort_fallback(self):
         # 極端情況：模型全給了不安全策略 → 合成安撫策略，結果不可為空
-        payload = valid_payload(
+        vlm = vlm_returning(
             sensitive=True,
             strategies=[{"name": "嗆聲反擊", "rationale": "x", "query": "嗆回去"}],
         )
-        client = StubClient(StubResponse(IntentResult(**payload)))
-
-        result = analyze_conversation(client, CONVO)
-
+        result = analyze_conversation(vlm, CONVO)
         assert len(result.strategies) == 1
-        assert result.strategies[0].name.value == "安撫"
+        assert result.strategies[0].name == "安撫"
         assert result.strategies[0].query  # 合成策略仍有可用 query
 
     def test_non_sensitive_keeps_all_strategies(self):
-        client = StubClient(StubResponse(IntentResult(**valid_payload())))
-        result = analyze_conversation(client, CONVO)
+        result = analyze_conversation(vlm_returning(), CONVO)
         assert len(result.strategies) == 2
 
 

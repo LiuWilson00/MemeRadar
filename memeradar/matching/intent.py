@@ -20,9 +20,8 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from memeradar.shared.labels import EmotionLabel, StrategyLabel
 from memeradar.shared.taxonomy import get_taxonomy
 
 INTENT_PROMPT_VERSION = "intent-v1"
@@ -49,12 +48,19 @@ class ConversationTurn:
 
 
 class StrategyPlan(BaseModel):
-    name: StrategyLabel = Field(description="回應策略，限用策略錨點字典")
+    name: str = Field(description="回應策略，限用策略錨點字典")
     rationale: str = Field(description="為何此策略適合當下情境")
     query: str = Field(
         min_length=1,
         description="檢索語句：用「使用情境」的語彙描述要找的梗圖，不要複述對話原文",
     )
+
+    @field_validator("name")
+    @classmethod
+    def _normalize_strategy(cls, value: str) -> str:
+        # NVIDIA 不鎖 enum：把策略名正規化到錨點字典的正規名（別名 → label），查無則原樣
+        strategy = get_taxonomy().strategy_by_label(value)
+        return strategy.label if strategy else value.strip()
 
 
 class IntentResult(BaseModel):
@@ -62,7 +68,13 @@ class IntentResult(BaseModel):
 
     summary: str = Field(description="一句話總結對話情境與張力")
     punchline: str = Field(description="觸發回應的關鍵爆點句（通常是最後幾句中最有梗的一句）")
-    other_party_emotion: list[EmotionLabel] = Field(description="對方當下情緒，限用字典")
+    other_party_emotion: list[str] = Field(description="對方當下情緒，限用字典")
+
+    @field_validator("other_party_emotion")
+    @classmethod
+    def _filter_emotions(cls, values: list[str]) -> list[str]:
+        valid = set(get_taxonomy().emotions)
+        return [v.strip() for v in values if isinstance(v, str) and v.strip() in valid]
     conversation_type: str = Field(
         description="對話類型：抱怨／玩笑／提問／炫耀／閒聊／指責／報喜／訴苦 等"
     )
@@ -96,7 +108,9 @@ def build_system_prompt() -> str:
 
 輸出長度要求（延遲敏感，務必精簡）：summary 30 字內；rationale 每條 20 字內；query 15 字內。
 
-query 撰寫規則：query 是拿去向量檢索梗圖庫的語句，梗圖庫以「這張圖通常什麼時候用」的使用情境語彙標註。因此 query 要用動作與情境詞描述想找的圖（例：「犯錯被抓包 誇張下跪道歉求饒」），不要複述對話原文、不要放人名等專有細節。"""
+query 撰寫規則：query 是拿去向量檢索梗圖庫的語句，梗圖庫以「這張圖通常什麼時候用」的使用情境語彙標註。因此 query 要用動作與情境詞描述想找的圖（例：「犯錯被抓包 誇張下跪道歉求饒」），不要複述對話原文、不要放人名等專有細節。
+
+只輸出一個 JSON 物件，不要多餘文字或圍欄。欄位：summary(字串)、punchline(字串)、other_party_emotion(字串陣列)、conversation_type(字串)、sensitive(布林)、low_context(布林)、language(字串)、strategies(物件陣列，每個含 name/rationale/query 三個字串)。"""
 
 
 def serialize_conversation(turns: list[ConversationTurn]) -> str:
@@ -123,7 +137,7 @@ def _enforce_sensitive_policy(result: IntentResult) -> IntentResult:
     if not result.sensitive:
         return result
     safe_labels = {s.label for s in get_taxonomy().sensitive_safe_strategies}
-    kept = [s for s in result.strategies if s.name.value in safe_labels]
+    kept = [s for s in result.strategies if s.name in safe_labels]
     if not kept:
         kept = [
             StrategyPlan(
@@ -136,38 +150,28 @@ def _enforce_sensitive_policy(result: IntentResult) -> IntentResult:
 
 
 def analyze_conversation(
-    client,
+    vlm,
     conversation: list[ConversationTurn],
     *,
-    model: str = DEFAULT_INTENT_MODEL,
+    model: str | None = None,
 ) -> IntentResult:
-    response = client.messages.parse(
-        model=model,
-        max_tokens=MAX_OUTPUT_TOKENS,
-        # 線上延遲敏感路徑：關閉 thinking（sonnet-5 預設 adaptive，實測多耗 ~10s）
-        thinking={"type": "disabled"},
-        system=[
-            {
-                "type": "text",
-                "text": build_system_prompt(),
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-        messages=[{"role": "user", "content": serialize_conversation(conversation)}],
-        output_format=IntentResult,
+    """用 NVIDIA 文字模型分析對話意圖；解析失敗 / 拒答拋 IntentRefusedError。"""
+    from memeradar.understanding.nvidia_vlm import call_structured
+
+    result = call_structured(
+        vlm, IntentResult, build_system_prompt(), serialize_conversation(conversation),
+        task="intent", model=model,
     )
-    if getattr(response, "stop_reason", None) == "refusal" or response.parsed_output is None:
-        raise IntentRefusedError("模型拒絕分析此對話（安全政策）")
-    return _enforce_sensitive_policy(response.parsed_output)
+    if result is None:
+        raise IntentRefusedError("模型無法分析此對話")
+    return _enforce_sensitive_policy(result)
 
 
 def main(argv: list[str] | None = None) -> None:
     import argparse
     import json
 
-    import anthropic
-
-    from memeradar.shared.config import get_settings
+    from memeradar.understanding.annotator import build_default_vlm
 
     if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
         sys.stdout.reconfigure(encoding="utf-8")
@@ -176,7 +180,7 @@ def main(argv: list[str] | None = None) -> None:
         description='分析對話意圖。每個參數為一則訊息，格式 "other:文字" 或 "me:文字"'
     )
     parser.add_argument("turns", nargs="+", metavar="SPEAKER:TEXT")
-    parser.add_argument("--model", default=DEFAULT_INTENT_MODEL)
+    parser.add_argument("--model", default=None, help="覆寫 NVIDIA 文字模型（預設用 config 設定）")
     args = parser.parse_args(argv)
 
     conversation = []
@@ -186,10 +190,7 @@ def main(argv: list[str] | None = None) -> None:
             parser.error(f"發話者必須是 me / other / other_N：{raw!r}")
         conversation.append(ConversationTurn(speaker=speaker, text=text))
 
-    api_key = get_settings().anthropic_api_key
-    client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
-
-    result = analyze_conversation(client, conversation, model=args.model)
+    result = analyze_conversation(build_default_vlm(), conversation, model=args.model)
     print(json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2))
 
 

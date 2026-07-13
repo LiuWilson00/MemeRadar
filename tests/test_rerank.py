@@ -7,7 +7,6 @@ import pytest
 
 from memeradar.matching.intent import IntentResult
 from memeradar.matching.rerank import (
-    DEFAULT_RERANK_MODEL,
     CandidateScore,
     RankingParams,
     RerankRefusedError,
@@ -60,49 +59,33 @@ def cand(
     )
 
 
-class StubResponse:
-    def __init__(self, parsed_output, stop_reason="end_turn"):
-        self.parsed_output = parsed_output
-        self.stop_reason = stop_reason
+class StubVlm:
+    """NVIDIA 文字模型 stub：依候選編號回固定分數，chat 回傳 RerankResult 的 JSON。"""
 
+    model = "qwen/test"
 
-class StubClient:
-    """依候選在 prompt 中的編號（1-based）回固定分數。"""
-
-    def __init__(self, scores: list[tuple[int, int, str]] | None, stop_reason="end_turn"):
+    def __init__(self, scores: list[tuple[int, int, str]] | None):
         self.calls: list[dict] = []
-        parsed = (
-            RerankResult(
-                scores=[
-                    CandidateScore(candidate_id=cid, score=s, reason=r) for cid, s, r in scores
-                ]
-            )
-            if scores is not None
-            else None
-        )
-        self.response = StubResponse(parsed, stop_reason)
-        outer = self
+        if scores is None:
+            self.raw = "抱歉我無法排序"  # 非 JSON → call_structured 回 None → refused
+        else:
+            self.raw = RerankResult(
+                scores=[CandidateScore(candidate_id=cid, score=s, reason=r) for cid, s, r in scores]
+            ).model_dump_json()
 
-        class _Messages:
-            def parse(self, **kwargs):
-                outer.calls.append(kwargs)
-                return outer.response
-
-        self.messages = _Messages()
+    def chat(self, system, user_text, **kwargs):
+        self.calls.append({"system": system, "user_text": user_text, **kwargs})
+        return self.raw
 
 
 class TestRankHappyPath:
-    def test_default_model_is_cost_optimized_haiku(self):
-        # rerank 改用 haiku-4.5：top 推薦與 sonnet 相同、快 ~17%、成本約 1/3（實測 A/B）
-        assert DEFAULT_RERANK_MODEL == "claude-haiku-4-5"
-
     def test_orders_by_rerank_score_with_reasons(self):
         candidates = [cand("m_a", 0.9), cand("m_b", 0.8), cand("m_c", 0.7)]
         # 模型把向量第二名評為最高
-        client = StubClient([(2, 95, "情境最貼"), (1, 70, "尚可"), (3, 40, "不太相關")])
+        vlm = StubVlm([(2, 95, "情境最貼"), (1, 70, "尚可"), (3, 40, "不太相關")])
 
         ranked = rank_candidates(
-            client, INTENT, candidates, params=RankingParams(top_n=3, diversity=0.0)
+            vlm, INTENT, candidates, params=RankingParams(top_n=3, diversity=0.0)
         )
 
         assert [r.meme_id for r in ranked] == ["m_b", "m_a", "m_c"]
@@ -113,16 +96,14 @@ class TestRankHappyPath:
         assert ranked[0].scores["vector"] == pytest.approx(0.8)
         assert ranked[0].scores["rerank"] == pytest.approx(0.95)
 
-        call = client.calls[0]
-        assert call["model"] == DEFAULT_RERANK_MODEL
-        assert call["thinking"] == {"type": "disabled"}  # 線上延遲敏感路徑
-        user_text = call["messages"][0]["content"]
-        assert "每次都這樣" in user_text  # punchline 進 prompt
-        assert "被指責時自嘲" in user_text  # 候選以用途摘要呈現
+        call = vlm.calls[0]
+        assert call["task"] == "rerank"
+        assert "每次都這樣" in call["user_text"]  # punchline 進 prompt
+        assert "被指責時自嘲" in call["user_text"]  # 候選以用途摘要呈現
 
     def test_top_n_truncation(self):
         candidates = [cand(f"m_{i}", 0.9 - i * 0.1) for i in range(5)]
-        client = StubClient([(i + 1, 90 - i * 10, "r") for i in range(5)])
+        client = StubVlm([(i + 1, 90 - i * 10, "r") for i in range(5)])
         ranked = rank_candidates(
             client, INTENT, candidates, params=RankingParams(top_n=3, diversity=0.0)
         )
@@ -132,7 +113,7 @@ class TestRankHappyPath:
 class TestHotnessAdjustment:
     def test_hot_meme_wins_tie_and_final_reflects_boost(self):
         candidates = [cand("m_cold", 0.9, hotness=0.0), cand("m_hot", 0.9, hotness=10.0)]
-        client = StubClient([(1, 80, "r"), (2, 80, "r")])
+        client = StubVlm([(1, 80, "r"), (2, 80, "r")])
 
         ranked = rank_candidates(
             client,
@@ -153,7 +134,7 @@ class TestDiversity:
             cand("m_b", 0.85, template="派大星攤手"),
             cand("m_c", 0.6, template="臣妾做不到"),
         ]
-        client = StubClient([(1, 90, "r"), (2, 85, "r"), (3, 60, "r")])
+        client = StubVlm([(1, 90, "r"), (2, 85, "r"), (3, 60, "r")])
 
         ranked = rank_candidates(
             client, INTENT, candidates, params=RankingParams(top_n=2, diversity=0.0)
@@ -163,7 +144,7 @@ class TestDiversity:
 
     def test_null_templates_do_not_collide(self):
         candidates = [cand("m_a", 0.9), cand("m_b", 0.85)]  # template 皆為 None
-        client = StubClient([(1, 90, "r"), (2, 85, "r")])
+        client = StubVlm([(1, 90, "r"), (2, 85, "r")])
         ranked = rank_candidates(
             client, INTENT, candidates, params=RankingParams(top_n=2, diversity=0.0)
         )
@@ -175,13 +156,13 @@ class TestDiversity:
         scores = [(1, 90, "r"), (2, 85, "r"), (3, 60, "r")]
 
         low_d = rank_candidates(
-            StubClient(scores), INTENT, candidates,
+            StubVlm(scores), INTENT, candidates,
             params=RankingParams(top_n=3, diversity=0.0), vectors_by_id=vectors,
         )
         assert [r.meme_id for r in low_d] == ["m_a1", "m_a2", "m_b"]
 
         high_d = rank_candidates(
-            StubClient(scores), INTENT, candidates,
+            StubVlm(scores), INTENT, candidates,
             params=RankingParams(top_n=3, diversity=0.8), vectors_by_id=vectors,
         )
         assert [r.meme_id for r in high_d] == ["m_a1", "m_b", "m_a2"]
@@ -190,21 +171,21 @@ class TestDiversity:
 class TestRobustness:
     def test_rerank_pool_caps_candidates_sent_to_model(self):
         candidates = [cand(f"m_{i}", 0.9 - i * 0.1, ocr=f"獨特文字{i}") for i in range(3)]
-        client = StubClient([(1, 90, "r"), (2, 80, "r")])
+        client = StubVlm([(1, 90, "r"), (2, 80, "r")])
 
         ranked = rank_candidates(
             client, INTENT, candidates,
             params=RankingParams(top_n=5, diversity=0.0, rerank_pool=2),
         )
 
-        user_text = client.calls[0]["messages"][0]["content"]
+        user_text = client.calls[0]["user_text"]
         assert "獨特文字0" in user_text and "獨特文字1" in user_text
         assert "獨特文字2" not in user_text  # 池外候選不進 prompt
         assert {r.meme_id for r in ranked} <= {"m_0", "m_1"}
 
     def test_candidate_omitted_by_model_is_excluded(self):
         candidates = [cand("m_a", 0.9), cand("m_b", 0.8)]
-        client = StubClient([(1, 90, "r")])  # 模型漏掉候選 2
+        client = StubVlm([(1, 90, "r")])  # 模型漏掉候選 2
         ranked = rank_candidates(
             client, INTENT, candidates, params=RankingParams(top_n=5, diversity=0.0)
         )
@@ -212,7 +193,7 @@ class TestRobustness:
 
     def test_duplicate_candidate_id_first_wins(self):
         candidates = [cand("m_a", 0.9)]
-        client = StubClient([(1, 90, "第一筆"), (1, 10, "重複")])
+        client = StubVlm([(1, 90, "第一筆"), (1, 10, "重複")])
         ranked = rank_candidates(
             client, INTENT, candidates, params=RankingParams(top_n=5, diversity=0.0)
         )
@@ -222,7 +203,7 @@ class TestRobustness:
     def test_empty_reason_gets_strategy_fallback(self):
         # 低分候選允許省略理由（省輸出 token）；若仍進 Top-N 則以策略名合成
         candidates = [cand("m_a", 0.9)]
-        client = StubClient([(1, 30, "")])
+        client = StubVlm([(1, 30, "")])
         ranked = rank_candidates(
             client, INTENT, candidates, params=RankingParams(top_n=5, diversity=0.0)
         )
@@ -230,21 +211,21 @@ class TestRobustness:
 
     def test_unknown_candidate_id_ignored(self):
         candidates = [cand("m_a", 0.9)]
-        client = StubClient([(1, 90, "r"), (99, 80, "幻覺編號")])
+        client = StubVlm([(1, 90, "r"), (99, 80, "幻覺編號")])
         ranked = rank_candidates(
             client, INTENT, candidates, params=RankingParams(top_n=5, diversity=0.0)
         )
         assert len(ranked) == 1
 
     def test_refusal_raises(self):
-        client = StubClient(None, stop_reason="refusal")
+        client = StubVlm(None)
         with pytest.raises(RerankRefusedError):
             rank_candidates(
                 client, INTENT, [cand("m_a", 0.9)], params=RankingParams(diversity=0.0)
             )
 
     def test_empty_candidates_short_circuit(self):
-        client = StubClient([(1, 90, "r")])
+        client = StubVlm([(1, 90, "r")])
         assert rank_candidates(client, INTENT, [], params=RankingParams()) == []
         assert client.calls == []  # 不浪費 LLM 呼叫
 
