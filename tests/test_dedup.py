@@ -155,7 +155,7 @@ class TestThreeLayerFunnel:
         assert repo.get_meme(conn, meme.meme_id).phash  # pHash 已寫回
         vectors = repo.get_embeddings(conn, meme.meme_id, kind="image_dedup")
         assert len(vectors) == 1
-        assert vectors[0].vector == [1.0, 0.0]
+        assert vectors[0].vector == pytest.approx([1.0, 0.0])
 
 
 class TestAbsorbAndUpgrade:

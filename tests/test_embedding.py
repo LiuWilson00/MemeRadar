@@ -138,7 +138,7 @@ class TestEmbedPendingMemes:
         # 向量確實來自檢索文件
         expected_doc = build_retrieval_document(repo.get_annotation(conn, meme.meme_id))
         assert embedder.seen == [expected_doc]
-        assert embs[0].vector == [float(len(expected_doc)), 1.0, -0.5]
+        assert embs[0].vector == pytest.approx([float(len(expected_doc)), 1.0, -0.5])
 
     def test_rerun_is_idempotent(self, conn):
         seed_annotated_meme(conn)

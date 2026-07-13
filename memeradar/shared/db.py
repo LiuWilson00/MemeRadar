@@ -1,78 +1,65 @@
-"""SQLite 連線與 migration 管理。
+"""PostgreSQL 連線與 schema 管理。
 
-- ``connect()``：開啟連線（預設路徑 ``{MEMERADAR_DATA_DIR}/memeradar.sqlite3``），
-  啟用外鍵約束，rows 以名稱存取。
-- ``migrate()``：套用 ``migrations/*.sql``（依檔名排序），已套用者記錄於
-  ``schema_migrations``，可重複執行（冪等）。
-- CLI：``python -m memeradar.shared.db`` 直接初始化 / 升級資料庫。
+- ``connect()``：開啟 psycopg 連線（DSN 取自 settings.database_url），rows 以
+  名稱存取（dict_row）。外鍵由 PG 預設強制。
+- ``ensure_schema()`` / ``migrate()``：以 Alembic 升到最新版（冪等；每個 process
+  只跑一次）。正式部署以 ``alembic upgrade head`` 為準，此處供程式/測試方便呼叫。
+- CLI：``python -m memeradar.shared.db`` 直接升級資料庫。
+
+歷史備註：本層原為 SQLite；上生產環境改用 PostgreSQL + pgvector（見 alembic/）。
+向量與 JSON 欄位皆以文字往返（pgvector 的 '[..]' 亦為合法 JSON），故 repository
+的 _dumps/_loads 與既有讀寫邏輯大致沿用。
 """
 
 from __future__ import annotations
 
-import sqlite3
 import sys
 from pathlib import Path
 
+import psycopg
+from psycopg.rows import dict_row
+
 from memeradar.shared.config import get_settings
 
-MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+_schema_ready = False
 
 
-def default_db_path() -> Path:
-    return get_settings().memeradar_data_dir / "memeradar.sqlite3"
-
-
-def connect(path: Path | str | None = None) -> sqlite3.Connection:
-    target = Path(path) if path is not None else default_db_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    # check_same_thread=False：FastAPI 的 sync yield 依賴（get_conn）可能在不同
-    # threadpool 執行緒 setup/teardown，連線需能跨執行緒關閉。每個請求各自一條
-    # 連線、請求內單執行緒使用，故放寬執行緒檢查安全（並發下不會共用同一連線）。
-    conn = sqlite3.connect(target, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
-
-
-def migrate(conn: sqlite3.Connection) -> list[str]:
-    """套用未執行的 migration，回傳本次套用的版本清單。"""
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS schema_migrations (
-            version    TEXT PRIMARY KEY,
-            applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-        )
-        """
+def connect(dsn: str | Path | None = None) -> psycopg.Connection:
+    """開啟 PG 連線。dsn 給 str 的 postgres URL 時採用，否則（None / 舊的檔案路徑
+    參數）一律用 settings.database_url——讓既有 ``connect(path)`` 呼叫沿用不改。"""
+    url = (
+        dsn if isinstance(dsn, str) and dsn.startswith("postgres")
+        else get_settings().database_url
     )
-    applied = {r["version"] for r in conn.execute("SELECT version FROM schema_migrations")}
-    newly_applied: list[str] = []
-    for script in sorted(MIGRATIONS_DIR.glob("*.sql")):
-        version = script.stem
-        if version in applied:
-            continue
-        conn.executescript(script.read_text(encoding="utf-8"))
-        conn.execute("INSERT INTO schema_migrations (version) VALUES (?)", (version,))
-        conn.commit()
-        newly_applied.append(version)
-    # executescript 會重置部分 pragma，保險起見重新啟用外鍵
-    conn.execute("PRAGMA foreign_keys = ON")
-    return newly_applied
+    return psycopg.connect(url, row_factory=dict_row, autocommit=False)
+
+
+def ensure_schema() -> None:
+    """以 Alembic 升到 head（冪等；每個 process 只實際跑一次）。"""
+    global _schema_ready
+    if _schema_ready:
+        return
+    from alembic import command
+    from alembic.config import Config
+
+    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
+    command.upgrade(cfg, "head")
+    _schema_ready = True
+
+
+def migrate(conn: psycopg.Connection | None = None) -> list[str]:
+    """相容保留：確保 schema 為最新（實際由 Alembic 管理）。conn 參數不再需要。"""
+    ensure_schema()
+    return []
 
 
 def main() -> None:
-    # Windows 主控台預設編碼常非 UTF-8，避免中文輸出亂碼
     if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
         sys.stdout.reconfigure(encoding="utf-8")
-    path = default_db_path()
-    conn = connect(path)
-    try:
-        applied = migrate(conn)
-    finally:
-        conn.close()
-    if applied:
-        print(f"已套用 migration：{', '.join(applied)}（{path}）")
-    else:
-        print(f"資料庫已是最新（{path}）")
+    ensure_schema()
+    print(f"資料庫已升到最新（{get_settings().database_url.rsplit('@', 1)[-1]}）")
 
 
 if __name__ == "__main__":

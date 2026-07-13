@@ -9,12 +9,11 @@
 from __future__ import annotations
 
 import math
-import sqlite3
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from memeradar.shared.db import MIGRATIONS_DIR, migrate
+from memeradar.shared.db import connect, migrate
 from memeradar.shared.hotness import (
     EVERGREEN_COEF,
     HALF_LIFE_DAYS,
@@ -33,10 +32,8 @@ def _iso(dt: datetime) -> str:
 
 
 @pytest.fixture
-def conn(tmp_path):
-    conn = sqlite3.connect(tmp_path / "test.sqlite3")
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
+def conn():
+    conn = connect()
     migrate(conn)
     yield conn
     conn.close()
@@ -117,36 +114,5 @@ class TestRecomputeAll:
         assert get_meme(conn, "old").hotness == pytest.approx(old.hotness)
         assert get_meme(conn, "new").hotness == pytest.approx(new.hotness)
 
-
-class TestMigrationBackfill:
-    def test_legacy_hotness_backfilled_into_engagement(self, tmp_path):
-        conn = sqlite3.connect(tmp_path / "legacy.sqlite3")
-        conn.row_factory = sqlite3.Row
-        conn.execute(
-            """
-            CREATE TABLE schema_migrations (
-                version    TEXT PRIMARY KEY,
-                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-            """
-        )
-        # 手動套到 0004 為止，模擬 P4-3 前的既有資料庫
-        for script in sorted(MIGRATIONS_DIR.glob("*.sql")):
-            if script.stem >= "0005":
-                continue
-            conn.executescript(script.read_text(encoding="utf-8"))
-            conn.execute(
-                "INSERT INTO schema_migrations (version) VALUES (?)", (script.stem,)
-            )
-        conn.execute(
-            "INSERT INTO memes (meme_id, image_uri, sha256, hotness, first_seen_at) "
-            "VALUES ('m1', 'a.png', 's1', 5.0, '2026-06-01T00:00:00+00:00')"
-        )
-        conn.commit()
-
-        migrate(conn)  # 套用 0005
-
-        row = conn.execute("SELECT * FROM memes WHERE meme_id='m1'").fetchone()
-        assert row["engagement"] == pytest.approx(5.0)
-        assert row["last_seen_at"] == "2026-06-01T00:00:00+00:00"
-        conn.close()
+# 註：舊 SQLite 版的 0004→0005 hotness 回填 migration 測試已移除——engagement 欄位
+# 已納入 Alembic 基準版 schema，該一次性回填不再是 forward 路徑。

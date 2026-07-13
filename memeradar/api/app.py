@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import base64
 import binascii
-import sqlite3
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+import psycopg
+import psycopg.errors
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 
@@ -188,7 +189,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
                     )
         return await call_next(request)
 
-    def get_conn() -> Iterator[sqlite3.Connection]:
+    def get_conn() -> Iterator[psycopg.Connection]:
         conn = connect(deps.db_path)
         try:
             yield conn
@@ -208,7 +209,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail="image 不是有效的 base64") from None
 
     @app.post("/recommend")
-    def recommend(request: RecommendRequest, conn: sqlite3.Connection = Depends(get_conn)):
+    def recommend(request: RecommendRequest, conn: psycopg.Connection = Depends(get_conn)):
         image_bytes: bytes | None = None
         if request.input_type in ("screenshot", "meme_battle"):
             image_bytes = _decode_image(request.image)
@@ -232,7 +233,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail=f"梗圖無法解析：{exc}") from None
 
     @app.post("/tasks", status_code=202)
-    def submit_task(request: RecommendRequest, conn: sqlite3.Connection = Depends(get_conn)):
+    def submit_task(request: RecommendRequest, conn: psycopg.Connection = Depends(get_conn)):
         """送出非同步推薦：立刻回 task_id，實際運算在背景跑（user 可離開再回來查）。"""
         image_bytes: bytes | None = None
         if request.input_type in ("screenshot", "meme_battle"):
@@ -250,12 +251,12 @@ def create_app(deps: Deps | None = None) -> FastAPI:
 
     @app.get("/tasks")
     def list_tasks(client_id: str, limit: int = 50,
-                   conn: sqlite3.Connection = Depends(get_conn)):
+                   conn: psycopg.Connection = Depends(get_conn)):
         """某 client 的歷史任務（新到舊，精簡欄位，不夾帶完整 result）。"""
         return repo.list_tasks_by_client(conn, client_id, limit=limit)
 
     @app.get("/tasks/{task_id}")
-    def get_task(task_id: str, conn: sqlite3.Connection = Depends(get_conn)):
+    def get_task(task_id: str, conn: psycopg.Connection = Depends(get_conn)):
         """單一任務進度 / 結果（前台輪詢）。"""
         task = repo.get_task(conn, task_id)
         if task is None:
@@ -272,7 +273,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail=f"截圖解析失敗：{exc}") from None
 
     @app.post("/feedback")
-    def feedback(request: FeedbackRequest, conn: sqlite3.Connection = Depends(get_conn)):
+    def feedback(request: FeedbackRequest, conn: psycopg.Connection = Depends(get_conn)):
         event = FeedbackEvent(
             feedback_id=new_id("f"),
             query_id=request.query_id,
@@ -283,7 +284,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         )
         try:
             repo.insert_feedback(conn, event)
-        except sqlite3.IntegrityError:
+        except psycopg.errors.IntegrityError:
             raise HTTPException(
                 status_code=404, detail="query_id 或 meme_id 不存在"
             ) from None
@@ -291,11 +292,11 @@ def create_app(deps: Deps | None = None) -> FastAPI:
 
     @app.get("/history")
     def history(limit: int = 50, offset: int = 0,
-                conn: sqlite3.Connection = Depends(get_conn)):
+                conn: psycopg.Connection = Depends(get_conn)):
         return repo.list_recommendation_logs(conn, limit=limit, offset=offset)
 
     @app.get("/history/{query_id}")
-    def history_detail(query_id: str, conn: sqlite3.Connection = Depends(get_conn)):
+    def history_detail(query_id: str, conn: psycopg.Connection = Depends(get_conn)):
         log = repo.get_recommendation_log(conn, query_id)
         if log is None:
             raise HTTPException(status_code=404, detail="查詢紀錄不存在")
@@ -308,7 +309,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         emotion: str | None = None,
         status: str | None = None,
         limit: int = 200,
-        conn: sqlite3.Connection = Depends(get_conn),
+        conn: psycopg.Connection = Depends(get_conn),
     ):
         rows = repo.list_memes_with_annotations(
             conn, franchise=franchise, category=category, emotion=emotion,
@@ -319,7 +320,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         return rows
 
     @app.post("/memes")
-    def upload_meme(request: UploadMemeRequest, conn: sqlite3.Connection = Depends(get_conn)):
+    def upload_meme(request: UploadMemeRequest, conn: psycopg.Connection = Depends(get_conn)):
         """手動上傳（seed 匯入口）：匯入 → 立即標註 → 立即向量化，完成即可檢索。"""
         content = _decode_image(request.image)
         meme, status = import_image_bytes(
@@ -352,7 +353,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
     def review_annotation(
         meme_id: str,
         request: ReviewAnnotationRequest,
-        conn: sqlite3.Connection = Depends(get_conn),
+        conn: psycopg.Connection = Depends(get_conn),
     ):
         """標註複核：修標籤（可選）+ 通過 / 淘汰；通過即重建檢索向量。"""
         meme = repo.get_meme(conn, meme_id)
@@ -396,7 +397,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         return {"meme_id": meme_id, "status": repo.get_meme(conn, meme_id).status}
 
     @app.get("/review/dedup")
-    def dedup_queue(conn: sqlite3.Connection = Depends(get_conn)):
+    def dedup_queue(conn: psycopg.Connection = Depends(get_conn)):
         """去重裁決佇列：待人工判定的疑似重複配對（並排比對資料）。"""
 
         def summary(meme_id: str) -> dict:
@@ -425,7 +426,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
     def resolve_dedup(
         review_id: str,
         request: DedupResolutionRequest,
-        conn: sqlite3.Connection = Depends(get_conn),
+        conn: psycopg.Connection = Depends(get_conn),
     ):
         review = repo.get_dedup_review(conn, review_id)
         if review is None:
@@ -436,7 +437,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         return {"review_id": review_id, "resolution": request.resolution}
 
     @app.get("/report/feedback")
-    def feedback_report(conn: sqlite3.Connection = Depends(get_conn)):
+    def feedback_report(conn: psycopg.Connection = Depends(get_conn)):
         from memeradar.shared.reporting import build_feedback_report
 
         return build_feedback_report(conn)
@@ -450,12 +451,12 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         return {"models": VISION_MODELS, "default": current}
 
     @app.get("/vlm/usage")
-    def vlm_usage(conn: sqlite3.Connection = Depends(get_conn)):
+    def vlm_usage(conn: psycopg.Connection = Depends(get_conn)):
         """各 key × 狀態的呼叫數與平均延遲（後台監控用）。"""
         return repo.vlm_call_stats(conn)
 
     @app.get("/settings/models")
-    def get_model_settings(conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+    def get_model_settings(conn: psycopg.Connection = Depends(get_conn)) -> dict:
         """各任務目前的模型設定 + 可選清單 + VLM 預設（後台設定頁用）。"""
         from memeradar.understanding.nvidia_vlm import VISION_MODELS
 
@@ -471,7 +472,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
 
     @app.put("/settings/models")
     def put_model_settings(
-        request: ModelSettingsRequest, conn: sqlite3.Connection = Depends(get_conn)
+        request: ModelSettingsRequest, conn: psycopg.Connection = Depends(get_conn)
     ) -> dict:
         """設定各任務模型；只接受已知任務鍵，值空 = 回預設。"""
         mapping = {k: v for k, v in request.models.items() if k in repo.TASK_MODEL_KEYS}
@@ -479,7 +480,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         return {"models": repo.get_task_models(conn)}
 
     @app.get("/memes/{meme_id}/image")
-    def meme_image(meme_id: str, conn: sqlite3.Connection = Depends(get_conn)):
+    def meme_image(meme_id: str, conn: psycopg.Connection = Depends(get_conn)):
         meme = repo.get_meme(conn, meme_id)
         if meme is None:
             raise HTTPException(status_code=404, detail="梗圖不存在")
@@ -490,7 +491,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         return FileResponse(path, media_type=media_type)
 
     @app.get("/meta")
-    def meta(conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+    def meta(conn: psycopg.Connection = Depends(get_conn)) -> dict:
         taxonomy = get_taxonomy()
         return {
             "franchises": [

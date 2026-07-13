@@ -1,8 +1,9 @@
-"""向量檢索 + metadata 過濾（docs/04 §2.3；Q1 決策落地）。
+"""向量檢索 + metadata 過濾（docs/04 §2.3）。
 
-Q1 決策（2026-07-11）：Demo 量級（<1 萬張）採 **SQLite 單庫 + 程式內餘弦**——
-零新依賴、零部署。``VectorSearcher`` 為薄介面，量級成長或延遲超出預算
-（P3-7 規模化驗證）時，換 pgvector / Qdrant 只需替換實作。
+上生產環境改用 **PostgreSQL + pgvector**：以 SQL 端 ``<=>`` 餘弦距離排序取 Top-K，
+metadata（franchise / category / nsfw / status）於同一查詢過濾。``VectorSearcher``
+仍為薄介面。目前 vector 欄不固定維度、未建 HNSW；規模變大時 ALTER 成固定維度並
+加索引即可（見 alembic 基準版註記）。
 
 一致性設計：不維護獨立索引，直接查主庫——下架（status=removed）、待審、
 非梗圖在查詢層過濾，天然不會出現「索引與 DB 不同步」問題（docs/03 §3.2
@@ -13,9 +14,10 @@ from __future__ import annotations
 
 import json
 import math
-import sqlite3
 from dataclasses import dataclass
 from typing import Protocol
+
+import psycopg.errors
 
 from memeradar.shared.models import MemeAnnotation
 from memeradar.shared.repository import annotation_from_row
@@ -66,9 +68,13 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 
 class SqliteBruteForceSearcher:
-    """SQL 做 metadata 預過濾，Python 對過濾後候選算餘弦、取 Top-K。"""
+    """metadata 過濾 + pgvector SQL 端餘弦（``<=>``）取 Top-K。
 
-    def __init__(self, conn: sqlite3.Connection, signature: str):
+    名稱沿用（歷史為 SQLite 程式內餘弦），實作已改為 PostgreSQL + pgvector：
+    餘弦相似度 = ``1 - (vector <=> query)``；同分以 meme_id 決定序（與舊行為一致）。
+    """
+
+    def __init__(self, conn, signature: str):
         self._conn = conn
         self._signature = signature
 
@@ -80,17 +86,19 @@ class SqliteBruteForceSearcher:
         filters: SearchFilters,
         min_similarity: float = DEFAULT_MIN_SIMILARITY,
     ) -> list[SearchHit]:
+        qvec = json.dumps(query_vector)  # pgvector 可解析 '[..]' 文字
         sql = """
-            SELECT a.*, e.vector AS emb_vector, m.hotness AS meme_hotness
+            SELECT a.*, m.hotness AS meme_hotness,
+                   1 - (e.vector <=> %s::vector) AS similarity
             FROM memes m
             JOIN meme_annotations a ON a.meme_id = m.meme_id
             JOIN embeddings e
                 ON e.meme_id = m.meme_id
                AND e.kind = 'text_retrieval'
-               AND e.model = ?
+               AND e.model = %s
             WHERE m.status = 'active' AND a.is_meme = 1
         """
-        params: list = [self._signature]
+        params: list = [qvec, self._signature]
 
         if filters.exclude_nsfw:
             sql += " AND a.nsfw = 0"
@@ -98,30 +106,36 @@ class SqliteBruteForceSearcher:
         if filters.franchises:
             taxonomy = get_taxonomy()
             normalized = [taxonomy.normalize_franchise(f) for f in filters.franchises]
-            sql += f" AND a.franchise IN ({','.join('?' * len(normalized))})"
+            sql += f" AND a.franchise IN ({','.join(['%s'] * len(normalized))})"
             params.extend(normalized)
 
         if filters.categories:
-            placeholders = ",".join("?" * len(filters.categories))
+            placeholders = ",".join(["%s"] * len(filters.categories))
             sql += (
-                " AND EXISTS (SELECT 1 FROM json_each(a.categories)"
-                f" WHERE json_each.value IN ({placeholders}))"
+                " AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(a.categories::jsonb)"
+                f" AS cv WHERE cv IN ({placeholders}))"
             )
             params.extend(filters.categories)
 
-        scored: list[SearchHit] = []
-        for row in self._conn.execute(sql, params):
-            similarity = _cosine(query_vector, json.loads(row["emb_vector"]))
-            if similarity < min_similarity:
-                continue
-            scored.append(
-                SearchHit(
-                    meme_id=row["meme_id"],
-                    similarity=similarity,
-                    annotation=annotation_from_row(row),
-                    hotness=row["meme_hotness"],
-                )
-            )
+        # min_similarity 過濾 + 依距離排序（同分以 meme_id）
+        sql += " AND 1 - (e.vector <=> %s::vector) >= %s"
+        params.extend([qvec, min_similarity])
+        sql += " ORDER BY e.vector <=> %s::vector, a.meme_id LIMIT %s"
+        params.extend([qvec, k])
 
-        scored.sort(key=lambda h: (-h.similarity, h.meme_id))
-        return scored[:k]
+        try:
+            rows = self._conn.execute(sql, params).fetchall()
+        except psycopg.errors.DataException as exc:
+            # 查詢向量與索引維度不符（embedding 簽名漂移）——明確報錯，勿悄悄回錯結果
+            self._conn.rollback()
+            raise ValueError(f"向量維度不符（embedding 簽名是否一致？）：{exc}") from exc
+
+        return [
+            SearchHit(
+                meme_id=row["meme_id"],
+                similarity=row["similarity"],
+                annotation=annotation_from_row(row),
+                hotness=row["meme_hotness"],
+            )
+            for row in rows
+        ]

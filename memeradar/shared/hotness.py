@@ -56,18 +56,18 @@ def record_engagement(
     conn.execute(
         """
         UPDATE memes
-        SET engagement = engagement + ?,
-            last_seen_at = MAX(COALESCE(last_seen_at, ''), ?)
-        WHERE meme_id = ?
+        SET engagement = engagement + %s,
+            last_seen_at = GREATEST(COALESCE(last_seen_at, ''), %s)
+        WHERE meme_id = %s
         """,
         (gain, now_iso, meme_id),
     )
     row = conn.execute(
-        "SELECT engagement, last_seen_at FROM memes WHERE meme_id = ?", (meme_id,)
+        "SELECT engagement, last_seen_at FROM memes WHERE meme_id = %s", (meme_id,)
     ).fetchone()
     if row is not None:
         conn.execute(
-            "UPDATE memes SET hotness = ? WHERE meme_id = ?",
+            "UPDATE memes SET hotness = %s WHERE meme_id = %s",
             (compute_hotness(row["engagement"], row["last_seen_at"], now=now), meme_id),
         )
     conn.commit()
@@ -79,7 +79,7 @@ def recompute_all_hotness(conn: sqlite3.Connection, *, now: datetime | None = No
     rows = conn.execute("SELECT meme_id, engagement, last_seen_at FROM memes").fetchall()
     for row in rows:
         conn.execute(
-            "UPDATE memes SET hotness = ? WHERE meme_id = ?",
+            "UPDATE memes SET hotness = %s WHERE meme_id = %s",
             (
                 compute_hotness(row["engagement"], row["last_seen_at"], now=now),
                 row["meme_id"],

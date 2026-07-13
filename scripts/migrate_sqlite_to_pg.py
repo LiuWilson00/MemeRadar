@@ -34,22 +34,11 @@ TABLE_ORDER = [
     "crawl_health",
 ]
 
-# 需轉型的欄位（其餘直接照抄）
-JSONB_COLS = {
-    "meme_annotations": {"characters", "emotions", "usage_hints", "categories"},
-    "meme_sources": {"top_comments"},
-    "recommendation_logs": {
-        "conversation", "intent_result", "params_snapshot",
-        "candidates", "final_results", "timings",
-    },
-    "tasks": {"result"},
-}
+# JSON 欄位在 PG 仍是 TEXT（直接照抄字串）；只有 vector 需轉 pgvector 型別
 VECTOR_COLS = {"embeddings": {"vector"}}
 
 
 def _placeholder(table: str, col: str) -> str:
-    if col in JSONB_COLS.get(table, ()):
-        return "%s::jsonb"
     if col in VECTOR_COLS.get(table, ()):
         return "%s::vector"
     return "%s"

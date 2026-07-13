@@ -1,6 +1,10 @@
-"""資料存取層：dataclass ↔ SQLite 的寫讀，含 JSON 欄位序列化。
+"""資料存取層：dataclass ↔ PostgreSQL 的寫讀，含 JSON 欄位序列化。
 
-所有寫入函式自行 commit；呼叫端只需持有 ``db.connect()`` 的連線。
+所有寫入函式自行 commit；呼叫端只需持有 ``db.connect()``（psycopg）的連線。
+JSON 欄位以 TEXT 存 JSON 字串（_dumps/_loads）；向量以 pgvector ``vector`` 型別
+（寫入 ::vector 轉型、讀回為 '[..]' 文字經 _loads 還原）。
+註：部分型別註記仍寫作 ``sqlite3.Connection``（歷史遺留，執行期不影響；連線實為
+psycopg）。
 """
 
 from __future__ import annotations
@@ -36,7 +40,7 @@ def insert_meme(conn: sqlite3.Connection, meme: Meme) -> None:
         """
         INSERT INTO memes (meme_id, image_uri, sha256, phash, width, height,
                            hotness, status, first_seen_at, engagement, last_seen_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             meme.meme_id,
@@ -72,17 +76,17 @@ def _row_to_meme(row: sqlite3.Row) -> Meme:
 
 
 def get_meme(conn: sqlite3.Connection, meme_id: str) -> Meme | None:
-    row = conn.execute("SELECT * FROM memes WHERE meme_id = ?", (meme_id,)).fetchone()
+    row = conn.execute("SELECT * FROM memes WHERE meme_id = %s", (meme_id,)).fetchone()
     return _row_to_meme(row) if row else None
 
 
 def find_meme_by_sha256(conn: sqlite3.Connection, sha256: str) -> Meme | None:
-    row = conn.execute("SELECT * FROM memes WHERE sha256 = ?", (sha256,)).fetchone()
+    row = conn.execute("SELECT * FROM memes WHERE sha256 = %s", (sha256,)).fetchone()
     return _row_to_meme(row) if row else None
 
 
 def set_status(conn: sqlite3.Connection, meme_id: str, status: str) -> None:
-    conn.execute("UPDATE memes SET status = ? WHERE meme_id = ?", (status, meme_id))
+    conn.execute("UPDATE memes SET status = %s WHERE meme_id = %s", (status, meme_id))
     conn.commit()
 
 
@@ -90,7 +94,9 @@ def count_memes(conn: sqlite3.Connection, status: str | None = None) -> int:
     if status is None:
         row = conn.execute("SELECT COUNT(*) AS n FROM memes").fetchone()
     else:
-        row = conn.execute("SELECT COUNT(*) AS n FROM memes WHERE status = ?", (status,)).fetchone()
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM memes WHERE status = %s", (status,)
+        ).fetchone()
     return row["n"]
 
 
@@ -104,7 +110,7 @@ def list_memes_missing_annotation(conn: sqlite3.Connection, limit: int | None = 
     """
     params: tuple = ()
     if limit is not None:
-        sql += " LIMIT ?"
+        sql += " LIMIT %s"
         params = (limit,)
     return [_row_to_meme(r) for r in conn.execute(sql, params).fetchall()]
 
@@ -123,7 +129,7 @@ def list_recommendation_logs(
         LEFT JOIN feedback_events f ON f.query_id = r.query_id
         GROUP BY r.query_id
         ORDER BY r.created_at DESC
-        LIMIT ? OFFSET ?
+        LIMIT %s OFFSET %s
         """,
         (limit, offset),
     ).fetchall()
@@ -153,27 +159,35 @@ def list_memes_with_annotations(
     offset: int = 0,
 ) -> list[dict]:
     """梗圖庫瀏覽：含標註摘要與篩選，未標註者 annotation 為 None。"""
+    # a.* 在前、m 欄位在後：兩表都有 meme_id，psycopg dict_row 以「後者」為準，
+    # 故 m.meme_id 需排在 a.meme_id 之後才會勝出（未標註時 a.meme_id 為 NULL）。
     sql = """
-        SELECT m.meme_id, m.image_uri, m.status, m.hotness, m.width, m.height,
-               m.first_seen_at, a.*
+        SELECT a.*, m.meme_id, m.image_uri, m.status, m.hotness, m.width, m.height,
+               m.first_seen_at
         FROM memes m
         LEFT JOIN meme_annotations a ON a.meme_id = m.meme_id
         WHERE 1 = 1
     """
     params: list = []
     if status is not None:
-        sql += " AND m.status = ?"
+        sql += " AND m.status = %s"
         params.append(status)
     if franchise is not None:
-        sql += " AND a.franchise = ?"
+        sql += " AND a.franchise = %s"
         params.append(franchise)
     if category is not None:
-        sql += " AND EXISTS (SELECT 1 FROM json_each(a.categories) WHERE json_each.value = ?)"
+        sql += (
+            " AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(a.categories::jsonb)"
+            " AS v WHERE v = %s)"
+        )
         params.append(category)
     if emotion is not None:
-        sql += " AND EXISTS (SELECT 1 FROM json_each(a.emotions) WHERE json_each.value = ?)"
+        sql += (
+            " AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(a.emotions::jsonb)"
+            " AS v WHERE v = %s)"
+        )
         params.append(emotion)
-    sql += " ORDER BY m.first_seen_at DESC LIMIT ? OFFSET ?"
+    sql += " ORDER BY m.first_seen_at DESC LIMIT %s OFFSET %s"
     params.extend([limit, offset])
 
     results = []
@@ -229,12 +243,12 @@ def category_counts(conn: sqlite3.Connection) -> dict[str, int]:
     """各分類的可檢索梗圖數（開放集：直接由庫內實際出現的值統計，含模型自創）。"""
     rows = conn.execute(
         """
-        SELECT json_each.value AS name, COUNT(*) AS n
+        SELECT v.value AS name, COUNT(*) AS n
         FROM meme_annotations a
         JOIN memes m ON m.meme_id = a.meme_id
-        JOIN json_each(a.categories)
+        CROSS JOIN LATERAL jsonb_array_elements_text(a.categories::jsonb) AS v(value)
         WHERE m.status = 'active' AND a.is_meme = 1
-        GROUP BY json_each.value
+        GROUP BY v.value
         ORDER BY n DESC, name
         """
     ).fetchall()
@@ -249,13 +263,13 @@ def list_memes_missing_embedding(
         SELECT m.* FROM memes m
         JOIN meme_annotations a ON a.meme_id = m.meme_id
         LEFT JOIN embeddings e
-            ON e.meme_id = m.meme_id AND e.kind = ? AND e.model = ?
+            ON e.meme_id = m.meme_id AND e.kind = %s AND e.model = %s
         WHERE e.meme_id IS NULL AND m.status = 'active' AND a.is_meme = 1
         ORDER BY m.first_seen_at
     """
     params: tuple = (kind, model)
     if limit is not None:
-        sql += " LIMIT ?"
+        sql += " LIMIT %s"
         params = (kind, model, limit)
     return [_row_to_meme(r) for r in conn.execute(sql, params).fetchall()]
 
@@ -270,7 +284,7 @@ def upsert_annotation(conn: sqlite3.Connection, ann: MemeAnnotation) -> None:
                                       description, characters, franchise, template_name,
                                       emotions, usage_hints, categories, confidence,
                                       annotated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (meme_id) DO UPDATE SET
             model_version = excluded.model_version,
             is_meme = excluded.is_meme,
@@ -308,7 +322,7 @@ def upsert_annotation(conn: sqlite3.Connection, ann: MemeAnnotation) -> None:
 
 def get_annotation(conn: sqlite3.Connection, meme_id: str) -> MemeAnnotation | None:
     row = conn.execute(
-        "SELECT * FROM meme_annotations WHERE meme_id = ?", (meme_id,)
+        "SELECT * FROM meme_annotations WHERE meme_id = %s", (meme_id,)
     ).fetchone()
     return annotation_from_row(row) if row else None
 
@@ -334,7 +348,7 @@ def annotation_from_row(row: sqlite3.Row) -> MemeAnnotation:
 
 
 def set_phash(conn: sqlite3.Connection, meme_id: str, phash: str) -> None:
-    conn.execute("UPDATE memes SET phash = ? WHERE meme_id = ?", (phash, meme_id))
+    conn.execute("UPDATE memes SET phash = %s WHERE meme_id = %s", (phash, meme_id))
     conn.commit()
 
 
@@ -355,7 +369,7 @@ def update_meme_image(
 ) -> None:
     """以較高解析度版本替換主圖（docs/02 §4）。"""
     conn.execute(
-        "UPDATE memes SET image_uri = ?, sha256 = ?, width = ?, height = ? WHERE meme_id = ?",
+        "UPDATE memes SET image_uri = %s, sha256 = %s, width = %s, height = %s WHERE meme_id = %s",
         (image_uri, sha256, width, height, meme_id),
     )
     conn.commit()
@@ -366,7 +380,7 @@ def list_embeddings_by_kind(
 ) -> dict[str, list[float]]:
     """指定簽名的全部向量（去重 L3 比對用；量級 <10 萬列可全載）。"""
     rows = conn.execute(
-        "SELECT meme_id, vector FROM embeddings WHERE kind = ? AND model = ?", (kind, model)
+        "SELECT meme_id, vector FROM embeddings WHERE kind = %s AND model = %s", (kind, model)
     ).fetchall()
     return {r["meme_id"]: _loads(r["vector"]) for r in rows}
 
@@ -386,7 +400,7 @@ def add_dedup_review(
     conn.execute(
         """
         INSERT INTO dedup_reviews (review_id, meme_id, matched_meme_id, layer, score)
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s)
         """,
         (review_id, meme_id, matched_meme_id, layer, score),
     )
@@ -396,14 +410,14 @@ def add_dedup_review(
 
 def list_dedup_reviews(conn: sqlite3.Connection, resolution: str = "pending") -> list[dict]:
     rows = conn.execute(
-        "SELECT * FROM dedup_reviews WHERE resolution = ? ORDER BY created_at", (resolution,)
+        "SELECT * FROM dedup_reviews WHERE resolution = %s ORDER BY created_at", (resolution,)
     ).fetchall()
     return [dict(r) for r in rows]
 
 
 def get_dedup_review(conn: sqlite3.Connection, review_id: str) -> dict | None:
     row = conn.execute(
-        "SELECT * FROM dedup_reviews WHERE review_id = ?", (review_id,)
+        "SELECT * FROM dedup_reviews WHERE review_id = %s", (review_id,)
     ).fetchone()
     return dict(row) if row else None
 
@@ -412,7 +426,7 @@ def set_dedup_review_resolution(
     conn: sqlite3.Connection, review_id: str, resolution: str
 ) -> None:
     conn.execute(
-        "UPDATE dedup_reviews SET resolution = ? WHERE review_id = ?", (resolution, review_id)
+        "UPDATE dedup_reviews SET resolution = %s WHERE review_id = %s", (resolution, review_id)
     )
     conn.commit()
 
@@ -420,7 +434,7 @@ def set_dedup_review_resolution(
 def move_sources(conn: sqlite3.Connection, *, from_meme_id: str, to_meme_id: str) -> None:
     """把重複梗圖的來源 metadata 併入保留的主圖（docs/02 §4 合併）。"""
     conn.execute(
-        "UPDATE meme_sources SET meme_id = ? WHERE meme_id = ?", (to_meme_id, from_meme_id)
+        "UPDATE meme_sources SET meme_id = %s WHERE meme_id = %s", (to_meme_id, from_meme_id)
     )
     conn.commit()
 
@@ -430,7 +444,7 @@ def move_sources(conn: sqlite3.Connection, *, from_meme_id: str, to_meme_id: str
 
 def get_watermark(conn: sqlite3.Connection, source: str) -> str | None:
     row = conn.execute(
-        "SELECT watermark FROM crawl_state WHERE source = ?", (source,)
+        "SELECT watermark FROM crawl_state WHERE source = %s", (source,)
     ).fetchone()
     return row["watermark"] if row else None
 
@@ -438,7 +452,7 @@ def get_watermark(conn: sqlite3.Connection, source: str) -> str | None:
 def set_watermark(conn: sqlite3.Connection, source: str, watermark: str) -> None:
     conn.execute(
         """
-        INSERT INTO crawl_state (source, watermark, updated_at) VALUES (?, ?, datetime('now'))
+        INSERT INTO crawl_state (source, watermark, updated_at) VALUES (%s, %s, now()::text)
         ON CONFLICT (source) DO UPDATE SET
             watermark = excluded.watermark,
             updated_at = excluded.updated_at
@@ -453,7 +467,7 @@ def set_watermark(conn: sqlite3.Connection, source: str, watermark: str) -> None
 
 def get_crawl_failures(conn: sqlite3.Connection, source: str) -> int:
     row = conn.execute(
-        "SELECT consecutive_failures FROM crawl_health WHERE source = ?", (source,)
+        "SELECT consecutive_failures FROM crawl_health WHERE source = %s", (source,)
     ).fetchone()
     return row["consecutive_failures"] if row else 0
 
@@ -463,9 +477,9 @@ def record_crawl_failure(conn: sqlite3.Connection, source: str, error: str) -> i
     conn.execute(
         """
         INSERT INTO crawl_health (source, consecutive_failures, last_error, updated_at)
-        VALUES (?, 1, ?, datetime('now'))
+        VALUES (%s, 1, %s, now()::text)
         ON CONFLICT (source) DO UPDATE SET
-            consecutive_failures = consecutive_failures + 1,
+            consecutive_failures = crawl_health.consecutive_failures + 1,
             last_error = excluded.last_error,
             updated_at = excluded.updated_at
         """,
@@ -479,7 +493,7 @@ def reset_crawl_failures(conn: sqlite3.Connection, source: str) -> None:
     conn.execute(
         """
         INSERT INTO crawl_health (source, consecutive_failures, last_error, updated_at)
-        VALUES (?, 0, NULL, datetime('now'))
+        VALUES (%s, 0, NULL, now()::text)
         ON CONFLICT (source) DO UPDATE SET
             consecutive_failures = 0,
             last_error = NULL,
@@ -498,7 +512,7 @@ def add_source(conn: sqlite3.Connection, src: MemeSource) -> None:
         """
         INSERT INTO meme_sources (source_id, meme_id, platform, post_url, post_title,
                                   top_comments, upvotes, posted_at, crawled_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             src.source_id,
@@ -517,7 +531,7 @@ def add_source(conn: sqlite3.Connection, src: MemeSource) -> None:
 
 def list_sources(conn: sqlite3.Connection, meme_id: str) -> list[MemeSource]:
     rows = conn.execute(
-        "SELECT * FROM meme_sources WHERE meme_id = ? ORDER BY crawled_at", (meme_id,)
+        "SELECT * FROM meme_sources WHERE meme_id = %s ORDER BY crawled_at", (meme_id,)
     ).fetchall()
     return [
         MemeSource(
@@ -542,7 +556,7 @@ def add_embedding(conn: sqlite3.Connection, emb: Embedding) -> None:
     conn.execute(
         """
         INSERT INTO embeddings (meme_id, kind, model, vector, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s::vector, %s)
         ON CONFLICT (meme_id, kind, model) DO UPDATE SET
             vector = excluded.vector,
             created_at = excluded.created_at
@@ -558,10 +572,10 @@ def get_vectors(
     """批次載入指定簽名的向量（MMR 多樣化計算用）。缺席的 id 不含在結果中。"""
     if not meme_ids:
         return {}
-    placeholders = ",".join("?" * len(meme_ids))
+    placeholders = ",".join(["%s"] * len(meme_ids))
     rows = conn.execute(
         f"SELECT meme_id, vector FROM embeddings"
-        f" WHERE kind = ? AND model = ? AND meme_id IN ({placeholders})",
+        f" WHERE kind = %s AND model = %s AND meme_id IN ({placeholders})",
         (kind, model, *meme_ids),
     ).fetchall()
     return {r["meme_id"]: _loads(r["vector"]) for r in rows}
@@ -571,10 +585,10 @@ def get_embeddings(
     conn: sqlite3.Connection, meme_id: str, kind: str | None = None
 ) -> list[Embedding]:
     if kind is None:
-        rows = conn.execute("SELECT * FROM embeddings WHERE meme_id = ?", (meme_id,)).fetchall()
+        rows = conn.execute("SELECT * FROM embeddings WHERE meme_id = %s", (meme_id,)).fetchall()
     else:
         rows = conn.execute(
-            "SELECT * FROM embeddings WHERE meme_id = ? AND kind = ?", (meme_id, kind)
+            "SELECT * FROM embeddings WHERE meme_id = %s AND kind = %s", (meme_id, kind)
         ).fetchall()
     return [
         Embedding(
@@ -598,7 +612,7 @@ def insert_recommendation_log(conn: sqlite3.Connection, log: RecommendationLog) 
                                          params_snapshot, candidates, final_results,
                                          latency_ms, timings, input_type, client_id,
                                          created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             log.query_id,
@@ -619,7 +633,7 @@ def insert_recommendation_log(conn: sqlite3.Connection, log: RecommendationLog) 
 
 def get_recommendation_log(conn: sqlite3.Connection, query_id: str) -> RecommendationLog | None:
     row = conn.execute(
-        "SELECT * FROM recommendation_logs WHERE query_id = ?", (query_id,)
+        "SELECT * FROM recommendation_logs WHERE query_id = %s", (query_id,)
     ).fetchone()
     if row is None:
         return None
@@ -647,7 +661,7 @@ def insert_feedback(conn: sqlite3.Connection, fb: FeedbackEvent) -> None:
         """
         INSERT INTO feedback_events (feedback_id, query_id, meme_id, rank, rating,
                                      note, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (query_id, meme_id) DO UPDATE SET
             feedback_id = excluded.feedback_id,
             rank        = excluded.rank,
@@ -662,7 +676,7 @@ def insert_feedback(conn: sqlite3.Connection, fb: FeedbackEvent) -> None:
 
 def list_feedback(conn: sqlite3.Connection, query_id: str) -> list[FeedbackEvent]:
     rows = conn.execute(
-        "SELECT * FROM feedback_events WHERE query_id = ? ORDER BY created_at", (query_id,)
+        "SELECT * FROM feedback_events WHERE query_id = %s ORDER BY created_at", (query_id,)
     ).fetchall()
     return [
         FeedbackEvent(
@@ -687,7 +701,7 @@ def insert_vlm_call(conn: sqlite3.Connection, rec: dict) -> None:
         """
         INSERT INTO vlm_calls (call_id, created_at, key_id, model, task, meme_id,
                                status, latency_ms, prompt_tokens, completion_tokens, error)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             new_id("vc"),
@@ -729,7 +743,7 @@ _MODEL_PREFIX = "model:"
 def get_task_models(conn: sqlite3.Connection) -> dict[str, str]:
     """回傳有設定覆寫的 {task: model_id}（未設定的任務不列入 → 呼叫端用 VLM 預設）。"""
     rows = conn.execute(
-        "SELECT key, value FROM settings WHERE key LIKE ?", (_MODEL_PREFIX + "%",)
+        "SELECT key, value FROM settings WHERE key LIKE %s", (_MODEL_PREFIX + "%",)
     ).fetchall()
     return {r["key"][len(_MODEL_PREFIX):]: r["value"] for r in rows if r["value"]}
 
@@ -741,14 +755,14 @@ def set_task_models(conn: sqlite3.Connection, mapping: dict[str, str | None]) ->
         if model:
             conn.execute(
                 """
-                INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+                INSERT INTO settings (key, value, updated_at) VALUES (%s, %s, %s)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value,
                                                updated_at = excluded.updated_at
                 """,
                 (key, model, _now_iso()),
             )
         else:
-            conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+            conn.execute("DELETE FROM settings WHERE key = %s", (key,))
     conn.commit()
 
 
@@ -770,7 +784,7 @@ def create_task(
         """
         INSERT INTO tasks (task_id, client_id, input_type, label, status,
                            created_at, updated_at)
-        VALUES (?, ?, ?, ?, 'pending', ?, ?)
+        VALUES (%s, %s, %s, %s, 'pending', %s, %s)
         """,
         (task_id, client_id, input_type, label, now, now),
     )
@@ -787,7 +801,7 @@ def set_task_status(
 ) -> None:
     """更新任務狀態；done 時附 result，error 時附 error 訊息。"""
     conn.execute(
-        "UPDATE tasks SET status = ?, result = ?, error = ?, updated_at = ? WHERE task_id = ?",
+        "UPDATE tasks SET status = %s, result = %s, error = %s, updated_at = %s WHERE task_id = %s",
         (
             status,
             _dumps(result) if result is not None else None,
@@ -801,7 +815,7 @@ def set_task_status(
 
 def get_task(conn: sqlite3.Connection, task_id: str) -> dict | None:
     """讀單一任務（含完整 result）；查無回 None。"""
-    row = conn.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+    row = conn.execute("SELECT * FROM tasks WHERE task_id = %s", (task_id,)).fetchone()
     if row is None:
         return None
     task = dict(row)
@@ -818,9 +832,9 @@ def list_tasks_by_client(
         SELECT task_id, client_id, input_type, label, status, error,
                created_at, updated_at, (result IS NOT NULL) AS has_result
         FROM tasks
-        WHERE client_id = ?
-        ORDER BY created_at DESC, rowid DESC
-        LIMIT ?
+        WHERE client_id = %s
+        ORDER BY created_at DESC, task_id DESC
+        LIMIT %s
         """,
         (client_id, limit),
     ).fetchall()

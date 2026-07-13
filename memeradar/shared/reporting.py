@@ -36,10 +36,10 @@ def _group_rows(buckets: dict[Any, dict[str, int]]) -> list[dict]:
 def _params_key(params_snapshot: dict) -> str:
     params = (params_snapshot or {}).get("params", {})
     return (
-        f"n={params.get('top_n', '?')} "
-        f"sim≥{params.get('min_similarity', '?')} "
-        f"div={params.get('diversity', '?')} "
-        f"hot={params.get('hotness_weight', '?')}"
+        f"n={params.get('top_n', '%s')} "
+        f"sim≥{params.get('min_similarity', '%s')} "
+        f"div={params.get('diversity', '%s')} "
+        f"hot={params.get('hotness_weight', '%s')}"
     )
 
 

@@ -4,9 +4,9 @@
 讀回一致 → 推薦紀錄與回饋事件關聯正確。
 """
 
-import sqlite3
 from dataclasses import replace
 
+import psycopg.errors
 import pytest
 
 from memeradar.shared import repository as repo
@@ -74,36 +74,12 @@ def make_seed_meme() -> tuple[Meme, MemeAnnotation, MemeSource, Embedding]:
     return meme, annotation, source, embedding
 
 
-class TestThreadSafety:
-    def test_connection_can_close_from_another_thread(self, tmp_path):
-        """FastAPI 的 sync yield 依賴會在不同 threadpool 執行緒 setup/teardown：
-        連線在 A 執行緒建立、B 執行緒關閉；預設 check_same_thread=True 會丟
-        ProgrammingError → 端點在並發下 500（圖片牆一次載多張即引爆）。"""
-        import threading
-
-        c = connect(tmp_path / "cross.sqlite3")
-        migrate(c)
-        errors: list[Exception] = []
-
-        def close_elsewhere():
-            try:
-                c.execute("SELECT 1").fetchone()  # 跨執行緒查詢
-                c.close()  # 跨執行緒關閉（原 bug 觸發點）
-            except Exception as exc:  # noqa: BLE001
-                errors.append(exc)
-
-        t = threading.Thread(target=close_elsewhere)
-        t.start()
-        t.join()
-        assert not errors, errors
-
-
 class TestMigration:
     def test_migrate_creates_all_tables(self, conn):
         rows = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
         ).fetchall()
-        names = {r["name"] for r in rows}
+        names = {r["tablename"] for r in rows}
         assert {
             "memes",
             "meme_sources",
@@ -112,13 +88,12 @@ class TestMigration:
             "recommendation_logs",
             "feedback_events",
             "crawl_state",
-            "schema_migrations",
         } <= names
 
     def test_migrate_is_idempotent(self, conn):
-        migrate(conn)  # 重跑不應報錯、不重複套用
-        applied = conn.execute("SELECT version FROM schema_migrations").fetchall()
-        assert len(applied) == len({r["version"] for r in applied})
+        migrate(conn)  # 重跑不應報錯（Alembic 已在 head 時為 no-op）
+        version = conn.execute("SELECT version_num FROM alembic_version").fetchone()
+        assert version["version_num"] == "0001_baseline"
 
 
 class TestSeedRoundtrip:
@@ -147,7 +122,7 @@ class TestSeedRoundtrip:
 
         embs = repo.get_embeddings(conn, meme.meme_id)
         assert len(embs) == 1
-        assert embs[0].vector == [0.125, -0.5, 0.75]
+        assert embs[0].vector == pytest.approx([0.125, -0.5, 0.75])
         assert embs[0].model == "bge-m3@v1"
 
     def test_find_by_sha256_and_unique_constraint(self, conn):
@@ -157,7 +132,7 @@ class TestSeedRoundtrip:
         assert repo.find_meme_by_sha256(conn, "f" * 64) is None
 
         dup = Meme(meme_id=new_id("m"), image_uri="x.png", sha256=meme.sha256)
-        with pytest.raises(sqlite3.IntegrityError):
+        with pytest.raises(psycopg.errors.IntegrityError):
             repo.insert_meme(conn, dup)
 
     def test_annotation_upsert_overwrites(self, conn):
@@ -196,7 +171,7 @@ class TestSeedRoundtrip:
     def test_invalid_status_rejected(self, conn):
         meme, *_ = make_seed_meme()
         repo.insert_meme(conn, meme)
-        with pytest.raises(sqlite3.IntegrityError):
+        with pytest.raises(psycopg.errors.IntegrityError):
             repo.set_status(conn, meme.meme_id, "not-a-status")
 
 
@@ -219,7 +194,8 @@ class TestGetVectors:
             conn, kind="text_retrieval", model="sig|v1",
             meme_ids=[meme_a.meme_id, "m_missing"],
         )
-        assert vectors == {meme_a.meme_id: [0.1, 0.2]}  # 只回簽名相符者；缺席者不含
+        assert list(vectors) == [meme_a.meme_id]  # 只回簽名相符者；缺席者不含
+        assert vectors[meme_a.meme_id] == pytest.approx([0.1, 0.2])
 
     def test_empty_ids_returns_empty(self, conn):
         assert repo.get_vectors(conn, kind="text_retrieval", model="sig|v1", meme_ids=[]) == {}
@@ -429,7 +405,7 @@ class TestRecommendationAndFeedback:
             rank=1,
             rating="down",
         )
-        with pytest.raises(sqlite3.IntegrityError):
+        with pytest.raises(psycopg.errors.IntegrityError):
             repo.insert_feedback(conn, fb)
 
     def test_invalid_rating_rejected(self, conn):
@@ -443,5 +419,5 @@ class TestRecommendationAndFeedback:
             rank=1,
             rating="meh",
         )
-        with pytest.raises(sqlite3.IntegrityError):
+        with pytest.raises(psycopg.errors.IntegrityError):
             repo.insert_feedback(conn, fb)

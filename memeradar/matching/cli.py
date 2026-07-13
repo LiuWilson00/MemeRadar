@@ -39,7 +39,7 @@ def run_query(
 
 def count_indexed(conn: sqlite3.Connection, signature: str) -> int:
     row = conn.execute(
-        "SELECT COUNT(*) AS n FROM embeddings WHERE kind = 'text_retrieval' AND model = ?",
+        "SELECT COUNT(*) AS n FROM embeddings WHERE kind = 'text_retrieval' AND model = %s",
         (signature,),
     ).fetchone()
     return row["n"]
