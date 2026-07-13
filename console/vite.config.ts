@@ -30,6 +30,8 @@ export default defineConfig({
       "/review": API,
       "/report": API,
       "/vlm": API,
+      "/tasks": API, // 非同步推薦任務（前台送出/輪詢/歷史）
+      "/settings": API, // 後台各任務模型設定
     },
   },
   test: {
