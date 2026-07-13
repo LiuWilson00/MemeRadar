@@ -63,6 +63,7 @@ class Deps:
     data_dir: Path
     admin_username: str = ""  # 後台登入；空 = 不設防
     admin_password: str = ""
+    cors_origins: tuple[str, ...] = ()  # 允許跨源的前端網域（本地留空＝走 vite proxy）
     # 背景任務排程器：接一個 no-arg callable。None = 用內建 thread pool；
     # 測試注入 ``lambda fn: fn()`` 讓非同步任務同步跑完。每請求讀取，故可事後覆寫。
     run_async: Any = None
@@ -85,6 +86,7 @@ def _default_deps() -> Deps:
         data_dir=settings.memeradar_data_dir,
         admin_username=settings.admin_username,
         admin_password=settings.admin_password,
+        cors_origins=tuple(settings.cors_origin_list()),
     )
 
 
@@ -164,6 +166,8 @@ def create_app(deps: Deps | None = None) -> FastAPI:
 
     startup_conn = connect(deps.db_path)
     migrate(startup_conn)
+    # 背景任務池不跨程序重啟：把上次殘留的 pending/running 標成 error，前台才不會永遠輪詢
+    repo.abort_orphan_tasks(startup_conn)
     startup_conn.close()
 
     app = FastAPI(title="MemeRadar API", version="0.1.0")
@@ -187,6 +191,19 @@ def create_app(deps: Deps | None = None) -> FastAPI:
                         headers={"WWW-Authenticate": 'Basic realm="MemeRadar Admin"'},
                     )
         return await call_next(request)
+
+    # CORS 加在 admin_gate 之後 → 成為最外層，連 401 回應都帶 CORS 標頭
+    # （前端跨源送 admin Basic auth 時，才能讀到 401 而非被瀏覽器擋成網路錯誤）。
+    if deps.cors_origins:
+        from fastapi.middleware.cors import CORSMiddleware
+
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(deps.cors_origins),
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     def get_conn() -> Iterator[psycopg.Connection]:
         conn = connect(deps.db_path)
@@ -507,9 +524,14 @@ def create_app(deps: Deps | None = None) -> FastAPI:
 
 
 def main() -> None:
+    import os
+
     import uvicorn
 
-    uvicorn.run(create_app(), host="127.0.0.1", port=8000)
+    # 容器內須綁 0.0.0.0 才對外可達；port 吃平台注入的 $PORT（Zeabur 等），本地預設 8000
+    host = os.environ.get("HOST", "0.0.0.0")
+    port = int(os.environ.get("PORT", "8000"))
+    uvicorn.run(create_app(), host=host, port=port)
 
 
 if __name__ == "__main__":

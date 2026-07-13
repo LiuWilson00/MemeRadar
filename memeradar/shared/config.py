@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # PostgreSQL 連線（libpq 格式）；本地開發用 docker-compose 起的 pgvector，
     # 上 prod 只換這條字串。圖檔仍存在 memeradar_data_dir/images 下（非 DB）。
     database_url: str = "postgresql://memeradar:memeradar@localhost:5432/memeradar"
+    # 允許跨源呼叫 API 的前端網域（逗號分隔）；本地開發走 vite proxy＝同源，故留空即可。
+    cors_origins: str = ""
+
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     def nvidia_keys(self) -> list[str]:
         return [k.strip() for k in self.nvidia_api_keys.split(",") if k.strip()]

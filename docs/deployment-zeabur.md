@@ -94,7 +94,13 @@ API 很重（torch + BGE ~2–4GB RAM、冷啟 ~40s，且掛 Volume 後每次重
 
 ## 3. 上線前必改的程式碼（Checklist）
 
-> 這些是「不改就會壞 / 不安全」的項目。每項附最小 snippet。可請我直接實作。
+> **實作狀態（2026-07）**：🔴 全部已完成，🟡 完成登入與孤兒回收，尚餘限流與連線池。
+> - ✅ 3.1 host binding、✅ 3.2 CORS、✅ 3.3 前端 API base（`apiFetch`/`imageUrl`+`VITE_API_BASE_URL`）
+> - ✅ 3.4 圖片走 `MEMERADAR_DATA_DIR=/data`（Dockerfile 已設，配 Volume 即可；程式本就用 data_dir）
+> - ✅ 3.5 任務孤兒回收、✅ 3.6 後台登入頁（`AdminGate`：探測 401 → 登入表單 → 帶 Basic 標頭）
+> - ⬜ 3.7 限流、⬜ 3.8 連線池（規模化再補）
+>
+> 下面保留每項的說明與 snippet 供參考。
 
 ### 🔴 3.1 uvicorn 綁 `0.0.0.0` + 讀 `$PORT`（否則容器外打不到）
 `memeradar/api/app.py` 的 `main()`：

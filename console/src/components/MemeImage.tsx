@@ -1,5 +1,6 @@
 import { ImageOff } from "lucide-react";
 import { useState } from "react";
+import { imageUrl } from "../lib/api";
 
 /** 梗圖顯示元件：載入失敗時顯示可點擊重試的佔位，避免破圖 icon + 版面壓扁。
  *
@@ -20,6 +21,9 @@ export default function MemeImage({
 }) {
   const [failed, setFailed] = useState(false);
   const [reload, setReload] = useState(0);
+  // 跨源部署時圖片 URL 要帶 API base；同源時不變
+  const resolvedSrc = imageUrl(src);
+  const resolvedHref = href ? imageUrl(href) : undefined;
 
   if (failed) {
     return (
@@ -43,7 +47,11 @@ export default function MemeImage({
 
   const img = (
     <img
-      src={reload ? `${src}${src.includes("?") ? "&" : "?"}r=${reload}` : src}
+      src={
+        reload
+          ? `${resolvedSrc}${resolvedSrc.includes("?") ? "&" : "?"}r=${reload}`
+          : resolvedSrc
+      }
       alt={alt}
       className={className}
       loading="lazy"
@@ -51,8 +59,8 @@ export default function MemeImage({
     />
   );
 
-  return href ? (
-    <a href={href} target="_blank" rel="noreferrer" title="開新分頁檢視原圖">
+  return resolvedHref ? (
+    <a href={resolvedHref} target="_blank" rel="noreferrer" title="開新分頁檢視原圖">
       {img}
     </a>
   ) : (

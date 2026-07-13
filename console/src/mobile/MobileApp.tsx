@@ -24,6 +24,7 @@ import {
   fetchMeta,
   fetchTask,
   fetchTaskHistory,
+  imageUrl,
   sendFeedback,
   submitTask,
   type TaskInput,
@@ -820,7 +821,7 @@ function Slide({
           {item.matched_strategy}
         </span>
         <button
-          onClick={() => saveImage(item.image_url, `memeradar-${item.meme_id.slice(2, 10)}`)}
+          onClick={() => saveImage(imageUrl(item.image_url), `memeradar-${item.meme_id.slice(2, 10)}`)}
           className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-full bg-ink/80 px-3 py-1.5 text-xs text-fg active:bg-ink"
           aria-label="儲存這張梗圖"
         >

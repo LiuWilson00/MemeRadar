@@ -61,3 +61,21 @@ class TestTaskHistory:
         for i in range(5):
             repo.create_task(conn, f"t{i}", client_id="c_me", input_type="text", label="x")
         assert len(repo.list_tasks_by_client(conn, "c_me", limit=2)) == 2
+
+
+class TestOrphanRecovery:
+    def test_abort_orphan_marks_running_and_pending_as_error(self, conn):
+        # 背景 ThreadPool 不跨重啟：啟動時把上次沒跑完的任務標成 error，前台才不會永遠輪詢
+        repo.create_task(conn, "run", client_id="c", input_type="text", label="x")
+        repo.set_task_status(conn, "run", "running")
+        repo.create_task(conn, "pend", client_id="c", input_type="text", label="x")  # 維持 pending
+        repo.create_task(conn, "done", client_id="c", input_type="text", label="x")
+        repo.set_task_status(conn, "done", "done", result={"ok": 1})
+
+        n = repo.abort_orphan_tasks(conn)
+
+        assert n == 2  # run + pend
+        assert repo.get_task(conn, "run")["status"] == "error"
+        assert repo.get_task(conn, "pend")["status"] == "error"
+        assert repo.get_task(conn, "run")["error"]
+        assert repo.get_task(conn, "done")["status"] == "done"  # 已完成的不動

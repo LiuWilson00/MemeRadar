@@ -807,6 +807,32 @@ class TestModelSettingsEndpoints:
         assert client.get("/vlm/usage").status_code == 401
 
 
+class TestProdHardening:
+    def test_orphan_tasks_aborted_on_startup(self, tmp_path):
+        # 先塞一個 running 任務，建 app 時的啟動清理應把它標成 error（模擬重啟）
+        conn = connect(tmp_path / "x")  # 走 DATABASE_URL（測試容器）
+        repo.create_task(conn, "orphan", client_id="c", input_type="text", label="x")
+        repo.set_task_status(conn, "orphan", "running")
+        deps = Deps(client=DualStubClient(), vlm=StubVlm(), embedder=FakeEmbedder(),
+                    db_path=tmp_path, data_dir=tmp_path)
+        create_app(deps)
+        assert repo.get_task(conn, "orphan")["status"] == "error"
+        conn.close()
+
+    def test_cors_headers_when_configured(self, tmp_path):
+        deps = Deps(client=DualStubClient(), vlm=StubVlm(), embedder=FakeEmbedder(),
+                    db_path=tmp_path, data_dir=tmp_path,
+                    cors_origins=("https://app.example.com",))
+        client = TestClient(create_app(deps))
+        r = client.get("/health", headers={"Origin": "https://app.example.com"})
+        assert r.headers.get("access-control-allow-origin") == "https://app.example.com"
+
+    def test_no_cors_headers_when_unconfigured(self, env):
+        client, *_ = env  # cors_origins 預設空
+        r = client.get("/health", headers={"Origin": "https://evil.example.com"})
+        assert "access-control-allow-origin" not in r.headers
+
+
 class TestAsyncTasksRealExecutor:
     """不注入 run_async：驗證真正的 ThreadPoolExecutor 背景執行 + 自開連線可行。"""
 

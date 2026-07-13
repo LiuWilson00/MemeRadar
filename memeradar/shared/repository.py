@@ -813,6 +813,20 @@ def set_task_status(
     conn.commit()
 
 
+def abort_orphan_tasks(conn: sqlite3.Connection) -> int:
+    """把殘留的 pending/running 任務標成 error（背景 ThreadPool 不跨程序重啟）。
+
+    啟動時呼叫，避免服務重部署後前台永遠輪詢一個永不完成的 running 任務。回傳受影響筆數。
+    """
+    cur = conn.execute(
+        "UPDATE tasks SET status = 'error', error = %s, updated_at = %s "
+        "WHERE status IN ('pending', 'running')",
+        ("服務重啟，任務中斷，請重新送出", _now_iso()),
+    )
+    conn.commit()
+    return cur.rowcount
+
+
 def get_task(conn: sqlite3.Connection, task_id: str) -> dict | None:
     """讀單一任務（含完整 result）；查無回 None。"""
     row = conn.execute("SELECT * FROM tasks WHERE task_id = %s", (task_id,)).fetchone()

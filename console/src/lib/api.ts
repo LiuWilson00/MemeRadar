@@ -21,6 +21,30 @@ import type {
 import { getClientId } from "./clientId";
 import type { UploadOutcome } from "./uploadQueue";
 
+// API base：跨源部署時設 VITE_API_BASE_URL（build 期注入）；本地 / 同源部署留空＝相對路徑。
+const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "";
+
+/** 後台登入憑證（sessionStorage，由登入頁寫入）；帶在每個請求上，公開端點會忽略它。 */
+function authHeaders(): Record<string, string> {
+  if (typeof sessionStorage === "undefined") return {};
+  const creds = sessionStorage.getItem("memeradar.adminAuth");
+  return creds ? { Authorization: `Basic ${creds}` } : {};
+}
+
+/** 統一 fetch：補 API base + admin 認證標頭。所有 API 呼叫都走這個。 */
+export function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(API_BASE + path, {
+    ...init,
+    headers: { ...authHeaders(), ...(init.headers ?? {}) },
+  });
+}
+
+/** 圖片等資源的完整 URL（跨源部署時要帶 API base）。只對 / 開頭的相對路徑加，
+ * data:／完整 URL 原樣通過，故可重複套用而不會重複加前綴。 */
+export function imageUrl(path: string): string {
+  return path.startsWith("/") ? API_BASE + path : path;
+}
+
 export const DEFAULT_FILTERS: Filters = {
   franchises: [],
   categories: [],
@@ -62,7 +86,7 @@ export async function recommend(
   filters: Filters,
   params: Params,
 ): Promise<RecommendResponse> {
-  const response = await fetch("/recommend", {
+  const response = await apiFetch("/recommend", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(buildRecommendRequest(turns, filters, params)),
@@ -76,7 +100,7 @@ export async function recommendByMemeBattle(
   filters: Filters = DEFAULT_FILTERS,
   params: Params = DEFAULT_PARAMS,
 ): Promise<RecommendResponse> {
-  const response = await fetch("/recommend", {
+  const response = await apiFetch("/recommend", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -97,7 +121,7 @@ export async function recommendByScreenshot(
   filters: Filters = DEFAULT_FILTERS,
   params: Params = DEFAULT_PARAMS,
 ): Promise<RecommendResponse> {
-  const response = await fetch("/recommend", {
+  const response = await apiFetch("/recommend", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -139,7 +163,7 @@ export async function submitTask(
   filters: Filters,
   params: Params,
 ): Promise<{ task_id: string; status: TaskStatus }> {
-  const response = await fetch("/tasks", {
+  const response = await apiFetch("/tasks", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(buildTaskRequest(input, filters, params)),
@@ -149,12 +173,12 @@ export async function submitTask(
 
 /** 查單一任務進度 / 結果（前台輪詢）。 */
 export async function fetchTask(taskId: string): Promise<TaskDetail> {
-  return unwrap<TaskDetail>(await fetch(`/tasks/${encodeURIComponent(taskId)}`));
+  return unwrap<TaskDetail>(await apiFetch(`/tasks/${encodeURIComponent(taskId)}`));
 }
 
 /** 本機 client 的歷史任務（新到舊）。 */
 export async function fetchTaskHistory(): Promise<TaskSummary[]> {
-  return unwrap<TaskSummary[]>(await fetch(`/tasks?client_id=${encodeURIComponent(getClientId())}`));
+  return unwrap<TaskSummary[]>(await apiFetch(`/tasks?client_id=${encodeURIComponent(getClientId())}`));
 }
 
 export async function sendFeedback(body: {
@@ -164,7 +188,7 @@ export async function sendFeedback(body: {
   rating: "up" | "down";
   note?: string | null;
 }): Promise<void> {
-  const response = await fetch("/feedback", {
+  const response = await apiFetch("/feedback", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -173,15 +197,15 @@ export async function sendFeedback(body: {
 }
 
 export async function fetchMeta(): Promise<Meta> {
-  return unwrap<Meta>(await fetch("/meta"));
+  return unwrap<Meta>(await apiFetch("/meta"));
 }
 
 export async function fetchHistory(): Promise<HistoryItem[]> {
-  return unwrap<HistoryItem[]>(await fetch("/history"));
+  return unwrap<HistoryItem[]>(await apiFetch("/history"));
 }
 
 export async function fetchHistoryDetail(queryId: string): Promise<HistoryDetail> {
-  return unwrap<HistoryDetail>(await fetch(`/history/${queryId}`));
+  return unwrap<HistoryDetail>(await apiFetch(`/history/${queryId}`));
 }
 
 export async function fetchMemes(
@@ -197,12 +221,12 @@ export async function fetchMemes(
     Object.entries(filters).filter(([, v]) => v) as [string, string][],
   );
   query.set("limit", String(limit));
-  return unwrap<LibraryMeme[]>(await fetch(`/memes?${query}`));
+  return unwrap<LibraryMeme[]>(await apiFetch(`/memes?${query}`));
 }
 
 /** 手動上傳（seed 匯入口）：匯入 → 標註 → 向量化，約 8–12 秒。 */
 export async function uploadMeme(imageBase64: string, titleHint: string): Promise<UploadResult> {
-  const response = await fetch("/memes", {
+  const response = await apiFetch("/memes", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ image: imageBase64, title_hint: titleHint || null }),
@@ -218,19 +242,19 @@ async function errorDetail(response: Response, fallback: string): Promise<string
 }
 
 export async function fetchVlmModels(): Promise<{ models: string[]; default: string | null }> {
-  return unwrap(await fetch("/vlm/models"));
+  return unwrap(await apiFetch("/vlm/models"));
 }
 
 /** 後台：各任務模型設定（含可選清單與 VLM 預設）。 */
 export async function fetchModelSettings(): Promise<ModelSettings> {
-  return unwrap<ModelSettings>(await fetch("/settings/models"));
+  return unwrap<ModelSettings>(await apiFetch("/settings/models"));
 }
 
 /** 後台：設定各任務模型；值為 null / 空字串 = 回預設。 */
 export async function updateModelSettings(
   models: Record<string, string | null>,
 ): Promise<void> {
-  const response = await fetch("/settings/models", {
+  const response = await apiFetch("/settings/models", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ models }),
@@ -240,7 +264,7 @@ export async function updateModelSettings(
 
 /** 後台：NVIDIA 呼叫用量（各 key × 狀態的呼叫數與平均延遲）。 */
 export async function fetchVlmUsage(): Promise<VlmUsageRow[]> {
-  return unwrap<VlmUsageRow[]>(await fetch("/vlm/usage"));
+  return unwrap<VlmUsageRow[]>(await apiFetch("/vlm/usage"));
 }
 
 /** 分類版上傳（批次佇列用）：以 HTTP 狀態碼區分成功 / 重複 / 失敗，不丟例外。 */
@@ -251,7 +275,7 @@ export async function uploadMemeClassified(
 ): Promise<UploadOutcome> {
   let response: Response;
   try {
-    response = await fetch("/memes", {
+    response = await apiFetch("/memes", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -279,7 +303,7 @@ export async function uploadMemeClassified(
 }
 
 export async function fetchFeedbackReport(): Promise<FeedbackReport> {
-  return unwrap<FeedbackReport>(await fetch("/report/feedback"));
+  return unwrap<FeedbackReport>(await apiFetch("/report/feedback"));
 }
 
 /** 標註複核：通過（可帶標籤修補，後端會重建向量）或淘汰。 */
@@ -288,7 +312,7 @@ export async function reviewAnnotation(
   action: "approve" | "remove",
   patch?: AnnotationPatch,
 ): Promise<void> {
-  const response = await fetch(`/review/annotations/${memeId}`, {
+  const response = await apiFetch(`/review/annotations/${memeId}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action, patch: patch ?? null }),
@@ -297,14 +321,14 @@ export async function reviewAnnotation(
 }
 
 export async function fetchDedupReviews(): Promise<DedupReviewItem[]> {
-  return unwrap<DedupReviewItem[]>(await fetch("/review/dedup"));
+  return unwrap<DedupReviewItem[]>(await apiFetch("/review/dedup"));
 }
 
 export async function resolveDedup(
   reviewId: string,
   resolution: "merged" | "distinct",
 ): Promise<void> {
-  const response = await fetch(`/review/dedup/${reviewId}`, {
+  const response = await apiFetch(`/review/dedup/${reviewId}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ resolution }),
@@ -314,7 +338,7 @@ export async function resolveDedup(
 
 /** 截圖 → 結構化對話（後端僅記憶體處理，不落庫）。約 5–8 秒。 */
 export async function parseScreenshot(imageBase64: string): Promise<ScreenshotParse> {
-  const response = await fetch("/parse-screenshot", {
+  const response = await apiFetch("/parse-screenshot", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ image: imageBase64 }),

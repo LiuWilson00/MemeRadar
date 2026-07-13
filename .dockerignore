@@ -1,0 +1,16 @@
+# 縮小 build context：不需要進 API 映像的東西
+.git
+.venv
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+node_modules
+console/node_modules
+console/dist
+data/                 # 本機 DB / 圖檔（prod 走 Volume + 私有 PG）
+docs/
+tests/
+.env
+*.sqlite3

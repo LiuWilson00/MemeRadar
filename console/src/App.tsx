@@ -1,5 +1,6 @@
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, LogOut } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import AdminGate, { logout } from "./components/AdminGate";
 import ConversationEditor from "./components/ConversationEditor";
 import DebugPanel from "./components/DebugPanel";
 import HistoryView from "./components/HistoryView";
@@ -86,6 +87,7 @@ export default function App() {
   const allZeroHits = Object.values(hits).length > 0 && Object.values(hits).every((n) => n === 0);
 
   return (
+    <AdminGate>
     <div className="flex h-screen flex-col">
       <header className="flex items-center gap-3 border-b border-line px-4 py-2.5">
         <h1 className="font-mono text-sm font-semibold tracking-[0.3em]">
@@ -113,6 +115,13 @@ export default function App() {
           />
           API {apiUp === false ? "離線——請啟動 python -m memeradar.api" : apiUp ? "連線中" : "…"}
         </span>
+        <button
+          onClick={logout}
+          title="登出"
+          className="flex items-center gap-1 text-xs text-muted hover:text-fg"
+        >
+          <LogOut className="size-3.5" /> 登出
+        </button>
       </header>
 
       {tab === "history" && <HistoryView onReplay={replay} />}
@@ -190,5 +199,6 @@ export default function App() {
         />
       </main>
     </div>
+    </AdminGate>
   );
 }
