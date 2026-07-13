@@ -98,25 +98,37 @@ class NvidiaVlm:
         log: Callable[[dict], None] | None = None,
         model: str | None = None,
     ) -> str:
-        """送圖 + prompt 給 VLM，回傳原始文字（結構化解析由呼叫端負責）。
+        """送圖 + prompt 給 VLM，回傳原始文字（結構化解析由呼叫端負責）。"""
+        content = [
+            {"type": "text", "text": user_text},
+            {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{image_b64}"}},
+        ]
+        return self._complete(system, content, task=task, meme_id=meme_id, log=log, model=model)
 
-        ``log`` / ``meme_id`` 為單次呼叫用：讓呼叫端把用量寫進帶當前連線的 log 表。
-        ``model`` 覆寫本次使用的模型（Console 模型切換按鈕用）。
+    def chat(
+        self,
+        system: str,
+        user_text: str,
+        *,
+        task: str = "text",
+        meme_id: str | None = None,
+        log: Callable[[dict], None] | None = None,
+        model: str | None = None,
+    ) -> str:
+        """純文字 prompt（意圖 / rerank 等無圖任務用），回傳原始文字。"""
+        return self._complete(system, user_text, task=task, meme_id=meme_id, log=log, model=model)
+
+    def _complete(self, system, user_content, *, task, meme_id, log, model) -> str:
+        """核心：多把 key 輪替 + 撞 429 冷卻換 key + 全冷卻就等。
+
+        ``user_content`` 可為字串（純文字）或 content 陣列（含圖）。
+        ``log`` / ``meme_id`` 供呼叫端把用量寫進帶當前連線的表；``model`` 覆寫模型。
         """
         sink = log or self._log
         use_model = model or self._model
         messages = [
             {"role": "system", "content": system},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": user_text},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{media_type};base64,{image_b64}"},
-                    },
-                ],
-            },
+            {"role": "user", "content": user_content},
         ]
         deadline = self._now() + self._max_wait_s
         while True:
@@ -167,3 +179,54 @@ class NvidiaVlm:
                 "error": error,
             }
         )
+
+
+# ── 結構化輸出 helper（意圖 / rerank / 截圖 / 對方梗圖共用）───────────
+
+
+def extract_json(raw: str) -> str | None:
+    """從模型回應抽出 JSON 物件（容忍 markdown 圍欄與前後贅字）。"""
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        return None
+    return raw[start : end + 1]
+
+
+def call_structured(
+    vlm: NvidiaVlm,
+    result_model,
+    system: str,
+    user_text: str,
+    *,
+    image_b64: str | None = None,
+    media_type: str | None = None,
+    task: str = "text",
+    meme_id: str | None = None,
+    log: Callable[[dict], None] | None = None,
+    model: str | None = None,
+    retries: int = 2,
+):
+    """呼叫 VLM 並解析為 ``result_model``（pydantic）；格式/驗證失敗重試，耗盡回 None。
+
+    有 ``image_b64`` 走 vision（annotate），否則走純文字（chat）。
+    """
+    import json
+
+    from pydantic import ValidationError
+
+    for _ in range(retries + 1):
+        if image_b64 is not None:
+            raw = vlm.annotate(
+                image_b64, media_type or "image/png", system, user_text,
+                task=task, meme_id=meme_id, log=log, model=model,
+            )
+        else:
+            raw = vlm.chat(system, user_text, task=task, meme_id=meme_id, log=log, model=model)
+        fragment = extract_json(raw)
+        if fragment is not None:
+            try:
+                return result_model(**json.loads(fragment))
+            except (json.JSONDecodeError, ValidationError, TypeError):
+                pass
+    return None

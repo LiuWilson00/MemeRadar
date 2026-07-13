@@ -24,9 +24,11 @@ class FakeClient:
     def __init__(self, script):
         self.script = list(script)
         self.calls = 0
+        self.last_kwargs = None
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
 
     def _create(self, **kwargs):
+        self.last_kwargs = kwargs
         action = self.script[min(self.calls, len(self.script) - 1)]
         self.calls += 1
         if action == "429":
@@ -124,6 +126,42 @@ class TestLogging:
         vlm.annotate("B", "image/png", "s", "u", meme_id="m_42", log=per_call.append)
         assert instance_logs == []  # 未落到 instance log
         assert per_call[-1]["meme_id"] == "m_42"
+
+
+class TestTextChatAndStructured:
+    def test_chat_text_only_no_image(self):
+        client = FakeClient(['ok:{"summary":"對方生氣"}'])
+        vlm, *_ = make([client])
+        out = vlm.chat("你是意圖分析器", "分析這段對話")
+        assert out == '{"summary":"對方生氣"}'
+        # 純文字：user content 是字串，不含 image_url
+        user_msg = client.last_kwargs["messages"][-1]["content"]
+        assert isinstance(user_msg, str)
+
+    def test_call_structured_parses_and_retries(self):
+        from pydantic import BaseModel
+
+        class R(BaseModel):
+            summary: str
+
+        # 第一次回非 JSON → 重試 → 第二次回合法 JSON
+        client = FakeClient(["ok:抱歉無法分析", 'ok:{"summary":"對方生氣"}'])
+        vlm, *_ = make([client])
+        from memeradar.understanding.nvidia_vlm import call_structured
+
+        result = call_structured(vlm, R, "系統", "使用者", retries=2)
+        assert result is not None and result.summary == "對方生氣"
+
+    def test_call_structured_returns_none_when_exhausted(self):
+        from pydantic import BaseModel
+
+        class R(BaseModel):
+            summary: str
+
+        vlm, *_ = make([FakeClient(["ok:完全不是 JSON"])])
+        from memeradar.understanding.nvidia_vlm import call_structured
+
+        assert call_structured(vlm, R, "系統", "使用者", retries=1) is None
 
 
 class TestVlmCallLogTable:
