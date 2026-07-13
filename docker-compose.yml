@@ -1,0 +1,22 @@
+# 本地開發用 PostgreSQL + pgvector（prod 換成雲端 Postgres，只改 DATABASE_URL）。
+# 啟動：docker compose up -d   關閉：docker compose down（資料留在 named volume）
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: memeradar-db
+    environment:
+      POSTGRES_USER: memeradar
+      POSTGRES_PASSWORD: memeradar
+      POSTGRES_DB: memeradar
+    ports:
+      - "5432:5432"
+    volumes:
+      - memeradar_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U memeradar -d memeradar"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  memeradar_pgdata:

@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     admin_username: str = ""
     admin_password: str = ""
     memeradar_data_dir: Path = Path("./data")
+    # PostgreSQL 連線（libpq 格式）；本地開發用 docker-compose 起的 pgvector，
+    # 上 prod 只換這條字串。圖檔仍存在 memeradar_data_dir/images 下（非 DB）。
+    database_url: str = "postgresql://memeradar:memeradar@localhost:5432/memeradar"
 
     def nvidia_keys(self) -> list[str]:
         return [k.strip() for k in self.nvidia_api_keys.split(",") if k.strip()]
