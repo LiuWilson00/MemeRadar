@@ -28,7 +28,13 @@ class Settings(BaseSettings):
     voyage_api_key: str = ""
     reddit_client_id: str = ""
     reddit_client_secret: str = ""
+    # NVIDIA NIM（VLM 標註）：多把免費 key 逗號分隔，輪流用以分攤速率限制
+    nvidia_api_keys: str = ""
+    nvidia_vlm_model: str = "qwen/qwen3.5-122b-a10b"
     memeradar_data_dir: Path = Path("./data")
+
+    def nvidia_keys(self) -> list[str]:
+        return [k.strip() for k in self.nvidia_api_keys.split(",") if k.strip()]
 
     def require(self, field_name: str) -> str:
         value = getattr(self, field_name)

@@ -19,6 +19,17 @@ def test_reads_api_key_from_env(monkeypatch):
     assert get_settings().anthropic_api_key == "sk-test-123"
 
 
+def test_nvidia_keys_parsed_from_comma_list(monkeypatch):
+    monkeypatch.setenv("NVIDIA_API_KEYS", "nvapi-aaa, nvapi-bbb ,nvapi-ccc")
+    keys = get_settings().nvidia_keys()
+    assert keys == ["nvapi-aaa", "nvapi-bbb", "nvapi-ccc"]  # 去空白、忽略空項
+
+
+def test_nvidia_keys_empty_when_unset(monkeypatch):
+    monkeypatch.delenv("NVIDIA_API_KEYS", raising=False)
+    assert Settings(_env_file=None).nvidia_keys() == []
+
+
 def test_defaults_allow_offline_dev(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
