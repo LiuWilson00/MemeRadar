@@ -24,6 +24,37 @@ from memeradar.shared.config import get_settings
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 _schema_ready = False
+_pool = None  # psycopg_pool.ConnectionPool（惰性建立）
+_pool_dsn: str | None = None
+
+
+def get_pool():
+    """請求路徑用的連線池（短連線、頻繁）；背景任務仍用 connect() 開一次性長連線。
+
+    惰性建立，DSN 變更時重建（測試切到不同容器 DSN 時）。連線借出/歸還由
+    ``pool.connection()`` context manager 管理，離開時自動 commit/rollback 並歸還。
+    """
+    global _pool, _pool_dsn
+    from psycopg_pool import ConnectionPool
+
+    dsn = get_settings().database_url
+    if _pool is None or _pool_dsn != dsn:
+        if _pool is not None:
+            _pool.close()
+        _pool = ConnectionPool(
+            dsn, min_size=1, max_size=10, open=True,
+            kwargs={"row_factory": dict_row},
+        )
+        _pool_dsn = dsn
+    return _pool
+
+
+def close_pool() -> None:
+    global _pool, _pool_dsn
+    if _pool is not None:
+        _pool.close()
+        _pool = None
+        _pool_dsn = None
 
 
 def connect(dsn: str | Path | None = None) -> psycopg.Connection:

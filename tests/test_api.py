@@ -832,6 +832,18 @@ class TestProdHardening:
         r = client.get("/health", headers={"Origin": "https://evil.example.com"})
         assert "access-control-allow-origin" not in r.headers
 
+    def test_rate_limit_returns_429_after_max(self, tmp_path):
+        from memeradar.api.ratelimit import RateLimiter
+
+        deps = Deps(client=DualStubClient(), vlm=StubVlm(), embedder=FakeEmbedder(),
+                    db_path=tmp_path, data_dir=tmp_path,
+                    rate_limiter=RateLimiter(2, 60), run_async=lambda fn: None)
+        client = TestClient(create_app(deps))
+        body = {**BASE_REQUEST, "client_id": "c"}
+        assert client.post("/tasks", json=body).status_code == 202
+        assert client.post("/tasks", json=body).status_code == 202
+        assert client.post("/tasks", json=body).status_code == 429  # 第 3 次超限
+
 
 class TestAsyncTasksRealExecutor:
     """不注入 run_async：驗證真正的 ThreadPoolExecutor 背景執行 + 自開連線可行。"""

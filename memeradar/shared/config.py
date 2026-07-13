@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://memeradar:memeradar@localhost:5432/memeradar"
     # 允許跨源呼叫 API 的前端網域（逗號分隔）；本地開發走 vite proxy＝同源，故留空即可。
     cors_origins: str = ""
+    # 公開昂貴端點（/recommend、/tasks）每 IP 每分鐘上限；0 = 不限流。
+    rate_limit_per_min: int = 30
 
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

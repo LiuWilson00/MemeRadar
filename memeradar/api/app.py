@@ -2,7 +2,8 @@
 
 - ``create_app(deps)`` 工廠：測試注入 stub client / fake embedder，
   正式執行用 ``create_app()``（讀 settings、BGE-M3 lazy 載入）。
-- 每請求一條 SQLite 連線（sync 端點跑 threadpool，連線不跨執行緒共用）。
+- 請求路徑走 PostgreSQL 連線池（db.get_pool）；背景任務用一次性長連線。
+- 公開昂貴端點（/recommend、/tasks）依 IP 限流（RateLimiter）。
 - 啟動：``python -m memeradar.api``。
 """
 
@@ -17,10 +18,11 @@ from typing import Any
 
 import psycopg
 import psycopg.errors
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 from memeradar.api.pipeline import run_recommendation
+from memeradar.api.ratelimit import RateLimiter
 from memeradar.api.schemas import (
     DedupResolutionRequest,
     FeedbackRequest,
@@ -35,7 +37,7 @@ from memeradar.ingestion.seed_import import import_image_bytes
 from memeradar.matching.intent import IntentRefusedError
 from memeradar.matching.screenshot import ScreenshotParseError, parse_screenshot
 from memeradar.shared import repository as repo
-from memeradar.shared.db import connect, migrate
+from memeradar.shared.db import connect, get_pool, migrate
 from memeradar.shared.models import Embedding, FeedbackEvent, new_id
 from memeradar.shared.taxonomy import get_taxonomy
 from memeradar.understanding.annotator import annotate_meme
@@ -64,6 +66,7 @@ class Deps:
     admin_username: str = ""  # 後台登入；空 = 不設防
     admin_password: str = ""
     cors_origins: tuple[str, ...] = ()  # 允許跨源的前端網域（本地留空＝走 vite proxy）
+    rate_limiter: Any = None  # RateLimiter | None；None = 不限流（測試預設）
     # 背景任務排程器：接一個 no-arg callable。None = 用內建 thread pool；
     # 測試注入 ``lambda fn: fn()`` 讓非同步任務同步跑完。每請求讀取，故可事後覆寫。
     run_async: Any = None
@@ -87,6 +90,11 @@ def _default_deps() -> Deps:
         admin_username=settings.admin_username,
         admin_password=settings.admin_password,
         cors_origins=tuple(settings.cors_origin_list()),
+        rate_limiter=(
+            RateLimiter(settings.rate_limit_per_min, 60.0)
+            if settings.rate_limit_per_min > 0
+            else None
+        ),
     )
 
 
@@ -119,6 +127,19 @@ def _task_label(request: RecommendRequest) -> str:
         if text:
             return text[:24] + ("…" if len(text) > 24 else "")
     return "對話"
+
+
+def _client_key(request: Request) -> str:
+    """限流的 key：優先取 X-Forwarded-For 第一段（Zeabur 等反代後才是真實 IP）。"""
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _enforce_rate_limit(deps: Deps, request: Request) -> None:
+    if deps.rate_limiter is not None and not deps.rate_limiter.allow(_client_key(request)):
+        raise HTTPException(status_code=429, detail="請求過於頻繁，請稍後再試")
 
 
 def _run_task(deps: Deps, task_id: str, request: RecommendRequest,
@@ -206,11 +227,9 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         )
 
     def get_conn() -> Iterator[psycopg.Connection]:
-        conn = connect(deps.db_path)
-        try:
+        # 請求路徑走連線池（短連線）；context manager 會 commit/rollback 並歸還連線
+        with get_pool().connection() as conn:
             yield conn
-        finally:
-            conn.close()
 
     @app.get("/health")
     def health() -> dict:
@@ -225,7 +244,9 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail="image 不是有效的 base64") from None
 
     @app.post("/recommend")
-    def recommend(request: RecommendRequest, conn: psycopg.Connection = Depends(get_conn)):
+    def recommend(request: RecommendRequest, http_request: Request,
+                  conn: psycopg.Connection = Depends(get_conn)):
+        _enforce_rate_limit(deps, http_request)
         image_bytes: bytes | None = None
         if request.input_type in ("screenshot", "meme_battle"):
             image_bytes = _decode_image(request.image)
@@ -249,8 +270,10 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail=f"梗圖無法解析：{exc}") from None
 
     @app.post("/tasks", status_code=202)
-    def submit_task(request: RecommendRequest, conn: psycopg.Connection = Depends(get_conn)):
+    def submit_task(request: RecommendRequest, http_request: Request,
+                    conn: psycopg.Connection = Depends(get_conn)):
         """送出非同步推薦：立刻回 task_id，實際運算在背景跑（user 可離開再回來查）。"""
+        _enforce_rate_limit(deps, http_request)
         image_bytes: bytes | None = None
         if request.input_type in ("screenshot", "meme_battle"):
             image_bytes = _decode_image(request.image)  # 壞 base64 當場 422，不進背景

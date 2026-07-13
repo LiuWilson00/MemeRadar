@@ -98,9 +98,10 @@ API 很重（torch + BGE ~2–4GB RAM、冷啟 ~40s，且掛 Volume 後每次重
 > - ✅ 3.1 host binding、✅ 3.2 CORS、✅ 3.3 前端 API base（`apiFetch`/`imageUrl`+`VITE_API_BASE_URL`）
 > - ✅ 3.4 圖片走 `MEMERADAR_DATA_DIR=/data`（Dockerfile 已設，配 Volume 即可；程式本就用 data_dir）
 > - ✅ 3.5 任務孤兒回收、✅ 3.6 後台登入頁（`AdminGate`：探測 401 → 登入表單 → 帶 Basic 標頭）
-> - ⬜ 3.7 限流、⬜ 3.8 連線池（規模化再補）
+> - ✅ 3.7 限流（`RateLimiter`：/recommend、/tasks 依 IP 每分鐘上限，`RATE_LIMIT_PER_MIN` 設定，預設 30；0=關）
+> - ✅ 3.8 連線池（`db.get_pool`：請求路徑用 psycopg_pool，背景任務仍用一次性長連線）
 >
-> 下面保留每項的說明與 snippet 供參考。
+> 全部完成。下面保留每項的說明與 snippet 供參考。
 
 ### 🔴 3.1 uvicorn 綁 `0.0.0.0` + 讀 `$PORT`（否則容器外打不到）
 `memeradar/api/app.py` 的 `main()`：

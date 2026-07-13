@@ -30,11 +30,12 @@ def _pg_test_db():
         os.environ["DATABASE_URL"] = url
 
         from memeradar.shared.config import get_settings
-        from memeradar.shared.db import ensure_schema
+        from memeradar.shared.db import close_pool, ensure_schema
 
         get_settings.cache_clear()
         ensure_schema()  # Alembic upgrade head（含 CREATE EXTENSION vector）
         yield
+        close_pool()  # 收掉連線池，避免測試結束殘留連線
         get_settings.cache_clear()
 
 
