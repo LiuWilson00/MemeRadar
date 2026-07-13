@@ -687,3 +687,87 @@ class TestImagesAndMeta:
         assert "卡通動畫" in body["categories"]  # 種子圖都標這類
         assert "綜藝" not in body["categories"]  # taxonomy 有、但庫內無 → 不列
         assert "擺爛" in body["emotions"]  # 複核頁標籤編修的字典來源（情緒仍為封閉集）
+
+
+class TestAsyncTasks:
+    """非同步任務：POST /tasks 送出 → 背景執行 → GET /tasks/{id} 查進度/結果。"""
+
+    def _sync(self, deps):
+        # 測試用：背景執行改為同步（送出即跑完），免除輪詢時序
+        deps.run_async = lambda fn: fn()
+
+    def test_submit_returns_task_id_and_pending_shape(self, env):
+        client, _, _, deps = env
+        deps.run_async = lambda fn: None  # 不執行，觀察剛送出的 pending 狀態
+        resp = client.post("/tasks", json={**BASE_REQUEST, "client_id": "c_abc"})
+        assert resp.status_code == 202
+        body = resp.json()
+        assert body["task_id"].startswith("task_")
+        assert body["status"] == "pending"
+
+    def test_task_executes_and_stores_result(self, env):
+        client, _, _, deps = env
+        self._sync(deps)
+        task_id = client.post("/tasks", json={**BASE_REQUEST, "client_id": "c_abc"}).json()[
+            "task_id"
+        ]
+        got = client.get(f"/tasks/{task_id}")
+        assert got.status_code == 200
+        body = got.json()
+        assert body["status"] == "done"
+        assert body["result"]["query_id"].startswith("q_")
+        assert len(body["result"]["results"]) == 3
+
+    def test_history_lists_client_tasks_without_full_result(self, env):
+        client, _, _, deps = env
+        self._sync(deps)
+        for _ in range(2):
+            client.post("/tasks", json={**BASE_REQUEST, "client_id": "c_me"})
+        client.post("/tasks", json={**BASE_REQUEST, "client_id": "c_other"})
+
+        history = client.get("/tasks", params={"client_id": "c_me"}).json()
+        assert len(history) == 2
+        assert all(t["status"] == "done" for t in history)
+        assert all(t["has_result"] for t in history)
+        assert "result" not in history[0]  # 列表精簡，不夾帶完整結果
+
+    def test_missing_task_returns_404(self, env):
+        client, *_ = env
+        assert client.get("/tasks/task_nope").status_code == 404
+
+    def test_refused_intent_marks_task_error(self, env):
+        client, _, _, deps = env
+        deps.vlm = StubVlm(refuse={"intent"})
+        self._sync(deps)
+        task_id = client.post("/tasks", json={**BASE_REQUEST, "client_id": "c_me"}).json()[
+            "task_id"
+        ]
+        body = client.get(f"/tasks/{task_id}").json()
+        assert body["status"] == "error"
+        assert body["error"]
+
+
+class TestAsyncTasksArePublic:
+    """前台手機 client 會用 /tasks，故須繞過後台登入。"""
+
+    def test_tasks_endpoints_bypass_admin_gate(self, tmp_path):
+        db_path = tmp_path / "db.sqlite3"
+        conn = connect(db_path)
+        migrate(conn)
+        conn.close()
+        deps = Deps(
+            client=DualStubClient(), vlm=StubVlm(), embedder=FakeEmbedder(),
+            db_path=db_path, data_dir=tmp_path,
+            admin_username="boss", admin_password="secret",
+        )
+        deps.run_async = lambda fn: fn()
+        client = TestClient(create_app(deps))
+
+        # 無帳密也能送出 / 查詢（前台公開）
+        submit = client.post("/tasks", json={**BASE_REQUEST, "client_id": "c_me"})
+        assert submit.status_code == 202
+        task_id = submit.json()["task_id"]
+        assert client.get(f"/tasks/{task_id}").status_code == 200
+        assert client.get("/tasks", params={"client_id": "c_me"}).status_code == 200
+        # 後台路徑仍需登入
+        assert client.get("/memes").status_code == 401

@@ -53,6 +53,9 @@ class Deps:
     data_dir: Path
     admin_username: str = ""  # 後台登入；空 = 不設防
     admin_password: str = ""
+    # 背景任務排程器：接一個 no-arg callable。None = 用內建 thread pool；
+    # 測試注入 ``lambda fn: fn()`` 讓非同步任務同步跑完。每請求讀取，故可事後覆寫。
+    run_async: Any = None
 
 
 def _default_deps() -> Deps:
@@ -77,7 +80,9 @@ def _default_deps() -> Deps:
 
 
 # 前台（手機 client）需要的公開路徑；其餘一律歸後台（admin）
-_PUBLIC_EXACT = {"/health", "/recommend", "/feedback", "/meta", "/docs", "/openapi.json"}
+_PUBLIC_EXACT = {
+    "/health", "/recommend", "/feedback", "/meta", "/tasks", "/docs", "/openapi.json"
+}
 
 
 def _is_public(method: str, path: str) -> bool:
@@ -86,7 +91,45 @@ def _is_public(method: str, path: str) -> bool:
     if path in _PUBLIC_EXACT:
         return True
     # 梗圖圖片：手機端要顯示，公開（僅 GET）
-    return method == "GET" and re.match(r"^/memes/[^/]+/image$", path) is not None
+    if method == "GET" and re.match(r"^/memes/[^/]+/image$", path) is not None:
+        return True
+    # 任務進度查詢：前台輪詢，公開（僅 GET）
+    return method == "GET" and re.match(r"^/tasks/[^/]+$", path) is not None
+
+
+def _task_label(request: RecommendRequest) -> str:
+    """歷史列表用的短標題：截圖 / 梗圖大戰 給固定字；純文字取對話首句。"""
+    if request.input_type == "screenshot":
+        return "截圖對話"
+    if request.input_type == "meme_battle":
+        return "梗圖大戰"
+    for turn in request.conversation:
+        text = turn.text.strip()
+        if text:
+            return text[:24] + ("…" if len(text) > 24 else "")
+    return "對話"
+
+
+def _run_task(deps: Deps, task_id: str, request: RecommendRequest,
+              image_bytes: bytes | None) -> None:
+    """背景執行一筆推薦任務，寫回 done/error（自開連線；任何例外都收斂為 error）。"""
+    conn = connect(deps.db_path)
+    try:
+        repo.set_task_status(conn, task_id, "running")
+        result = run_recommendation(
+            conn, deps.vlm, deps.embedder, request, image_bytes=image_bytes
+        )
+        repo.set_task_status(conn, task_id, "done", result=result)
+    except IntentRefusedError:
+        repo.set_task_status(conn, task_id, "error", error="模型基於安全政策拒絕分析此對話")
+    except ScreenshotParseError as exc:
+        repo.set_task_status(conn, task_id, "error", error=f"截圖解析失敗：{exc}")
+    except OpponentMemeRefusedError:
+        repo.set_task_status(conn, task_id, "error", error="模型基於安全政策拒絕解析對方梗圖")
+    except Exception as exc:  # noqa: BLE001 背景任務不可讓工作執行緒崩潰
+        repo.set_task_status(conn, task_id, "error", error=f"推薦失敗：{exc}")
+    finally:
+        conn.close()
 
 
 def _check_basic_auth(header: str | None, user: str, password: str) -> bool:
@@ -114,6 +157,12 @@ def create_app(deps: Deps | None = None) -> FastAPI:
     startup_conn.close()
 
     app = FastAPI(title="MemeRadar API", version="0.1.0")
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    # 免費端點延遲高（冷啟動可達數十秒），故推薦走背景任務；小池即可，
+    # 免得多任務併發把 BGE / VLM 打爆（前台一次也只送一筆）。
+    task_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="task")
 
     @app.middleware("http")
     async def admin_gate(request, call_next):
@@ -171,6 +220,37 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             ) from None
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=f"梗圖無法解析：{exc}") from None
+
+    @app.post("/tasks", status_code=202)
+    def submit_task(request: RecommendRequest, conn: sqlite3.Connection = Depends(get_conn)):
+        """送出非同步推薦：立刻回 task_id，實際運算在背景跑（user 可離開再回來查）。"""
+        image_bytes: bytes | None = None
+        if request.input_type in ("screenshot", "meme_battle"):
+            image_bytes = _decode_image(request.image)  # 壞 base64 當場 422，不進背景
+        elif not request.conversation:
+            raise HTTPException(status_code=422, detail="conversation 不可為空")
+        task_id = new_id("task")
+        repo.create_task(
+            conn, task_id, client_id=request.client_id or "",
+            input_type=request.input_type, label=_task_label(request),
+        )
+        runner = deps.run_async if deps.run_async is not None else task_executor.submit
+        runner(lambda: _run_task(deps, task_id, request, image_bytes))
+        return {"task_id": task_id, "status": "pending"}
+
+    @app.get("/tasks")
+    def list_tasks(client_id: str, limit: int = 50,
+                   conn: sqlite3.Connection = Depends(get_conn)):
+        """某 client 的歷史任務（新到舊，精簡欄位，不夾帶完整 result）。"""
+        return repo.list_tasks_by_client(conn, client_id, limit=limit)
+
+    @app.get("/tasks/{task_id}")
+    def get_task(task_id: str, conn: sqlite3.Connection = Depends(get_conn)):
+        """單一任務進度 / 結果（前台輪詢）。"""
+        task = repo.get_task(conn, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="任務不存在")
+        return task
 
     @app.post("/parse-screenshot")
     def parse_screenshot_endpoint(request: ParseScreenshotRequest):

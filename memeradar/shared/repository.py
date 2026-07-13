@@ -717,3 +717,78 @@ def vlm_call_stats(conn: sqlite3.Connection) -> list[dict]:
         """
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── tasks（非同步推薦任務）──────────────────────────────────────────────
+
+
+def create_task(
+    conn: sqlite3.Connection,
+    task_id: str,
+    *,
+    client_id: str,
+    input_type: str,
+    label: str,
+    created_at: str | None = None,
+) -> None:
+    """建立一筆 pending 任務（背景執行前）。"""
+    now = created_at or _now_iso()
+    conn.execute(
+        """
+        INSERT INTO tasks (task_id, client_id, input_type, label, status,
+                           created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'pending', ?, ?)
+        """,
+        (task_id, client_id, input_type, label, now, now),
+    )
+    conn.commit()
+
+
+def set_task_status(
+    conn: sqlite3.Connection,
+    task_id: str,
+    status: str,
+    *,
+    result: object | None = None,
+    error: str | None = None,
+) -> None:
+    """更新任務狀態；done 時附 result，error 時附 error 訊息。"""
+    conn.execute(
+        "UPDATE tasks SET status = ?, result = ?, error = ?, updated_at = ? WHERE task_id = ?",
+        (
+            status,
+            _dumps(result) if result is not None else None,
+            error,
+            _now_iso(),
+            task_id,
+        ),
+    )
+    conn.commit()
+
+
+def get_task(conn: sqlite3.Connection, task_id: str) -> dict | None:
+    """讀單一任務（含完整 result）；查無回 None。"""
+    row = conn.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
+    if row is None:
+        return None
+    task = dict(row)
+    task["result"] = _loads(task["result"])
+    return task
+
+
+def list_tasks_by_client(
+    conn: sqlite3.Connection, client_id: str, limit: int = 50
+) -> list[dict]:
+    """某 client 的歷史任務（新到舊）；不夾帶完整 result，只標記是否已完成。"""
+    rows = conn.execute(
+        """
+        SELECT task_id, client_id, input_type, label, status, error,
+               created_at, updated_at, (result IS NOT NULL) AS has_result
+        FROM tasks
+        WHERE client_id = ?
+        ORDER BY created_at DESC, rowid DESC
+        LIMIT ?
+        """,
+        (client_id, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
