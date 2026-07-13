@@ -55,16 +55,29 @@ ANNOTATION_PAYLOAD = AnnotationResult(
 
 
 class StubVlm:
-    """標註 stub（NVIDIA VLM 介面）：回傳固定 JSON 文字並回報用量。"""
+    """標註 / 截圖 / 對方梗圖 stub（NVIDIA VLM 介面）：依 task 回對應 JSON。"""
 
     model = "qwen/test"
 
-    def annotate(self, image_b64, media_type, system, user_text, *, log=None, **kwargs):
+    def __init__(self, refuse: set[str] = frozenset()):
+        self.refuse = set(refuse)
+
+    def annotate(self, image_b64, media_type, system, user_text, *, task="annotate",
+                 log=None, **kwargs):
         if log is not None:  # 比照 NvidiaVlm：log 記錄「實際使用的模型」（含 model 覆寫）
             log({"key_id": "…test", "model": kwargs.get("model") or self.model,
-                 "task": "annotate", "meme_id": kwargs.get("meme_id"), "status": "ok",
+                 "task": task, "meme_id": kwargs.get("meme_id"), "status": "ok",
                  "latency_ms": 100, "prompt_tokens": 100, "completion_tokens": 50, "error": None})
+        if task in self.refuse:
+            return "抱歉，我無法處理。"  # 非 JSON → call_structured 回 None → 端點轉 422
+        if task == "screenshot":
+            return SCREENSHOT_PAYLOAD.model_dump_json()
+        if task == "opponent":
+            return OPPONENT_PAYLOAD.model_dump_json()
         return ANNOTATION_PAYLOAD.model_dump_json()
+
+    def chat(self, system, user_text, **kwargs):  # 意圖/rerank 尚未搬，不會用到
+        raise AssertionError("StubVlm.chat 不應被呼叫（意圖/rerank 仍走 Claude stub）")
 
 OPPONENT_PAYLOAD = OpponentMeme(
     ocr_text="我就爛",
@@ -297,7 +310,7 @@ class TestRecommendContract:
 
     def test_meme_battle_refusal_422(self, env):
         client, _conn, _memes, deps = env
-        deps.client.refuse = {"opponent"}
+        deps.vlm.refuse = {"opponent"}
         png_b64 = base64.standard_b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16).decode()
         resp = client.post(
             "/recommend",
@@ -365,7 +378,7 @@ class TestParseScreenshotEndpoint:
 
     def test_parse_refusal_422(self, env):
         client, _, _, deps = env
-        deps.client.refuse = {"screenshot"}
+        deps.vlm.refuse = {"screenshot"}
         png_b64 = base64.standard_b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16).decode()
         resp = client.post("/parse-screenshot", json={"image": png_b64})
         assert resp.status_code == 422

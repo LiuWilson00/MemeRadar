@@ -14,23 +14,18 @@ from memeradar.understanding.opponent import (
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32  # 只需通過 magic bytes 偵測
 
 
-class StubResponse:
-    def __init__(self, parsed_output, stop_reason="end_turn"):
-        self.parsed_output = parsed_output
-        self.stop_reason = stop_reason
+class StubVlm:
+    """NVIDIA VLM stub：回傳固定原始文字（raw）。"""
 
+    model = "qwen/test"
 
-class StubClient:
-    def __init__(self, response):
+    def __init__(self, raw: str):
+        self.raw = raw
         self.calls: list[dict] = []
-        outer = self
 
-        class _Messages:
-            def parse(self, **kwargs):
-                outer.calls.append(kwargs)
-                return response
-
-        self.messages = _Messages()
+    def annotate(self, image_b64, media_type, system, user_text, **kwargs):
+        self.calls.append({"system": system, "user_text": user_text, **kwargs})
+        return self.raw
 
 
 SAMPLE = OpponentMeme(
@@ -43,27 +38,22 @@ SAMPLE = OpponentMeme(
 
 class TestAnalyzeOpponentMeme:
     def test_returns_parsed_understanding(self):
-        client = StubClient(StubResponse(SAMPLE))
-        result = analyze_opponent_meme(client, PNG)
+        result = analyze_opponent_meme(StubVlm(SAMPLE.model_dump_json()), PNG)
         assert result.ocr_text == "我就爛"
         assert result.read
 
-    def test_uses_structured_output_and_disables_thinking(self):
-        client = StubClient(StubResponse(SAMPLE))
-        analyze_opponent_meme(client, PNG)
-        call = client.calls[0]
-        assert call["output_format"] is OpponentMeme
-        assert call["thinking"] == {"type": "disabled"}  # 延遲敏感路徑
+    def test_task_tagged_opponent(self):
+        vlm = StubVlm(SAMPLE.model_dump_json())
+        analyze_opponent_meme(vlm, PNG)
+        assert vlm.calls[0]["task"] == "opponent"
 
-    def test_refusal_raises(self):
-        client = StubClient(StubResponse(None, stop_reason="refusal"))
+    def test_non_json_raises_refused(self):
         with pytest.raises(OpponentMemeRefusedError):
-            analyze_opponent_meme(client, PNG)
+            analyze_opponent_meme(StubVlm("抱歉我無法解析"), PNG)
 
     def test_unsupported_image_raises(self):
-        client = StubClient(StubResponse(SAMPLE))
         with pytest.raises(ValueError):
-            analyze_opponent_meme(client, b"not-an-image")
+            analyze_opponent_meme(StubVlm(SAMPLE.model_dump_json()), b"not-an-image")
 
 
 class TestBuildBattleTurn:

@@ -157,7 +157,8 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail="conversation 不可為空")
         try:
             return run_recommendation(
-                conn, deps.client, deps.embedder, request, image_bytes=image_bytes
+                conn, deps.client, deps.embedder, request,
+                image_bytes=image_bytes, vlm=deps.vlm,
             )
         except IntentRefusedError:
             raise HTTPException(
@@ -177,7 +178,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         """解析截圖供 Console 編修（截圖僅在記憶體處理，不落庫）。"""
         image_bytes = _decode_image(request.image)
         try:
-            return parse_screenshot(deps.client, image_bytes).model_dump()
+            return parse_screenshot(deps.vlm, image_bytes).model_dump()
         except ScreenshotParseError as exc:
             raise HTTPException(status_code=422, detail=f"截圖解析失敗：{exc}") from None
 

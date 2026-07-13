@@ -4,7 +4,6 @@ import pytest
 from pydantic import ValidationError
 
 from memeradar.matching.screenshot import (
-    DEFAULT_PARSE_MODEL,
     ScreenshotParseError,
     ScreenshotParseResult,
     detect_media_type,
@@ -49,24 +48,18 @@ class TestMediaType:
             detect_media_type(b"GIF89a" + b"\x00" * 8)
 
 
-class StubResponse:
-    def __init__(self, parsed_output, stop_reason="end_turn"):
-        self.parsed_output = parsed_output
-        self.stop_reason = stop_reason
+class StubVlm:
+    """NVIDIA VLM stub：回傳固定原始文字。"""
 
+    model = "qwen/test"
 
-class StubClient:
-    def __init__(self, response):
-        self.response = response
+    def __init__(self, raw: str):
+        self.raw = raw
         self.calls: list[dict] = []
-        outer = self
 
-        class _Messages:
-            def parse(self, **kwargs):
-                outer.calls.append(kwargs)
-                return outer.response
-
-        self.messages = _Messages()
+    def annotate(self, image_b64, media_type, system, user_text, **kwargs):
+        self.calls.append({"media_type": media_type, "system": system, **kwargs})
+        return self.raw
 
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
@@ -74,21 +67,15 @@ PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 
 class TestParseScreenshot:
     def test_happy_path_and_call_shape(self):
-        client = StubClient(StubResponse(ScreenshotParseResult(**VALID)))
+        vlm = StubVlm(ScreenshotParseResult(**VALID).model_dump_json())
 
-        result = parse_screenshot(client, PNG_BYTES)
+        result = parse_screenshot(vlm, PNG_BYTES)
 
         assert result.conversation[0].text == "你報告又遲交了！"
-        call = client.calls[0]
-        assert call["model"] == DEFAULT_PARSE_MODEL
-        assert call["thinking"] == {"type": "disabled"}  # 延遲敏感路徑
-        assert call["output_format"] is ScreenshotParseResult
-        assert call["system"][0]["cache_control"] == {"type": "ephemeral"}
-        image_block = call["messages"][0]["content"][0]
-        assert image_block["type"] == "image"
-        assert image_block["source"]["media_type"] == "image/png"
+        call = vlm.calls[0]
+        assert call["task"] == "screenshot"
+        assert call["media_type"] == "image/png"
 
-    def test_refusal_raises(self):
-        client = StubClient(StubResponse(None, stop_reason="refusal"))
+    def test_non_json_raises(self):
         with pytest.raises(ScreenshotParseError):
-            parse_screenshot(client, PNG_BYTES)
+            parse_screenshot(StubVlm("我拒絕解析"), PNG_BYTES)

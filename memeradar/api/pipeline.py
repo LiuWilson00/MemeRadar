@@ -57,6 +57,7 @@ def run_recommendation(
     request: RecommendRequest,
     *,
     image_bytes: bytes | None = None,
+    vlm=None,  # NVIDIA VLM（截圖 / 對方梗圖解析用）
 ) -> dict[str, Any]:
     timings: dict[str, int] = {}
     t_start = time.perf_counter()
@@ -67,14 +68,14 @@ def run_recommendation(
     if request.input_type == "screenshot":
         # 截圖僅在記憶體處理、不落庫（docs/06 §1）；log 只存解析後文字
         t0 = time.perf_counter()
-        parsed = parse_screenshot(client, image_bytes or b"")
+        parsed = parse_screenshot(vlm, image_bytes or b"")
         timings["screenshot_parse"] = int((time.perf_counter() - t0) * 1000)
         conversation = [TurnIn(speaker=t.speaker, text=t.text) for t in parsed.conversation]
         screenshot_debug = parsed.model_dump()
     elif request.input_type == "meme_battle":
         # 梗圖大戰：理解對方梗圖（僅記憶體、不落庫），合成一則 other 輪次走既有管線
         t0 = time.perf_counter()
-        opponent = analyze_opponent_meme(client, image_bytes or b"")  # 拒答由端點層轉 422
+        opponent = analyze_opponent_meme(vlm, image_bytes or b"")  # 拒答由端點層轉 422
         timings["opponent_meme"] = int((time.perf_counter() - t0) * 1000)
         conversation = [TurnIn(speaker="other", text=build_battle_turn(opponent))]
         opponent_debug = opponent.model_dump()
