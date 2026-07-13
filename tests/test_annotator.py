@@ -89,6 +89,12 @@ class TestPromptBuilding:
     def test_system_prompt_asks_for_json(self):
         assert "JSON" in build_system_prompt()
 
+    def test_system_prompt_demands_full_usage_sentences(self):
+        # A/B 實證：Qwen 常把 usage_hints 只寫策略詞 → prompt 明確要求完整情境句
+        prompt = build_system_prompt()
+        assert "完整" in prompt
+        assert "只寫策略詞" in prompt
+
     def test_user_text_includes_context_as_hearsay(self):
         text = build_user_text("標題：上班的我\n熱門留言：笑死這就是我")
         assert "上班的我" in text
