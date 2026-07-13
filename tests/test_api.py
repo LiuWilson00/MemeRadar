@@ -747,6 +747,28 @@ class TestAsyncTasks:
         assert body["error"]
 
 
+class TestAsyncTasksRealExecutor:
+    """不注入 run_async：驗證真正的 ThreadPoolExecutor 背景執行 + 自開連線可行。"""
+
+    def test_background_thread_completes_task(self, env):
+        import time
+
+        client, *_ = env  # deps.run_async 維持 None → 走內建 thread pool
+        task_id = client.post("/tasks", json={**BASE_REQUEST, "client_id": "c_me"}).json()[
+            "task_id"
+        ]
+        deadline = time.time() + 5
+        status = None
+        while time.time() < deadline:
+            body = client.get(f"/tasks/{task_id}").json()
+            status = body["status"]
+            if status in ("done", "error"):
+                break
+            time.sleep(0.05)
+        assert status == "done"
+        assert body["result"]["query_id"].startswith("q_")
+
+
 class TestAsyncTasksArePublic:
     """前台手機 client 會用 /tasks，故須繞過後台登入。"""
 

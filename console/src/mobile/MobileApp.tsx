@@ -1,7 +1,12 @@
 import {
   AlertTriangle,
   Camera,
+  CheckCircle2,
+  ChevronRight,
+  Clock,
   Download,
+  History as HistoryIcon,
+  Loader2,
   RotateCcw,
   Search,
   SearchX,
@@ -10,16 +15,18 @@ import {
   Swords,
   ThumbsDown,
   ThumbsUp,
+  XCircle,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import MemeImage from "../components/MemeImage";
 import {
   DEFAULT_PARAMS,
   fetchMeta,
-  recommend,
-  recommendByMemeBattle,
-  recommendByScreenshot,
+  fetchTask,
+  fetchTaskHistory,
   sendFeedback,
+  submitTask,
+  type TaskInput,
 } from "../lib/api";
 import { fileToBase64 } from "../lib/files";
 import {
@@ -28,17 +35,25 @@ import {
   settingsToFilters,
   type UserSettings,
 } from "../lib/settings";
-import type { Filters, Meta, Params, RecommendResponse, ResultItem } from "../types";
+import type {
+  Filters,
+  Meta,
+  Params,
+  RecommendResponse,
+  ResultItem,
+  TaskDetail,
+  TaskStatus,
+  TaskSummary,
+} from "../types";
 import Chip, { toggle } from "./Chip";
 import SettingsScreen from "./SettingsScreen";
 
-type Phase = "idle" | "loading" | "results" | "error";
-type Tab = "home" | "settings";
+type Tab = "home" | "history" | "settings";
 type Mode = "screenshot" | "battle";
-type Input =
-  | { kind: "screenshot"; image: string }
-  | { kind: "battle"; image: string }
-  | { kind: "text"; text: string };
+type Input = TaskInput;
+
+const POLL_MS = 1800;
+const RUNNING: TaskStatus[] = ["pending", "running"];
 
 // 搜尋更多：拉高多樣性、放寬相似度門檻，換一批不同的圖
 const REFINE_PARAMS: Params = { ...DEFAULT_PARAMS, diversity: 0.85, min_similarity: 0.3, candidate_k: 80 };
@@ -89,9 +104,11 @@ export default function MobileApp() {
   const [settings, setSettings] = useState<UserSettings>(() => loadSettings());
   const [meta, setMeta] = useState<Meta | null>(null);
 
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [response, setResponse] = useState<RecommendResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // 非同步任務：送出得 task_id，背景執行，前台輪詢 fetchTask 直到 done/error。
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const [task, setTask] = useState<TaskDetail | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [homeError, setHomeError] = useState<string | null>(null);
   const [battleImage, setBattleImage] = useState<string | null>(null);
   const [typing, setTyping] = useState(false);
   const [text, setText] = useState("");
@@ -103,29 +120,59 @@ export default function MobileApp() {
     fetchMeta().then(setMeta).catch(() => {});
   }, []);
 
+  // 輪詢當前任務進度；任務完成/失敗即停。切到別的分頁也持續在背景輪詢。
+  useEffect(() => {
+    if (!activeTaskId) return;
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
+      try {
+        const t = await fetchTask(activeTaskId);
+        if (!alive) return;
+        setTask(t);
+        if (RUNNING.includes(t.status)) timer = setTimeout(tick, POLL_MS);
+      } catch {
+        if (alive) timer = setTimeout(tick, 3000); // 網路瞬斷：稍後續試
+      }
+    };
+    void tick();
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [activeTaskId]);
+
   const updateSettings = (next: UserSettings) => {
     setSettings(next);
     saveSettings(next);
   };
 
-  const runInput = useCallback(async (input: Input, filters: Filters, params: Params) => {
+  const submit = useCallback(async (input: Input, filters: Filters, params: Params) => {
     lastInput.current = input;
-    setPhase("loading");
-    setError(null);
-    setResponse(null);
+    setHomeError(null);
+    setTask(null);
+    setActiveTaskId(null);
+    setTab("home");
+    setSubmitting(true);
     try {
-      const task =
-        input.kind === "screenshot"
-          ? recommendByScreenshot(input.image, filters, params)
-          : input.kind === "battle"
-            ? recommendByMemeBattle(input.image, filters, params)
-            : recommend([{ speaker: "other", text: input.text }], filters, params);
-      setResponse(await task);
-      setPhase("results");
+      const { task_id } = await submitTask(input, filters, params);
+      setActiveTaskId(task_id); // 觸發輪詢
     } catch (e) {
-      setError(e instanceof Error ? e.message : "出了點問題，請再試一次");
-      setPhase("error");
+      setHomeError(e instanceof Error ? e.message : "送出失敗，請再試一次");
+    } finally {
+      setSubmitting(false);
     }
+  }, []);
+
+  // 從歷史開啟某任務：done 立刻顯示結果，仍在跑則接續輪詢
+  const openTask = useCallback((id: string) => {
+    setHomeError(null);
+    setBattleImage(null); // 歷史不留存對方梗圖
+    setTab("home");
+    setActiveTaskId((prev) => {
+      if (prev !== id) setTask(null);
+      return id;
+    });
   }, []);
 
   const pick = (mode: Mode) => {
@@ -140,26 +187,26 @@ export default function MobileApp() {
       const filters = settingsToFilters(settings);
       if (modeRef.current === "battle") {
         setBattleImage(`data:${file.type};base64,${b64}`);
-        void runInput({ kind: "battle", image: b64 }, filters, DEFAULT_PARAMS);
+        void submit({ kind: "battle", image: b64 }, filters, DEFAULT_PARAMS);
       } else {
         setBattleImage(null);
-        void runInput({ kind: "screenshot", image: b64 }, filters, DEFAULT_PARAMS);
+        void submit({ kind: "screenshot", image: b64 }, filters, DEFAULT_PARAMS);
       }
     },
-    [runInput, settings],
+    [submit, settings],
   );
 
   const onText = useCallback(() => {
     const t = text.trim();
     if (!t) return;
     setBattleImage(null);
-    void runInput({ kind: "text", text: t }, settingsToFilters(settings), DEFAULT_PARAMS);
-  }, [text, runInput, settings]);
+    void submit({ kind: "text", text: t }, settingsToFilters(settings), DEFAULT_PARAMS);
+  }, [text, submit, settings]);
 
-  // 搜尋更多：用選定的標籤 + 更高多樣性，重跑上一個輸入
+  // 搜尋更多：用選定的標籤 + 更高多樣性，重送上一個輸入（成為一筆新任務）
   const refine = (franchises: string[], categories: string[]) => {
     if (!lastInput.current) return;
-    void runInput(
+    void submit(
       lastInput.current,
       { franchises, categories, exclude_nsfw: settings.excludeNsfw },
       REFINE_PARAMS,
@@ -167,13 +214,58 @@ export default function MobileApp() {
   };
 
   const reset = () => {
-    setPhase("idle");
-    setResponse(null);
-    setError(null);
+    setActiveTaskId(null);
+    setTask(null);
+    setHomeError(null);
     setText("");
     setTyping(false);
     setBattleImage(null);
   };
+
+  const done = task?.status === "done" && task.result ? task.result : null;
+  const errorMsg = homeError ?? (task?.status === "error" ? task?.error : null);
+  const loading = submitting || (activeTaskId !== null && !done && task?.status !== "error");
+  const loadingBattle =
+    task?.input_type === "meme_battle" || lastInput.current?.kind === "battle";
+
+  let home;
+  if (loading) {
+    home = <LoadingScreen battle={loadingBattle} />;
+  } else if (errorMsg) {
+    home = (
+      <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center">
+        <p className="text-sm text-danger">{errorMsg}</p>
+        <button
+          onClick={reset}
+          className="rounded-full border border-line px-5 py-2 text-sm text-fg active:bg-panel"
+        >
+          重新開始
+        </button>
+      </div>
+    );
+  } else if (done) {
+    home = (
+      <ResultsScreen
+        response={done}
+        battleImage={battleImage}
+        meta={meta}
+        initialTags={{ franchises: settings.franchises, categories: settings.categories }}
+        onRefine={refine}
+        onReset={reset}
+      />
+    );
+  } else {
+    home = (
+      <IdleScreen
+        typing={typing}
+        text={text}
+        onText={setText}
+        onToggleTyping={() => setTyping((v) => !v)}
+        onSubmitText={onText}
+        onPick={pick}
+      />
+    );
+  }
 
   return (
     <div className="mx-auto flex min-h-[100dvh] max-w-md flex-col">
@@ -187,42 +279,14 @@ export default function MobileApp() {
       <main className="flex min-h-0 flex-1 flex-col">
         {tab === "settings" ? (
           <SettingsScreen settings={settings} meta={meta} onChange={updateSettings} />
-        ) : phase === "idle" ? (
-          <IdleScreen
-            typing={typing}
-            text={text}
-            onText={setText}
-            onToggleTyping={() => setTyping((v) => !v)}
-            onSubmitText={onText}
-            onPick={pick}
-          />
-        ) : phase === "loading" ? (
-          <LoadingScreen mode={modeRef.current} />
-        ) : phase === "error" ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center">
-            <p className="text-sm text-danger">{error}</p>
-            <button
-              onClick={reset}
-              className="rounded-full border border-line px-5 py-2 text-sm text-fg active:bg-panel"
-            >
-              重新開始
-            </button>
-          </div>
+        ) : tab === "history" ? (
+          <HistoryScreen activeId={activeTaskId} onOpen={openTask} />
         ) : (
-          response && (
-            <ResultsScreen
-              response={response}
-              battleImage={battleImage}
-              meta={meta}
-              initialTags={{ franchises: settings.franchises, categories: settings.categories }}
-              onRefine={refine}
-              onReset={reset}
-            />
-          )
+          home
         )}
       </main>
 
-      <NavBar tab={tab} onTab={setTab} />
+      <NavBar tab={tab} onTab={setTab} running={loading} />
 
       <input
         ref={fileRef}
@@ -238,24 +302,36 @@ export default function MobileApp() {
   );
 }
 
-function NavBar({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
-  const items: Array<{ id: Tab; label: string; Icon: typeof Sparkles }> = [
+function NavBar({
+  tab,
+  onTab,
+  running,
+}: {
+  tab: Tab;
+  onTab: (t: Tab) => void;
+  running: boolean;
+}) {
+  const items: Array<{ id: Tab; label: string; Icon: typeof Sparkles; busy?: boolean }> = [
     { id: "home", label: "推薦", Icon: Sparkles },
+    { id: "history", label: "歷史", Icon: HistoryIcon, busy: running },
     { id: "settings", label: "設定", Icon: SlidersHorizontal },
   ];
   return (
     <nav className="flex border-t border-line bg-panel pb-[env(safe-area-inset-bottom)]">
-      {items.map(({ id, label, Icon }) => (
+      {items.map(({ id, label, Icon, busy }) => (
         <button
           key={id}
           onClick={() => onTab(id)}
-          className={`flex flex-1 flex-col items-center gap-0.5 py-2.5 text-[11px] ${
+          className={`relative flex flex-1 flex-col items-center gap-0.5 py-2.5 text-[11px] ${
             tab === id ? "text-amber" : "text-muted"
           }`}
           aria-current={tab === id}
         >
           <Icon className="size-5" strokeWidth={tab === id ? 2.2 : 1.75} />
           {label}
+          {busy && tab !== id && (
+            <span className="absolute right-[calc(50%-1.1rem)] top-1.5 size-2 animate-pulse rounded-full bg-amber" />
+          )}
         </button>
       ))}
     </nav>
@@ -343,10 +419,33 @@ function IdleScreen({
   );
 }
 
-function LoadingScreen({ mode }: { mode: Mode }) {
+const LOADING_STAGES = {
+  battle: ["讀取對方的梗圖……", "解讀它想表達什麼……", "翻你的梗圖庫……", "挑一張最嗆的回敬……"],
+  normal: ["讀取對話……", "解讀對方情緒……", "掃描梗圖庫……", "排出最貼的幾張……"],
+};
+
+function LoadingScreen({ battle }: { battle: boolean }) {
+  const stages = battle ? LOADING_STAGES.battle : LOADING_STAGES.normal;
+  const [step, setStep] = useState(0);
+  const [secs, setSecs] = useState(0);
+
+  useEffect(() => {
+    setStep(0);
+    setSecs(0);
+    const advance = setInterval(
+      () => setStep((s) => Math.min(s + 1, stages.length - 1)),
+      2600,
+    );
+    const clock = setInterval(() => setSecs((s) => s + 1), 1000);
+    return () => {
+      clearInterval(advance);
+      clearInterval(clock);
+    };
+  }, [stages.length]);
+
   return (
     <div
-      className="flex flex-1 flex-col items-center justify-center gap-6"
+      className="flex flex-1 flex-col items-center justify-center gap-7 px-8 text-center"
       role="status"
       aria-live="polite"
     >
@@ -355,9 +454,131 @@ function LoadingScreen({ mode }: { mode: Mode }) {
         <span className="radar-blip" style={{ left: "30%", top: "58%", animationDelay: "0.9s" }} />
         <span className="radar-blip" style={{ left: "52%", top: "70%", animationDelay: "1.6s" }} />
       </div>
-      <p className="text-sm text-muted">
-        {mode === "battle" ? "解讀對方的梗，想怎麼回敬……" : "掃描梗圖庫中……"}（約 15 秒）
+
+      <div className="flex flex-col items-center gap-3">
+        <p className="min-h-[1.5rem] text-sm font-medium text-fg transition-all">
+          {stages[step]}
+        </p>
+        <div className="flex items-center gap-1.5">
+          {stages.map((_, i) => (
+            <span
+              key={i}
+              className={`h-1.5 rounded-full transition-all duration-500 ${
+                i <= step ? "w-5 bg-amber" : "w-1.5 bg-line"
+              }`}
+            />
+          ))}
+        </div>
+        <p className="font-mono text-xs text-muted">已跑 {secs} 秒</p>
+      </div>
+
+      <p className="max-w-[16rem] text-xs leading-relaxed text-muted">
+        免費模型有時要想久一點。可以先去別的地方逛逛，
+        <span className="text-fg">好了會出現在「歷史」</span>。
       </p>
+    </div>
+  );
+}
+
+const STATUS_META: Record<TaskStatus, { label: string; Icon: typeof Clock; cls: string }> = {
+  pending: { label: "排隊中", Icon: Clock, cls: "text-muted" },
+  running: { label: "運算中", Icon: Loader2, cls: "text-amber" },
+  done: { label: "完成", Icon: CheckCircle2, cls: "text-signal" },
+  error: { label: "失敗", Icon: XCircle, cls: "text-danger" },
+};
+
+const INPUT_LABEL: Record<TaskSummary["input_type"], string> = {
+  text: "文字",
+  screenshot: "截圖",
+  meme_battle: "梗圖大戰",
+};
+
+function timeAgo(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const mins = Math.floor((Date.now() - then) / 60000);
+  if (mins < 1) return "剛剛";
+  if (mins < 60) return `${mins} 分鐘前`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} 小時前`;
+  return `${Math.floor(hrs / 24)} 天前`;
+}
+
+function HistoryScreen({
+  activeId,
+  onOpen,
+}: {
+  activeId: string | null;
+  onOpen: (id: string) => void;
+}) {
+  const [items, setItems] = useState<TaskSummary[] | null>(null);
+
+  const load = useCallback(() => {
+    fetchTaskHistory()
+      .then(setItems)
+      .catch(() => setItems([]));
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // 有任務仍在跑 → 定時刷新，讓進度會動
+  useEffect(() => {
+    if (!items?.some((t) => RUNNING.includes(t.status))) return;
+    const timer = setInterval(load, 3000);
+    return () => clearInterval(timer);
+  }, [items, load]);
+
+  if (items === null) {
+    return (
+      <div className="flex flex-1 items-center justify-center">
+        <Loader2 className="size-6 animate-spin text-muted" />
+      </div>
+    );
+  }
+
+  if (items.length === 0) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
+        <HistoryIcon className="size-9 text-muted" strokeWidth={1.5} />
+        <p className="text-sm">還沒有任務</p>
+        <p className="text-xs text-muted">回「推薦」丟一段對話或截圖，這裡會留下紀錄。</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 overflow-y-auto px-4 pb-4">
+      <p className="px-1 py-3 text-xs text-muted">你的任務紀錄（存在這台裝置上）</p>
+      <ul className="flex flex-col gap-2">
+        {items.map((t) => {
+          const s = STATUS_META[t.status];
+          const active = t.task_id === activeId;
+          return (
+            <li key={t.task_id}>
+              <button
+                onClick={() => onOpen(t.task_id)}
+                className={`flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left active:bg-raised ${
+                  active ? "border-amber/60 bg-amber-soft" : "border-line bg-panel"
+                }`}
+              >
+                <s.Icon
+                  className={`size-5 shrink-0 ${s.cls} ${t.status === "running" ? "animate-spin" : ""}`}
+                  strokeWidth={1.9}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm text-fg">{t.label || "對話"}</span>
+                  <span className="mt-0.5 block text-xs text-muted">
+                    {INPUT_LABEL[t.input_type]} · {s.label} · {timeAgo(t.created_at)}
+                  </span>
+                </span>
+                <ChevronRight className="size-4 shrink-0 text-muted" />
+              </button>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

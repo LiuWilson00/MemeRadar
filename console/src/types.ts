@@ -73,6 +73,34 @@ export interface ScreenshotParse {
   warnings: string[];
 }
 
+export type TaskStatus = "pending" | "running" | "done" | "error";
+
+/** 歷史列表項（精簡，不含完整 result；has_result 為 SQLite 0/1）。 */
+export interface TaskSummary {
+  task_id: string;
+  client_id: string;
+  input_type: "text" | "screenshot" | "meme_battle";
+  label: string;
+  status: TaskStatus;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  has_result: number;
+}
+
+/** 單一任務進度 / 結果（GET /tasks/{id}）。 */
+export interface TaskDetail {
+  task_id: string;
+  client_id: string;
+  input_type: "text" | "screenshot" | "meme_battle";
+  label: string;
+  status: TaskStatus;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  result: RecommendResponse | null;
+}
+
 export interface HistoryItem {
   query_id: string;
   created_at: string;

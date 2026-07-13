@@ -10,6 +10,9 @@ import type {
   Params,
   RecommendResponse,
   ScreenshotParse,
+  TaskDetail,
+  TaskStatus,
+  TaskSummary,
   Turn,
   UploadResult,
 } from "../types";
@@ -105,6 +108,51 @@ export async function recommendByScreenshot(
     }),
   });
   return unwrap<RecommendResponse>(response);
+}
+
+// ── 非同步任務（免費端點延遲高：送出即回、背景執行、輪詢查結果）────────────
+
+export type TaskInput =
+  | { kind: "text"; text: string }
+  | { kind: "screenshot"; image: string }
+  | { kind: "battle"; image: string };
+
+const INPUT_TYPE = { text: "text", screenshot: "screenshot", battle: "meme_battle" } as const;
+
+/** 把手機端三種輸入統一組成 /tasks 的請求體（對齊 /recommend 契約）。 */
+export function buildTaskRequest(input: TaskInput, filters: Filters, params: Params) {
+  return {
+    input_type: INPUT_TYPE[input.kind],
+    conversation: input.kind === "text" ? [{ speaker: "other", text: input.text }] : [],
+    image: input.kind === "text" ? null : input.image,
+    filters,
+    params,
+    client_id: getClientId(),
+  };
+}
+
+/** 送出非同步推薦任務，回 task_id（實際運算在後端背景進行）。 */
+export async function submitTask(
+  input: TaskInput,
+  filters: Filters,
+  params: Params,
+): Promise<{ task_id: string; status: TaskStatus }> {
+  const response = await fetch("/tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(buildTaskRequest(input, filters, params)),
+  });
+  return unwrap(response);
+}
+
+/** 查單一任務進度 / 結果（前台輪詢）。 */
+export async function fetchTask(taskId: string): Promise<TaskDetail> {
+  return unwrap<TaskDetail>(await fetch(`/tasks/${encodeURIComponent(taskId)}`));
+}
+
+/** 本機 client 的歷史任務（新到舊）。 */
+export async function fetchTaskHistory(): Promise<TaskSummary[]> {
+  return unwrap<TaskSummary[]>(await fetch(`/tasks?client_id=${encodeURIComponent(getClientId())}`));
 }
 
 export async function sendFeedback(body: {
