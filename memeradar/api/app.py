@@ -19,7 +19,7 @@ from typing import Any
 import psycopg
 import psycopg.errors
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from memeradar.api.pipeline import run_recommendation
 from memeradar.api.ratelimit import RateLimiter
@@ -375,6 +375,11 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=422, detail="無法讀取圖片（僅支援 PNG / JPEG / WebP）"
             )
+        # 圖檔位元組也存進 DB（雲端免 volume；重部署不掉圖）
+        conn.execute(
+            "UPDATE memes SET image_data = %s WHERE meme_id = %s", (content, meme.meme_id)
+        )
+        conn.commit()
         # 模型優先序：此次請求指定 > 後台設定的標註模型 > VLM 預設
         model = request.model or repo.get_task_models(conn).get("annotation")
         annotation = annotate_meme(
@@ -527,10 +532,17 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         meme = repo.get_meme(conn, meme_id)
         if meme is None:
             raise HTTPException(status_code=404, detail="梗圖不存在")
+        suffix = Path(meme.image_uri).suffix.lower()
+        media_type = _MEDIA_TYPES.get(suffix, "application/octet-stream")
+        # 優先服務 DB 內的 image_data（雲端免 volume）；沒有才回退檔案系統（本地開發）
+        row = conn.execute(
+            "SELECT image_data FROM memes WHERE meme_id = %s", (meme_id,)
+        ).fetchone()
+        if row and row["image_data"] is not None:
+            return Response(content=bytes(row["image_data"]), media_type=media_type)
         path = deps.data_dir / meme.image_uri
         if not path.exists():
             raise HTTPException(status_code=404, detail="圖檔遺失")
-        media_type = _MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream")
         return FileResponse(path, media_type=media_type)
 
     @app.get("/meta")
