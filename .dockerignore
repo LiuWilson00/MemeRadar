@@ -9,7 +9,7 @@ __pycache__
 node_modules
 console/node_modules
 console/dist
-data/                 # 本機 DB / 圖檔（prod 走 Volume + 私有 PG）
+/data/                # 只忽略專案根的 data/（本機 DB / 圖檔）；memeradar/shared/data 要進映像
 docs/
 tests/
 .env

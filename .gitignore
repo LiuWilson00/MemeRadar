@@ -11,8 +11,8 @@ build/
 # Secrets 與本機設定
 .env
 
-# 本機資料（物件儲存 / DB）
-data/
+# 本機資料（物件儲存 / DB）——只忽略「專案根」的 data/，不含 memeradar/shared/data/（taxonomy.yaml）
+/data/
 *.sqlite3
 
 # 人工蒐集的 seed 圖（版權圖不進版控；docs/07）
@@ -30,3 +30,6 @@ console/*.tsbuildinfo
 # 隨手丟在專案根目錄的截圖（非專案資產）
 螢幕擷取畫面*.png
 image.png
+
+# Zeabur log 匯出檔
+*.log.gz

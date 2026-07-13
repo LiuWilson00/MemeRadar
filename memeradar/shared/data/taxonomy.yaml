@@ -1,0 +1,149 @@
+# MemeRadar 標籤 Taxonomy v1
+# 規格出處：docs/03-meme-understanding.md §2.3、docs/04-intent-matching.md §2.2
+#
+# 本檔是「標註端（understanding）」與「意圖端（matching）」共同引用的唯一來源。
+# 變更規則（docs/03 §2.3）：
+#   - 情緒 / 分類為封閉集，變更視同標註 prompt 改版，需觸發增量重標與 golden set 回歸。
+#   - franchise 正規化表為開放集，隨資料成長人工維護，追加別名不需重標。
+
+version: 1
+
+# ── 情緒字典（封閉集，單圖可多選）──────────────────────────────
+emotions:
+  - 嘲諷
+  - 無奈
+  - 狂喜
+  - 憤怒
+  - 崩潰
+  - 委屈
+  - 尷尬
+  - 得意
+  - 擺爛
+  - 疑惑
+  - 震驚
+  - 敷衍
+  - 心虛
+  - 感動
+  - 鄙視
+  - 慌張
+  - 理直氣壯
+  - 假笑
+  - 厭世
+  - 期待
+
+# ── 回應策略錨點（標註端 usage_hints 的動作語彙 = 意圖端的策略展開選項）──
+# sensitive_safe: 敏感情境（喪事 / 重病 / 重大事故等）下唯一允許保留的策略
+#                 （docs/04 §4：sensitive=true 時僅保留安撫）
+strategies:
+  - id: comfort
+    label: 安撫
+    description: 對方情緒低落、受挫或焦慮時給予安慰與支持
+    sensitive_safe: true
+  - id: grovel
+    label: 滑跪求饒
+    aliases: [滑跪, 求饒]
+    description: 自己犯錯被指責時，誇張示弱、道歉求饒
+    sensitive_safe: false
+  - id: refuse
+    label: 拒絕
+    description: 對要求或提議明確說不
+    sensitive_safe: false
+  - id: self_deprecate
+    label: 自嘲
+    description: 拿自己的缺點或處境開玩笑，化解尷尬或轉移火力
+    sensitive_safe: false
+  - id: clap_back
+    label: 嗆聲反擊
+    aliases: [嗆聲, 反擊]
+    description: 被虧或被指責時反將一軍
+    sensitive_safe: false
+  - id: agree
+    label: 附和
+    description: 表達強烈同意、共鳴（「這就是我」）
+    sensitive_safe: false
+  - id: celebrate
+    label: 慶祝
+    description: 對好消息表達祝賀或一起開心
+    sensitive_safe: false
+  - id: play_dumb
+    label: 裝傻
+    description: 顧左右而言他、假裝沒看懂以迴避話題
+    sensitive_safe: false
+  - id: dismissive_ack
+    label: 已讀敷衍
+    description: 表示收到但懶得認真回應
+    sensitive_safe: false
+  - id: seek_sympathy
+    label: 討拍
+    description: 訴苦、賣慘，尋求同情與安慰
+    sensitive_safe: false
+  - id: urge
+    label: 催促
+    description: 催對方快點行動或回覆
+    sensitive_safe: false
+  - id: show_off
+    label: 炫耀
+    description: 得意展示成果或好運
+    sensitive_safe: false
+  - id: preach
+    label: 勸世
+    description: 半開玩笑地講道理、下結論
+    sensitive_safe: false
+  - id: watch_drama
+    label: 看戲
+    description: 事不關己吃瓜圍觀，看熱鬧
+    sensitive_safe: false
+
+# ── 分類目錄（開放集，franchise 式）──────────────────────────
+# 本清單是「已知種子」：餵給標註 prompt 當優先沿用詞彙，但模型可自創新分類。
+# aliases 供正規化（casefold + strip 後收斂同義詞），避免開放集分裂。
+# default_excluded: 標記為檢索端預設排除的候選（docs/04 §4；目前僅供標示）。
+# 單選為主（媒材類型），新增分類只需在此追加，不必全庫重標（詳見 docs/03 §2.3）。
+categories:
+  - label: 卡通動畫
+    aliases: [卡通, 動畫]
+  - label: 戲劇影視
+    aliases: [影視, 電影, 戲劇]
+  - label: 綜藝
+  - label: 名人政治
+    default_excluded: true
+    aliases: [政治, 時事政治, 政治人物]
+  - label: 動物
+  - label: 遊戲
+  - label: 繪圖創作
+    aliases: [插畫, 原創繪圖]
+  - label: 真人照片
+    aliases: [真人迷因, 真人梗]
+  - label: 文字梗
+    aliases: [純文字, 語錄]
+  - label: 宗教心靈
+    aliases: [佛法, 宗教, 心靈, 勸世語錄, 心靈雞湯]
+  - label: 其他
+
+# ── franchise 正規化表（開放集）────────────────────────────
+# key = 正規名稱（庫內唯一寫法）；value = 別名列表（比對時不分大小寫、忽略前後空白）
+franchises:
+  海綿寶寶:
+    - SpongeBob
+    - SpongeBob SquarePants
+    - 海绵宝宝
+    - 海綿寶寶方塊褲
+  甄嬛傳:
+    - 甄嬛传
+    - 後宮甄嬛傳
+    - 后宫甄嬛传
+    - Empresses in the Palace
+  進擊的巨人:
+    - Attack on Titan
+    - AOT
+    - 进击的巨人
+  咒術迴戰:
+    - Jujutsu Kaisen
+    - 咒术回战
+  貓貓蟲咖波:
+    - 咖波
+    - Capoo
+    - BugCat Capoo
+  我們這一家:
+    - Atashinchi
+    - 花媽
