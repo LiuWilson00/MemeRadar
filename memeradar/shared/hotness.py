@@ -93,16 +93,15 @@ def main() -> None:
     # Windows 主控台預設編碼常非 UTF-8，避免中文輸出亂碼
     if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
         sys.stdout.reconfigure(encoding="utf-8")
-    from memeradar.shared.db import connect, default_db_path, migrate
+    from memeradar.shared.db import connect, migrate
 
-    path = default_db_path()
-    conn = connect(path)
+    conn = connect()
     try:
         migrate(conn)
         count = recompute_all_hotness(conn)
     finally:
         conn.close()
-    print(f"已重算 {count} 張梗圖的熱度（半衰期 {HALF_LIFE_DAYS:.0f} 天，{path}）")
+    print(f"已重算 {count} 張梗圖的熱度（半衰期 {HALF_LIFE_DAYS:.0f} 天）")
 
 
 if __name__ == "__main__":

@@ -72,7 +72,6 @@ def _default_deps() -> Deps:
     import anthropic
 
     from memeradar.shared.config import get_settings
-    from memeradar.shared.db import default_db_path
     from memeradar.understanding.annotator import build_default_vlm
     from memeradar.understanding.embedding import DEFAULT_BACKEND, get_embedder
 
@@ -82,7 +81,7 @@ def _default_deps() -> Deps:
         client=anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic(),
         vlm=build_default_vlm(),
         embedder=get_embedder(DEFAULT_BACKEND),
-        db_path=default_db_path(),
+        db_path=settings.memeradar_data_dir,  # 連線改由 DATABASE_URL；此欄僅為相容保留
         data_dir=settings.memeradar_data_dir,
         admin_username=settings.admin_username,
         admin_password=settings.admin_password,
