@@ -15,6 +15,7 @@ from memeradar.shared.models import (
     MemeAnnotation,
     MemeSource,
     RecommendationLog,
+    _now_iso,
     new_id,
 )
 
@@ -675,3 +676,44 @@ def list_feedback(conn: sqlite3.Connection, query_id: str) -> list[FeedbackEvent
         )
         for r in rows
     ]
+
+
+# ── vlm_calls（NVIDIA VLM 用量紀錄）────────────────────────────────────
+
+
+def insert_vlm_call(conn: sqlite3.Connection, rec: dict) -> None:
+    """寫入一筆 VLM 呼叫紀錄（rec 為 NvidiaVlm log callback 傳來的欄位）。"""
+    conn.execute(
+        """
+        INSERT INTO vlm_calls (call_id, created_at, key_id, model, task, meme_id,
+                               status, latency_ms, prompt_tokens, completion_tokens, error)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            new_id("vc"),
+            _now_iso(),
+            rec.get("key_id"),
+            rec.get("model"),
+            rec.get("task"),
+            rec.get("meme_id"),
+            rec.get("status"),
+            rec.get("latency_ms"),
+            rec.get("prompt_tokens"),
+            rec.get("completion_tokens"),
+            rec.get("error"),
+        ),
+    )
+    conn.commit()
+
+
+def vlm_call_stats(conn: sqlite3.Connection) -> list[dict]:
+    """各 key × 狀態的呼叫數與平均延遲（監控哪把 key 被打爆 / 限流率）。"""
+    rows = conn.execute(
+        """
+        SELECT key_id, status, COUNT(*) AS n, AVG(latency_ms) AS avg_ms
+        FROM vlm_calls
+        GROUP BY key_id, status
+        ORDER BY key_id, status
+        """
+    ).fetchall()
+    return [dict(r) for r in rows]

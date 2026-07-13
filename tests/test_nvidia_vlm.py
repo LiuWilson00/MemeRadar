@@ -117,3 +117,34 @@ class TestLogging:
         assert rec["status"] == "ok"
         assert rec["model"] == "qwen/test"
         assert "latency_ms" in rec
+
+    def test_per_call_log_and_meme_id_override_instance_log(self):
+        vlm, instance_logs, _ = make([FakeClient(["ok:x"])])
+        per_call = []
+        vlm.annotate("B", "image/png", "s", "u", meme_id="m_42", log=per_call.append)
+        assert instance_logs == []  # 未落到 instance log
+        assert per_call[-1]["meme_id"] == "m_42"
+
+
+class TestVlmCallLogTable:
+    def test_insert_and_query_stats(self, tmp_path):
+        from memeradar.shared import repository as repo
+        from memeradar.shared.db import connect, migrate
+
+        conn = connect(tmp_path / "db.sqlite3")
+        migrate(conn)
+        repo.insert_vlm_call(conn, {
+            "key_id": "…abcd", "model": "qwen/x", "task": "annotate", "meme_id": "m1",
+            "status": "ok", "latency_ms": 1200, "prompt_tokens": 200, "completion_tokens": 80,
+            "error": None,
+        })
+        repo.insert_vlm_call(conn, {
+            "key_id": "…abcd", "model": "qwen/x", "task": "annotate", "meme_id": "m2",
+            "status": "rate_limited", "latency_ms": 50, "prompt_tokens": None,
+            "completion_tokens": None, "error": None,
+        })
+        stats = repo.vlm_call_stats(conn)
+        row = {(s["key_id"], s["status"]): s["n"] for s in stats}
+        assert row[("…abcd", "ok")] == 1
+        assert row[("…abcd", "rate_limited")] == 1
+        conn.close()
