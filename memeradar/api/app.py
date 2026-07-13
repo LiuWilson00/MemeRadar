@@ -23,6 +23,7 @@ from memeradar.api.pipeline import run_recommendation
 from memeradar.api.schemas import (
     DedupResolutionRequest,
     FeedbackRequest,
+    ModelSettingsRequest,
     ParseScreenshotRequest,
     RecommendRequest,
     ReviewAnnotationRequest,
@@ -42,6 +43,14 @@ from memeradar.understanding.opponent import OpponentMemeRefusedError
 from memeradar.understanding.retrieval_doc import build_retrieval_document
 
 _MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp"}
+
+_TASK_LABELS = {
+    "annotation": "梗圖標註",
+    "intent": "對話意圖分析",
+    "rerank": "重排序",
+    "screenshot": "截圖解析",
+    "opponent": "對方梗圖解讀",
+}
 
 
 @dataclass
@@ -117,7 +126,8 @@ def _run_task(deps: Deps, task_id: str, request: RecommendRequest,
     try:
         repo.set_task_status(conn, task_id, "running")
         result = run_recommendation(
-            conn, deps.vlm, deps.embedder, request, image_bytes=image_bytes
+            conn, deps.vlm, deps.embedder, request,
+            image_bytes=image_bytes, models=repo.get_task_models(conn),
         )
         repo.set_task_status(conn, task_id, "done", result=result)
     except IntentRefusedError:
@@ -321,8 +331,10 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=422, detail="無法讀取圖片（僅支援 PNG / JPEG / WebP）"
             )
+        # 模型優先序：此次請求指定 > 後台設定的標註模型 > VLM 預設
+        model = request.model or repo.get_task_models(conn).get("annotation")
         annotation = annotate_meme(
-            conn, deps.vlm, meme, data_dir=deps.data_dir, model=request.model
+            conn, deps.vlm, meme, data_dir=deps.data_dir, model=model
         )
         embedded = 0
         if annotation is not None and annotation.is_meme:
@@ -436,6 +448,35 @@ def create_app(deps: Deps | None = None) -> FastAPI:
 
         current = getattr(deps.vlm, "model", None)
         return {"models": VISION_MODELS, "default": current}
+
+    @app.get("/vlm/usage")
+    def vlm_usage(conn: sqlite3.Connection = Depends(get_conn)):
+        """各 key × 狀態的呼叫數與平均延遲（後台監控用）。"""
+        return repo.vlm_call_stats(conn)
+
+    @app.get("/settings/models")
+    def get_model_settings(conn: sqlite3.Connection = Depends(get_conn)) -> dict:
+        """各任務目前的模型設定 + 可選清單 + VLM 預設（後台設定頁用）。"""
+        from memeradar.understanding.nvidia_vlm import VISION_MODELS
+
+        configured = repo.get_task_models(conn)
+        return {
+            "tasks": [
+                {"key": key, "label": _TASK_LABELS[key], "current": configured.get(key)}
+                for key in repo.TASK_MODEL_KEYS
+            ],
+            "available": VISION_MODELS,
+            "default": getattr(deps.vlm, "model", None),
+        }
+
+    @app.put("/settings/models")
+    def put_model_settings(
+        request: ModelSettingsRequest, conn: sqlite3.Connection = Depends(get_conn)
+    ) -> dict:
+        """設定各任務模型；只接受已知任務鍵，值空 = 回預設。"""
+        mapping = {k: v for k, v in request.models.items() if k in repo.TASK_MODEL_KEYS}
+        repo.set_task_models(conn, mapping)
+        return {"models": repo.get_task_models(conn)}
 
     @app.get("/memes/{meme_id}/image")
     def meme_image(meme_id: str, conn: sqlite3.Connection = Depends(get_conn)):

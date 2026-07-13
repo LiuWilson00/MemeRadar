@@ -164,6 +164,7 @@ def rank_candidates(
     params: RankingParams | None = None,
     vectors_by_id: dict[str, list[float]] | None = None,
     model: str | None = None,
+    log=None,
 ) -> list[RankedMeme]:
     from memeradar.understanding.nvidia_vlm import call_structured
 
@@ -175,7 +176,7 @@ def rank_candidates(
 
     result = call_structured(
         vlm, RerankResult, build_system_prompt(), build_user_content(intent, pool),
-        task="rerank", model=model,
+        task="rerank", model=model, log=log,
     )
     if result is None:
         raise RerankRefusedError("模型無法重排序")

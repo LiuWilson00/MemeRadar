@@ -95,3 +95,9 @@ class FeedbackRequest(BaseModel):
     rank: int = Field(ge=1)
     rating: Literal["up", "down"]
     note: str | None = None
+
+
+class ModelSettingsRequest(BaseModel):
+    """後台各任務模型設定；值為 None / 空字串 = 回 VLM 預設。"""
+
+    models: dict[str, str | None] = Field(default_factory=dict)

@@ -69,7 +69,9 @@ def build_system_prompt() -> str:
 只輸出一個 JSON 物件，不要多餘文字或圍欄。欄位：app_guess(字串，line/messenger/instagram/whatsapp/discord/telegram/unknown 之一)、conversation(物件陣列，每個含 speaker「me」或「other」、text 字串、confidence 0~1)、warnings(字串陣列)。"""
 
 
-def parse_screenshot(vlm, image_bytes: bytes, *, model: str | None = None) -> ScreenshotParseResult:
+def parse_screenshot(
+    vlm, image_bytes: bytes, *, model: str | None = None, log=None
+) -> ScreenshotParseResult:
     """用 NVIDIA VLM 把對話截圖解析成結構化對話；解析失敗 / 拒答拋 ScreenshotParseError。"""
     from memeradar.understanding.nvidia_vlm import call_structured
 
@@ -80,7 +82,7 @@ def parse_screenshot(vlm, image_bytes: bytes, *, model: str | None = None) -> Sc
     image_b64 = base64.standard_b64encode(image_bytes).decode("ascii")
     result = call_structured(
         vlm, ScreenshotParseResult, build_system_prompt(), "請解析這張對話截圖，只回 JSON。",
-        image_b64=image_b64, media_type=media_type, task="screenshot", model=model,
+        image_b64=image_b64, media_type=media_type, task="screenshot", model=model, log=log,
     )
     if result is None:
         raise ScreenshotParseError("模型無法解析此截圖")

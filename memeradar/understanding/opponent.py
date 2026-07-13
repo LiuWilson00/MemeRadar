@@ -45,13 +45,15 @@ def build_system_prompt() -> str:
 只輸出一個 JSON 物件，不要多餘文字或圍欄。欄位：ocr_text(字串)、description(字串)、emotions(字串陣列)、read(字串)。"""
 
 
-def analyze_opponent_meme(vlm, image_bytes: bytes, *, model: str | None = None) -> OpponentMeme:
+def analyze_opponent_meme(
+    vlm, image_bytes: bytes, *, model: str | None = None, log=None
+) -> OpponentMeme:
     """用 NVIDIA VLM 理解對方梗圖（記憶體，不落庫）；解析失敗 / 拒答拋 refused。"""
     media_type = detect_media_type(image_bytes)  # 不支援格式 → ValueError
     image_b64 = base64.standard_b64encode(image_bytes).decode("ascii")
     result = call_structured(
         vlm, OpponentMeme, build_system_prompt(), "請理解對方丟來的這張梗圖，只回 JSON。",
-        image_b64=image_b64, media_type=media_type, task="opponent", model=model,
+        image_b64=image_b64, media_type=media_type, task="opponent", model=model, log=log,
     )
     if result is None:
         raise OpponentMemeRefusedError("模型無法解析對方梗圖")

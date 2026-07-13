@@ -719,6 +719,39 @@ def vlm_call_stats(conn: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# ── settings（後台可調的執行期設定：目前為各任務模型覆寫）──────────────────
+
+# pipeline 會覆寫模型的五個任務；後台設定頁即以此為準
+TASK_MODEL_KEYS = ("annotation", "intent", "rerank", "screenshot", "opponent")
+_MODEL_PREFIX = "model:"
+
+
+def get_task_models(conn: sqlite3.Connection) -> dict[str, str]:
+    """回傳有設定覆寫的 {task: model_id}（未設定的任務不列入 → 呼叫端用 VLM 預設）。"""
+    rows = conn.execute(
+        "SELECT key, value FROM settings WHERE key LIKE ?", (_MODEL_PREFIX + "%",)
+    ).fetchall()
+    return {r["key"][len(_MODEL_PREFIX):]: r["value"] for r in rows if r["value"]}
+
+
+def set_task_models(conn: sqlite3.Connection, mapping: dict[str, str | None]) -> None:
+    """設定各任務模型；值為 None / 空字串 = 刪除該覆寫（回 VLM 預設）。"""
+    for task, model in mapping.items():
+        key = _MODEL_PREFIX + task
+        if model:
+            conn.execute(
+                """
+                INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                               updated_at = excluded.updated_at
+                """,
+                (key, model, _now_iso()),
+            )
+        else:
+            conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+    conn.commit()
+
+
 # ── tasks（非同步推薦任務）──────────────────────────────────────────────
 
 

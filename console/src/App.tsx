@@ -9,11 +9,12 @@ import RadarLoading from "./components/RadarLoading";
 import ReportView from "./components/ReportView";
 import ResultCard from "./components/ResultCard";
 import ReviewView from "./components/ReviewView";
+import SettingsView from "./components/SettingsView";
 import UploadView from "./components/UploadView";
 import { DEFAULT_FILTERS, DEFAULT_PARAMS, fetchMeta, recommend } from "./lib/api";
 import type { Filters, HistoryDetail, Meta, Params, RecommendResponse, Turn } from "./types";
 
-type Tab = "work" | "history" | "library" | "upload" | "review" | "report";
+type Tab = "work" | "history" | "library" | "upload" | "review" | "report" | "settings";
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "work", label: "工作台" },
   { id: "history", label: "查詢歷史" },
@@ -21,6 +22,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "upload", label: "上傳" },
   { id: "review", label: "複核" },
   { id: "report", label: "報表" },
+  { id: "settings", label: "設定" },
 ];
 
 export default function App() {
@@ -120,6 +122,7 @@ export default function App() {
       )}
       {tab === "review" && <ReviewView meta={meta} />}
       {tab === "report" && <ReportView />}
+      {tab === "settings" && <SettingsView />}
 
       <main
         className={`min-h-0 flex-1 grid-cols-[300px_1fr_260px] gap-4 p-4 ${

@@ -73,6 +73,25 @@ export interface ScreenshotParse {
   warnings: string[];
 }
 
+export interface ModelTaskSetting {
+  key: string;
+  label: string;
+  current: string | null; // null = 用 VLM 預設
+}
+
+export interface ModelSettings {
+  tasks: ModelTaskSetting[];
+  available: string[];
+  default: string | null;
+}
+
+export interface VlmUsageRow {
+  key_id: string | null;
+  status: string;
+  n: number;
+  avg_ms: number | null;
+}
+
 export type TaskStatus = "pending" | "running" | "done" | "error";
 
 /** 歷史列表項（精簡，不含完整 result；has_result 為 SQLite 0/1）。 */

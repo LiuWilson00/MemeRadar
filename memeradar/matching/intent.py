@@ -154,13 +154,14 @@ def analyze_conversation(
     conversation: list[ConversationTurn],
     *,
     model: str | None = None,
+    log=None,
 ) -> IntentResult:
     """用 NVIDIA 文字模型分析對話意圖；解析失敗 / 拒答拋 IntentRefusedError。"""
     from memeradar.understanding.nvidia_vlm import call_structured
 
     result = call_structured(
         vlm, IntentResult, build_system_prompt(), serialize_conversation(conversation),
-        task="intent", model=model,
+        task="intent", model=model, log=log,
     )
     if result is None:
         raise IntentRefusedError("模型無法分析此對話")

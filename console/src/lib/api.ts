@@ -7,6 +7,7 @@ import type {
   HistoryItem,
   LibraryMeme,
   Meta,
+  ModelSettings,
   Params,
   RecommendResponse,
   ScreenshotParse,
@@ -15,6 +16,7 @@ import type {
   TaskSummary,
   Turn,
   UploadResult,
+  VlmUsageRow,
 } from "../types";
 import { getClientId } from "./clientId";
 import type { UploadOutcome } from "./uploadQueue";
@@ -217,6 +219,28 @@ async function errorDetail(response: Response, fallback: string): Promise<string
 
 export async function fetchVlmModels(): Promise<{ models: string[]; default: string | null }> {
   return unwrap(await fetch("/vlm/models"));
+}
+
+/** 後台：各任務模型設定（含可選清單與 VLM 預設）。 */
+export async function fetchModelSettings(): Promise<ModelSettings> {
+  return unwrap<ModelSettings>(await fetch("/settings/models"));
+}
+
+/** 後台：設定各任務模型；值為 null / 空字串 = 回預設。 */
+export async function updateModelSettings(
+  models: Record<string, string | null>,
+): Promise<void> {
+  const response = await fetch("/settings/models", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ models }),
+  });
+  await unwrap(response);
+}
+
+/** 後台：NVIDIA 呼叫用量（各 key × 狀態的呼叫數與平均延遲）。 */
+export async function fetchVlmUsage(): Promise<VlmUsageRow[]> {
+  return unwrap<VlmUsageRow[]>(await fetch("/vlm/usage"));
 }
 
 /** 分類版上傳（批次佇列用）：以 HTTP 狀態碼區分成功 / 重複 / 失敗，不丟例外。 */

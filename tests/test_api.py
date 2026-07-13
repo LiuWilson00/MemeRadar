@@ -77,8 +77,9 @@ class StubVlm:
         return ANNOTATION_PAYLOAD.model_dump_json()
 
     def chat(self, system, user_text, *, task="text", log=None, **kwargs):
-        if log is not None:
-            log({"key_id": "…test", "model": self.model, "task": task, "status": "ok",
+        if log is not None:  # 比照 NvidiaVlm：記錄實際使用的模型（含覆寫）
+            log({"key_id": "…test", "model": kwargs.get("model") or self.model,
+                 "task": task, "meme_id": None, "status": "ok",
                  "latency_ms": 50, "prompt_tokens": 80, "completion_tokens": 40, "error": None})
         if task in self.refuse:
             return "抱歉，我無法處理。"
@@ -745,6 +746,65 @@ class TestAsyncTasks:
         body = client.get(f"/tasks/{task_id}").json()
         assert body["status"] == "error"
         assert body["error"]
+
+
+class TestModelSettingsEndpoints:
+    """後台設定頁：各任務模型可調 + 用量檢視。"""
+
+    def test_get_lists_five_tasks_with_available_and_default(self, env):
+        client, *_ = env
+        body = client.get("/settings/models").json()
+        keys = {t["key"] for t in body["tasks"]}
+        assert keys == {"annotation", "intent", "rerank", "screenshot", "opponent"}
+        assert all(t["current"] is None for t in body["tasks"])  # 預設未覆寫
+        assert "qwen/qwen3.5-122b-a10b" in body["available"]
+        assert body["default"] == "qwen/test"  # StubVlm.model
+
+    def test_put_persists_and_reflects_in_get(self, env):
+        client, *_ = env
+        client.put("/settings/models", json={"models": {"intent": "qwen/qwen3.5-397b-a17b"}})
+        body = client.get("/settings/models").json()
+        by_key = {t["key"]: t["current"] for t in body["tasks"]}
+        assert by_key["intent"] == "qwen/qwen3.5-397b-a17b"
+        assert by_key["rerank"] is None
+
+    def test_put_ignores_unknown_task_keys(self, env):
+        client, *_ = env
+        client.put(
+            "/settings/models",
+            json={"models": {"bogus": "x", "rerank": "qwen/qwen3.5-397b-a17b"}},
+        )
+        by_key = {t["key"]: t["current"] for t in client.get("/settings/models").json()["tasks"]}
+        assert by_key["rerank"] == "qwen/qwen3.5-397b-a17b"
+        assert "bogus" not in by_key
+
+    def test_configured_model_flows_into_task_execution(self, env):
+        client, conn, _, deps = env
+        # 設定覆寫的模型應真的傳進意圖呼叫，並落進 vlm_calls（用量表）
+        client.put("/settings/models", json={"models": {"intent": "qwen/qwen3.5-397b-a17b"}})
+        deps.run_async = lambda fn: fn()
+        client.post("/tasks", json={**BASE_REQUEST, "client_id": "c_me"})
+        rows = conn.execute("SELECT model FROM vlm_calls WHERE task='intent'").fetchall()
+        assert rows and rows[0]["model"] == "qwen/qwen3.5-397b-a17b"
+
+    def test_usage_endpoint_reports_calls_after_a_task(self, env):
+        client, _, _, deps = env
+        deps.run_async = lambda fn: fn()
+        client.post("/tasks", json={**BASE_REQUEST, "client_id": "c_me"})
+        usage = client.get("/vlm/usage").json()
+        assert any(row["n"] >= 1 for row in usage)  # 推薦路徑呼叫已被記錄
+
+    def test_settings_endpoints_are_admin_gated(self, tmp_path):
+        db_path = tmp_path / "db.sqlite3"
+        connect(db_path).close()
+        deps = Deps(
+            client=DualStubClient(), vlm=StubVlm(), embedder=FakeEmbedder(),
+            db_path=db_path, data_dir=tmp_path,
+            admin_username="boss", admin_password="secret",
+        )
+        client = TestClient(create_app(deps))
+        assert client.get("/settings/models").status_code == 401
+        assert client.get("/vlm/usage").status_code == 401
 
 
 class TestAsyncTasksRealExecutor:

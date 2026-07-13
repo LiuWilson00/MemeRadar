@@ -12,13 +12,8 @@ import time
 from typing import Any
 
 from memeradar.api.schemas import RecommendRequest, TurnIn
-from memeradar.matching.intent import (
-    DEFAULT_INTENT_MODEL,
-    ConversationTurn,
-    analyze_conversation,
-)
+from memeradar.matching.intent import ConversationTurn, analyze_conversation
 from memeradar.matching.rerank import (
-    DEFAULT_RERANK_MODEL,
     RankedMeme,
     RankingParams,
     RerankRefusedError,
@@ -57,7 +52,12 @@ def run_recommendation(
     request: RecommendRequest,
     *,
     image_bytes: bytes | None = None,
+    models: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    # models：後台各任務模型覆寫（{task: model_id}）；未列入者用 VLM 預設
+    pick = (models or {}).get
+    # 用量記錄：意圖 / rerank / 截圖 / 對方梗圖的呼叫也寫進 vlm_calls（後台監控）
+    sink = lambda rec: repo.insert_vlm_call(conn, rec)  # noqa: E731
     timings: dict[str, int] = {}
     t_start = time.perf_counter()
 
@@ -67,21 +67,21 @@ def run_recommendation(
     if request.input_type == "screenshot":
         # 截圖僅在記憶體處理、不落庫（docs/06 §1）；log 只存解析後文字
         t0 = time.perf_counter()
-        parsed = parse_screenshot(vlm, image_bytes or b"")
+        parsed = parse_screenshot(vlm, image_bytes or b"", model=pick("screenshot"), log=sink)
         timings["screenshot_parse"] = int((time.perf_counter() - t0) * 1000)
         conversation = [TurnIn(speaker=t.speaker, text=t.text) for t in parsed.conversation]
         screenshot_debug = parsed.model_dump()
     elif request.input_type == "meme_battle":
         # 梗圖大戰：理解對方梗圖（僅記憶體、不落庫），合成一則 other 輪次走既有管線
         t0 = time.perf_counter()
-        opponent = analyze_opponent_meme(vlm, image_bytes or b"")  # 拒答由端點層轉 422
+        opponent = analyze_opponent_meme(vlm, image_bytes or b"", model=pick("opponent"), log=sink)
         timings["opponent_meme"] = int((time.perf_counter() - t0) * 1000)
         conversation = [TurnIn(speaker="other", text=build_battle_turn(opponent))]
         opponent_debug = opponent.model_dump()
 
     turns = [ConversationTurn(t.speaker, t.text) for t in conversation]
     t0 = time.perf_counter()
-    intent = analyze_conversation(vlm, turns)  # IntentRefusedError 由端點層轉 422
+    intent = analyze_conversation(vlm, turns, model=pick("intent"), log=sink)  # 拒答由端點層轉 422
     timings["intent"] = int((time.perf_counter() - t0) * 1000)
 
     filters = SearchFilters(
@@ -123,6 +123,8 @@ def run_recommendation(
                 hotness_weight=request.params.hotness_weight,
             ),
             vectors_by_id=vectors,
+            model=pick("rerank"),
+            log=sink,
         )
     except RerankRefusedError:
         rerank_fallback = True
@@ -165,8 +167,11 @@ def run_recommendation(
                 "filters": request.filters.model_dump(),
                 "params": request.params.model_dump(),
                 "embedding_signature": signature,
-                # 記錄產生此推薦的 LLM 模型，供回饋驗證模型選擇（如 haiku vs sonnet）
-                "models": {"intent": DEFAULT_INTENT_MODEL, "rerank": DEFAULT_RERANK_MODEL},
+                # 記錄產生此推薦實際用的模型（後台覆寫 > VLM 預設），供回饋分析模型選擇
+                "models": {
+                    "intent": pick("intent") or getattr(vlm, "model", None),
+                    "rerank": pick("rerank") or getattr(vlm, "model", None),
+                },
             },
             candidates=candidates_debug,
             final_results=results,
