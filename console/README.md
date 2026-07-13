@@ -3,8 +3,7 @@
 React + Vite + Tailwind 的內部 Demo / 調參工作台（規格：[docs/05](../docs/05-demo-console.md)）。
 
 兩個入口（雙頁 App）：
-- `/`（`index.html`）——**桌機調適 Console**：六分頁工作台，給開發/調參用。
-- `/mobile.html`——**手機版 client**：給一般使用者。極簡單頁，三種輸入：
+- `/`（`index.html`）——**前台：手機版 client**（公開，給一般使用者）。極簡單頁，三種輸入：
   - **上傳對話截圖**（看對話內容推薦怎麼回）
   - **對方丟了梗圖**（梗圖大戰：上傳對方的圖 → 後端理解 → 推薦反擊梗，結果頁顯示對方那張）
   - 手動輸入對方一句話（輔）
@@ -13,6 +12,8 @@ React + Vite + Tailwind 的內部 Demo / 調參工作台（規格：[docs/05](..
   「搜尋更多」→ 選梗圖包 / 分類標籤換一批。底部 nav bar 兩分頁：推薦 / 設定
   （偏好存 localStorage：排除成人、偏好梗圖包 / 分類，套用到每次推薦）。圖示用
   lucide（非 emoji）。
+- `/admin.html`（`admin.html`）——**後台：調適 Console**（env 帳密登入）：工作台 /
+  查詢歷史 / 梗圖庫 / 上傳 / 複核 / 報表 / 設定。上傳等操作 API 走後台 basic auth。
 
 ## 開發
 

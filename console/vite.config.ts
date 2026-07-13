@@ -8,12 +8,11 @@ const API = "http://127.0.0.1:8000";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   build: {
-    // 雙入口：/ = 調適 Console（桌機），/mobile.html = 手機 client
-    // 相對路徑由 Vite 以專案根目錄解析（免 node:path / __dirname 型別依賴）
+    // 雙入口：/ = 手機 client（前台，公開），/admin.html = 調適 Console（後台）
     rollupOptions: {
       input: {
         main: "index.html",
-        mobile: "mobile.html",
+        admin: "admin.html",
       },
     },
   },
