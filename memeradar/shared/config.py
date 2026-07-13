@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     cors_origins: str = ""
     # 公開昂貴端點（/recommend、/tasks）每 IP 每分鐘上限；0 = 不限流。
     rate_limit_per_min: int = 30
+    # embedding 後端：nvidia-bge-m3（hosted，免容器 torch）或 bge-m3（本地離線）。
+    embedding_backend: str = "nvidia-bge-m3"
 
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

@@ -77,14 +77,14 @@ def _default_deps() -> Deps:
 
     from memeradar.shared.config import get_settings
     from memeradar.understanding.annotator import build_default_vlm
-    from memeradar.understanding.embedding import DEFAULT_BACKEND, get_embedder
+    from memeradar.understanding.embedding import get_embedder
 
     settings = get_settings()
     api_key = settings.anthropic_api_key
     return Deps(
         client=anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic(),
         vlm=build_default_vlm(),
-        embedder=get_embedder(DEFAULT_BACKEND),
+        embedder=get_embedder(settings.embedding_backend),
         db_path=settings.memeradar_data_dir,  # 連線改由 DATABASE_URL；此欄僅為相容保留
         data_dir=settings.memeradar_data_dir,
         admin_username=settings.admin_username,
@@ -182,8 +182,12 @@ def _check_basic_auth(header: str | None, user: str, password: str) -> bool:
 def create_app(deps: Deps | None = None) -> FastAPI:
     if deps is None:
         deps = _default_deps()
-        # 啟動即暖機：BGE-M3 冷載入約 7s，付在伺服器啟動而非第一個使用者請求
-        deps.embedder.embed(["暖機"])
+        # 啟動即暖機（本地 BGE 冷載入 / 驗證 NVIDIA embedding 連線）；best-effort，
+        # 暫時性錯誤不擋啟動。
+        try:
+            deps.embedder.embed(["暖機"])
+        except Exception:  # noqa: BLE001
+            pass
 
     startup_conn = connect(deps.db_path)
     migrate(startup_conn)

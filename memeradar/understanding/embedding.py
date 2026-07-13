@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+import time
 from typing import Protocol
 
 from memeradar.shared import repository as repo
@@ -23,8 +24,12 @@ from memeradar.understanding.retrieval_doc import (
     build_retrieval_document,
 )
 
-DEFAULT_BACKEND = "bge-m3"
+# 預設走 NVIDIA hosted bge-m3（與本地 sentence-transformers bge-m3 向量完全相同，
+# cosine=1.0），省掉容器內的 torch + 2.3GB 模型與其記憶體。離線開發可設
+# EMBEDDING_BACKEND=bge-m3 走本地。
+DEFAULT_BACKEND = "nvidia-bge-m3"
 BATCH_SIZE = 32
+NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
 
 
 class Embedder(Protocol):
@@ -60,16 +65,66 @@ class BgeM3Embedder:
         return [vector.tolist() for vector in vectors]
 
 
-_BACKENDS: dict[str, type] = {
+class NvidiaBgeM3Embedder:
+    """NVIDIA NIM hosted ``baai/bge-m3``。
+
+    與本地 sentence-transformers bge-m3 的向量**完全相同**（實測 cosine=1.0），故
+    ``model_id`` 沿用 "bge-m3"、簽名相同、既有向量相容。不需 torch/本地模型，記憶體極省。
+    多把 key 輪流以分攤免費層速率限制；失敗換 key 重試。
+    """
+
+    model_id = "bge-m3"  # 與本地相同 → 簽名相同 → 既有向量相容
+    _NV_MODEL = "baai/bge-m3"
+
+    def __init__(self, keys: list[str], *, batch_size: int = BATCH_SIZE):
+        if not keys:
+            raise RuntimeError(
+                "NVIDIA embedding 需要 NVIDIA_API_KEYS（或設 EMBEDDING_BACKEND=bge-m3 走本地）"
+            )
+        from openai import OpenAI
+
+        self._clients = [OpenAI(base_url=NVIDIA_BASE_URL, api_key=k) for k in keys]
+        self._batch = batch_size
+        self._rr = 0
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        out: list[list[float]] = []
+        for i in range(0, len(texts), self._batch):
+            out.extend(self._embed_batch(texts[i : i + self._batch]))
+        return out
+
+    def _embed_batch(self, batch: list[str]) -> list[list[float]]:
+        last_exc: Exception | None = None
+        for _ in range(max(2, len(self._clients) * 2)):
+            client = self._clients[self._rr % len(self._clients)]
+            self._rr += 1
+            try:
+                resp = client.embeddings.create(
+                    model=self._NV_MODEL, input=batch,
+                    extra_body={"input_type": "passage", "truncate": "END"},
+                )
+                return [d.embedding for d in sorted(resp.data, key=lambda d: d.index)]
+            except Exception as exc:  # noqa: BLE001 速率限制/瞬斷 → 換 key 重試
+                last_exc = exc
+                time.sleep(0.5)
+        raise RuntimeError(f"NVIDIA embedding 失敗：{last_exc}")
+
+
+_LOCAL_BACKENDS: dict[str, type] = {
     "bge-m3": BgeM3Embedder,
 }
+_BACKENDS = frozenset({"nvidia-bge-m3", *_LOCAL_BACKENDS})
 
 
 def get_embedder(name: str) -> Embedder:
-    if name not in _BACKENDS:
-        available = "、".join(sorted(_BACKENDS))
-        raise ValueError(f"未知的 embedding 後端：{name!r}（可用：{available}）")
-    return _BACKENDS[name]()
+    if name == "nvidia-bge-m3":
+        from memeradar.shared.config import get_settings
+
+        return NvidiaBgeM3Embedder(get_settings().nvidia_keys())
+    if name in _LOCAL_BACKENDS:
+        return _LOCAL_BACKENDS[name]()
+    available = "、".join(sorted(_BACKENDS))
+    raise ValueError(f"未知的 embedding 後端：{name!r}（可用：{available}）")
 
 
 def embedding_signature(embedder: Embedder) -> str:
