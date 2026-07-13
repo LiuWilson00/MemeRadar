@@ -167,17 +167,26 @@ async function errorDetail(response: Response, fallback: string): Promise<string
     .catch(() => fallback);
 }
 
+export async function fetchVlmModels(): Promise<{ models: string[]; default: string | null }> {
+  return unwrap(await fetch("/vlm/models"));
+}
+
 /** 分類版上傳（批次佇列用）：以 HTTP 狀態碼區分成功 / 重複 / 失敗，不丟例外。 */
 export async function uploadMemeClassified(
   imageBase64: string,
   titleHint: string,
+  model?: string,
 ): Promise<UploadOutcome> {
   let response: Response;
   try {
     response = await fetch("/memes", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ image: imageBase64, title_hint: titleHint || null }),
+      body: JSON.stringify({
+        image: imageBase64,
+        title_hint: titleHint || null,
+        model: model || null,
+      }),
     });
   } catch (e) {
     return { kind: "error", message: e instanceof Error ? e.message : "網路錯誤" };

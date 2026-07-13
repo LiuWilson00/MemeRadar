@@ -30,6 +30,7 @@ export default defineConfig({
       "/history": API,
       "/review": API,
       "/report": API,
+      "/vlm": API,
     },
   },
   test: {

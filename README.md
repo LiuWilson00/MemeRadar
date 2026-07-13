@@ -60,11 +60,15 @@ python -m memeradar.shared.db
 python -m memeradar.ingestion.seed_import <資料夾>
 ```
 
-批次標註尚未標註的梗圖（需先在 `.env` 設定 `ANTHROPIC_API_KEY`）：
+批次標註尚未標註的梗圖（NVIDIA NIM 免費 VLM，需先在 `.env` 設定 `NVIDIA_API_KEYS`，
+可逗號分隔多把 key 輪流用以分攤速率限制）：
 
 ```bash
-python -m memeradar.understanding.annotator [--limit N]
+python -m memeradar.understanding.annotator [--limit N] [--model <vision模型>]
 ```
+
+用量紀錄查詢（哪把 key 被打爆 / 限流率 / 平均延遲）：
+`SELECT key_id, status, COUNT(*), AVG(latency_ms) FROM vlm_calls GROUP BY key_id, status;`
 
 批次向量化已標註的梗圖（BGE-M3 本地推論；需先 `pip install -e ".[local-embedding]"`，首次執行會自動下載約 2.3GB 模型權重）：
 

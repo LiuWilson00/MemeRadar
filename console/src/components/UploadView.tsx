@@ -1,7 +1,7 @@
 import { Ban, Check, CircleDashed, LoaderCircle, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
-import { uploadMemeClassified } from "../lib/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { fetchVlmModels, uploadMemeClassified } from "../lib/api";
 import { fileToBase64, imageFilesFrom } from "../lib/files";
 import { runUploadQueue, type UploadItem, type UploadSummary } from "../lib/uploadQueue";
 
@@ -24,7 +24,18 @@ export default function UploadView({ onDone }: { onDone?: () => void }) {
   const [running, setRunning] = useState(false);
   const [summary, setSummary] = useState<UploadSummary | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [models, setModels] = useState<string[]>([]);
+  const [model, setModel] = useState<string>("");
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    fetchVlmModels()
+      .then((r) => {
+        setModels(r.models);
+        setModel(r.default ?? r.models[0] ?? "");
+      })
+      .catch(() => {});
+  }, []);
 
   const start = useCallback(
     async (files: File[]) => {
@@ -34,14 +45,14 @@ export default function UploadView({ onDone }: { onDone?: () => void }) {
       const hint = titleHint.trim();
       const result = await runUploadQueue(
         files,
-        async (file) => uploadMemeClassified(await fileToBase64(file), hint),
+        async (file) => uploadMemeClassified(await fileToBase64(file), hint, model),
         setItems,
       );
       setSummary(result);
       setRunning(false);
       onDone?.();
     },
-    [running, titleHint, onDone],
+    [running, titleHint, model, onDone],
   );
 
   const done = items.filter((i) => i.status !== "queued" && i.status !== "uploading").length;
@@ -54,9 +65,25 @@ export default function UploadView({ onDone }: { onDone?: () => void }) {
           onChange={(e) => setTitleHint(e.target.value)}
           disabled={running}
           placeholder="主題提示（選填）——例如「海綿寶寶」，整批共用，餵給標註當上下文"
-          className="min-w-72 flex-1 rounded border border-line bg-raised px-3 py-1.5 text-sm
+          className="min-w-56 flex-1 rounded border border-line bg-raised px-3 py-1.5 text-sm
                      disabled:opacity-50"
         />
+        <label className="flex items-center gap-1.5 text-xs text-muted">
+          標註模型
+          <select
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            disabled={running || models.length === 0}
+            className="rounded border border-line bg-raised px-2 py-1.5 text-xs text-fg
+                       disabled:opacity-50"
+          >
+            {models.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
       <button

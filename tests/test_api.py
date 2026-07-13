@@ -60,10 +60,10 @@ class StubVlm:
     model = "qwen/test"
 
     def annotate(self, image_b64, media_type, system, user_text, *, log=None, **kwargs):
-        if log is not None:
-            log({"key_id": "…test", "model": self.model, "task": "annotate",
-                 "meme_id": kwargs.get("meme_id"), "status": "ok", "latency_ms": 100,
-                 "prompt_tokens": 100, "completion_tokens": 50, "error": None})
+        if log is not None:  # 比照 NvidiaVlm：log 記錄「實際使用的模型」（含 model 覆寫）
+            log({"key_id": "…test", "model": kwargs.get("model") or self.model,
+                 "task": "annotate", "meme_id": kwargs.get("meme_id"), "status": "ok",
+                 "latency_ms": 100, "prompt_tokens": 100, "completion_tokens": 50, "error": None})
         return ANNOTATION_PAYLOAD.model_dump_json()
 
 OPPONENT_PAYLOAD = OpponentMeme(
@@ -473,6 +473,25 @@ class TestLibrary:
     def test_upload_invalid_base64_422(self, env):
         client, *_ = env
         assert client.post("/memes", json={"image": "@@@"}).status_code == 422
+
+    def test_vlm_models_lists_candidates_and_default(self, env):
+        client, *_ = env
+        body = client.get("/vlm/models").json()
+        assert "qwen/qwen3.5-122b-a10b" in body["models"]
+        assert body["default"] == "qwen/test"  # StubVlm.model
+
+    def test_upload_passes_chosen_model(self, env):
+        client, conn, *_ = env
+        buffer = __import__("io").BytesIO()
+        Image.new("RGB", (300, 300), (10, 200, 90)).save(buffer, format="PNG")
+        png_b64 = base64.standard_b64encode(buffer.getvalue()).decode()
+        resp = client.post("/memes", json={"image": png_b64, "model": "meta/llama-4-maverick"})
+        assert resp.status_code == 200
+        # 用量紀錄該筆的 model 應為選定模型
+        row = conn.execute(
+            "SELECT model FROM vlm_calls ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        assert row["model"] == "meta/llama-4-maverick"
 
     def test_upload_corrupt_image_422(self, env):
         client, *_ = env

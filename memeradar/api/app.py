@@ -304,6 +304,14 @@ def create_app(deps: Deps | None = None) -> FastAPI:
 
         return build_feedback_report(conn)
 
+    @app.get("/vlm/models")
+    def vlm_models() -> dict:
+        """標註可用的 NVIDIA vision 模型清單 + 目前預設（Console 切換按鈕用）。"""
+        from memeradar.understanding.nvidia_vlm import VISION_MODELS
+
+        current = getattr(deps.vlm, "model", None)
+        return {"models": VISION_MODELS, "default": current}
+
     @app.get("/memes/{meme_id}/image")
     def meme_image(meme_id: str, conn: sqlite3.Connection = Depends(get_conn)):
         meme = repo.get_meme(conn, meme_id)

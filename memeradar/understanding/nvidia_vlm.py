@@ -16,6 +16,17 @@ from typing import Any
 
 BASE_URL = "https://integrate.api.nvidia.com/v1"
 
+# Console 模型切換按鈕的候選清單（NVIDIA NIM 上實測可吃圖的 vision 模型；
+# 首項為預設，繁中理解最佳）。
+VISION_MODELS = [
+    "qwen/qwen3.5-122b-a10b",
+    "qwen/qwen3.5-397b-a17b",
+    "nvidia/nemotron-nano-12b-v2-vl",
+    "meta/llama-4-maverick-17b-128e-instruct",
+    "meta/llama-3.2-90b-vision-instruct",
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+]
+
 
 class VlmExhaustedError(RuntimeError):
     """所有 key 皆限流 / 失敗且超過等待上限時拋出。"""
