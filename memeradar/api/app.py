@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from memeradar.api.pipeline import run_recommendation
 from memeradar.api.schemas import (
@@ -51,6 +51,8 @@ class Deps:
     embedder: Embedder
     db_path: Path
     data_dir: Path
+    admin_username: str = ""  # 後台登入；空 = 不設防
+    admin_password: str = ""
 
 
 def _default_deps() -> Deps:
@@ -69,7 +71,36 @@ def _default_deps() -> Deps:
         embedder=get_embedder(DEFAULT_BACKEND),
         db_path=default_db_path(),
         data_dir=settings.memeradar_data_dir,
+        admin_username=settings.admin_username,
+        admin_password=settings.admin_password,
     )
+
+
+# 前台（手機 client）需要的公開路徑；其餘一律歸後台（admin）
+_PUBLIC_EXACT = {"/health", "/recommend", "/feedback", "/meta", "/docs", "/openapi.json"}
+
+
+def _is_public(method: str, path: str) -> bool:
+    import re
+
+    if path in _PUBLIC_EXACT:
+        return True
+    # 梗圖圖片：手機端要顯示，公開（僅 GET）
+    return method == "GET" and re.match(r"^/memes/[^/]+/image$", path) is not None
+
+
+def _check_basic_auth(header: str | None, user: str, password: str) -> bool:
+    import binascii
+    import secrets
+
+    if not header or not header.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(header[6:], validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        return False
+    got_user, _, got_pass = decoded.partition(":")
+    return secrets.compare_digest(got_user, user) and secrets.compare_digest(got_pass, password)
 
 
 def create_app(deps: Deps | None = None) -> FastAPI:
@@ -83,6 +114,20 @@ def create_app(deps: Deps | None = None) -> FastAPI:
     startup_conn.close()
 
     app = FastAPI(title="MemeRadar API", version="0.1.0")
+
+    @app.middleware("http")
+    async def admin_gate(request, call_next):
+        """後台（admin）路徑需 env 帳密登入；前台公開路徑放行。帳密未設 = 不設防。"""
+        if deps.admin_username and deps.admin_password and request.method != "OPTIONS":
+            if not _is_public(request.method, request.url.path):
+                header = request.headers.get("Authorization")
+                if not _check_basic_auth(header, deps.admin_username, deps.admin_password):
+                    return JSONResponse(
+                        {"detail": "需要後台登入"},
+                        status_code=401,
+                        headers={"WWW-Authenticate": 'Basic realm="MemeRadar Admin"'},
+                    )
+        return await call_next(request)
 
     def get_conn() -> Iterator[sqlite3.Connection]:
         conn = connect(deps.db_path)

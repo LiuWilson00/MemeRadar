@@ -30,6 +30,19 @@ def test_nvidia_keys_empty_when_unset(monkeypatch):
     assert Settings(_env_file=None).nvidia_keys() == []
 
 
+def test_admin_auth_enabled_only_when_both_set(monkeypatch):
+    monkeypatch.delenv("ADMIN_USERNAME", raising=False)
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    assert Settings(_env_file=None).admin_auth_enabled() is False  # 未設 → 不設防
+
+    monkeypatch.setenv("ADMIN_USERNAME", "boss")
+    monkeypatch.setenv("ADMIN_PASSWORD", "s3cret")
+    get_settings.cache_clear()
+    s = get_settings()
+    assert s.admin_auth_enabled() is True
+    assert s.admin_username == "boss" and s.admin_password == "s3cret"
+
+
 def test_defaults_allow_offline_dev(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("VOYAGE_API_KEY", raising=False)

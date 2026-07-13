@@ -31,10 +31,16 @@ class Settings(BaseSettings):
     # NVIDIA NIM（VLM 標註）：多把免費 key 逗號分隔，輪流用以分攤速率限制
     nvidia_api_keys: str = ""
     nvidia_vlm_model: str = "qwen/qwen3.5-122b-a10b"
+    # 後台（admin console）登入：env 帳密；兩者皆填才啟用（空 = 不設防，方便 dev）
+    admin_username: str = ""
+    admin_password: str = ""
     memeradar_data_dir: Path = Path("./data")
 
     def nvidia_keys(self) -> list[str]:
         return [k.strip() for k in self.nvidia_api_keys.split(",") if k.strip()]
+
+    def admin_auth_enabled(self) -> bool:
+        return bool(self.admin_username and self.admin_password)
 
     def require(self, field_name: str) -> str:
         value = getattr(self, field_name)

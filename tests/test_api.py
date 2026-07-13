@@ -474,6 +474,25 @@ class TestLibrary:
         client, *_ = env
         assert client.post("/memes", json={"image": "@@@"}).status_code == 422
 
+    def test_public_routes_open_even_when_admin_auth_enabled(self, env):
+        client, _c, memes, deps = env
+        deps.admin_username, deps.admin_password = "boss", "pw"
+        assert client.get("/health").status_code == 200
+        assert client.get("/meta").status_code == 200
+        assert client.post("/recommend", json=BASE_REQUEST).status_code == 200
+        assert client.get(f"/memes/{memes[0].meme_id}/image").status_code == 200  # 圖片公開
+
+    def test_admin_route_requires_credentials(self, env):
+        client, _c, _m, deps = env
+        deps.admin_username, deps.admin_password = "boss", "pw"
+        assert client.get("/memes").status_code == 401  # 列表=後台
+        assert client.get("/memes", auth=("boss", "wrong")).status_code == 401
+        assert client.get("/memes", auth=("boss", "pw")).status_code == 200
+
+    def test_no_gate_when_creds_unset(self, env):
+        client, *_ = env  # 帳密空 → 不設防（dev/測試）
+        assert client.get("/memes").status_code == 200
+
     def test_vlm_models_lists_candidates_and_default(self, env):
         client, *_ = env
         body = client.get("/vlm/models").json()
