@@ -788,27 +788,146 @@ def insert_event(
 
 
 def leaderboard(conn: sqlite3.Connection, limit: int = 20) -> list[dict]:
-    """熱門梗圖榜：綜合熱度 = 讚×3 + 下載；只列有互動者（資料少時自然短/空）。"""
+    """熱門梗圖榜：綜合熱度 = 讚×3 + 下載；讚 = 推薦回饋讚 + 圖庫愛心讚。
+    只列有互動者（資料少時自然短/空）。"""
     rows = conn.execute(
         """
         SELECT m.meme_id, a.ocr_text, a.franchise,
-               COALESCE(likes.n, 0) AS likes,
+               COALESCE(fb.n, 0) + COALESCE(gl.n, 0) AS likes,
                COALESCE(dl.n, 0) AS downloads,
-               COALESCE(likes.n, 0) * 3 + COALESCE(dl.n, 0) AS score
+               (COALESCE(fb.n, 0) + COALESCE(gl.n, 0)) * 3 + COALESCE(dl.n, 0) AS score
         FROM memes m
         JOIN meme_annotations a ON a.meme_id = m.meme_id
         LEFT JOIN (SELECT meme_id, COUNT(*) AS n FROM feedback_events
-                   WHERE rating = 'up' GROUP BY meme_id) likes ON likes.meme_id = m.meme_id
+                   WHERE rating = 'up' GROUP BY meme_id) fb ON fb.meme_id = m.meme_id
+        LEFT JOIN (SELECT meme_id, COUNT(*) AS n FROM meme_likes
+                   GROUP BY meme_id) gl ON gl.meme_id = m.meme_id
         LEFT JOIN (SELECT meme_id, COUNT(*) AS n FROM events
                    WHERE event_type = 'download' GROUP BY meme_id) dl ON dl.meme_id = m.meme_id
         WHERE m.status = 'active'
-          AND (COALESCE(likes.n, 0) + COALESCE(dl.n, 0)) > 0
+          AND (COALESCE(fb.n, 0) + COALESCE(gl.n, 0) + COALESCE(dl.n, 0)) > 0
         ORDER BY score DESC, m.meme_id
         LIMIT %s
         """,
         (limit,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── 探索圖庫：按讚 / 彈幕留言 ────────────────────────────────────────────
+
+
+def toggle_like(conn: sqlite3.Connection, meme_id: str, client_id: str) -> dict:
+    """對一張圖按讚 / 取消讚（同一 client 對同一圖最多一讚）。回傳新的讚數與狀態。"""
+    exists = conn.execute(
+        "SELECT 1 FROM meme_likes WHERE meme_id = %s AND client_id = %s", (meme_id, client_id)
+    ).fetchone()
+    if exists:
+        conn.execute(
+            "DELETE FROM meme_likes WHERE meme_id = %s AND client_id = %s", (meme_id, client_id))
+        liked = False
+    else:
+        conn.execute(
+            "INSERT INTO meme_likes (meme_id, client_id, created_at) VALUES (%s, %s, %s)",
+            (meme_id, client_id, _now_iso()))
+        liked = True
+    conn.commit()
+    n = conn.execute(
+        "SELECT COUNT(*) AS n FROM meme_likes WHERE meme_id = %s", (meme_id,)).fetchone()["n"]
+    return {"likes": n, "liked": liked}
+
+
+def list_gallery(
+    conn: sqlite3.Connection, *, seed: str, offset: int, limit: int,
+    client_id: str, exclude_nsfw: bool = True,
+) -> list[dict]:
+    """探索圖庫一頁：active 且是梗圖（可選排除 NSFW）；隨機但依 seed 穩定分頁。
+
+    回傳每張圖的尺寸（供瀑布流）、讚數/留言數、以及此 client 是否已讚。
+    """
+    nsfw = "AND a.nsfw = 0" if exclude_nsfw else ""
+    rows = conn.execute(
+        f"""
+        SELECT m.meme_id, m.width, m.height, a.ocr_text, a.franchise,
+               COALESCE(lk.n, 0) AS likes,
+               COALESCE(cm.n, 0) AS comments,
+               (myl.client_id IS NOT NULL) AS liked
+        FROM memes m
+        JOIN meme_annotations a ON a.meme_id = m.meme_id
+        LEFT JOIN (SELECT meme_id, COUNT(*) AS n FROM meme_likes
+                   GROUP BY meme_id) lk ON lk.meme_id = m.meme_id
+        LEFT JOIN (SELECT meme_id, COUNT(*) AS n FROM meme_comments
+                   GROUP BY meme_id) cm ON cm.meme_id = m.meme_id
+        LEFT JOIN meme_likes myl ON myl.meme_id = m.meme_id AND myl.client_id = %s
+        WHERE m.status = 'active' AND a.is_meme = 1 {nsfw}
+        ORDER BY md5(m.meme_id || %s)
+        LIMIT %s OFFSET %s
+        """,
+        (client_id or "", seed, limit, offset),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def add_comment(
+    conn: sqlite3.Connection, meme_id: str, client_id: str, author_name: str, text: str
+) -> dict:
+    """新增一則彈幕留言（擁有者 client_id、顯示暱稱快照 author_name）。"""
+    comment_id = new_id("cmt")
+    now = _now_iso()
+    conn.execute(
+        "INSERT INTO meme_comments (comment_id, meme_id, client_id, author_name, text, created_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s)",
+        (comment_id, meme_id, client_id, author_name, text, now),
+    )
+    conn.commit()
+    return {"comment_id": comment_id, "author_name": author_name, "text": text,
+            "created_at": now, "edited": False, "mine": True}
+
+
+def list_comments(
+    conn: sqlite3.Connection, meme_id: str, client_id: str | None = None
+) -> list[dict]:
+    """某梗圖的所有彈幕留言（舊到新）；mine 標記是否為此 client 所留。"""
+    rows = conn.execute(
+        "SELECT comment_id, author_name, text, created_at, updated_at, client_id "
+        "FROM meme_comments WHERE meme_id = %s ORDER BY created_at",
+        (meme_id,),
+    ).fetchall()
+    return [
+        {"comment_id": r["comment_id"], "author_name": r["author_name"], "text": r["text"],
+         "created_at": r["created_at"], "edited": r["updated_at"] is not None,
+         "mine": client_id is not None and r["client_id"] == client_id}
+        for r in rows
+    ]
+
+
+def update_comment(
+    conn: sqlite3.Connection, comment_id: str, client_id: str, text: str
+) -> bool:
+    """編修自己的留言（client_id 需相符）。回傳是否有更新到。"""
+    cur = conn.execute(
+        "UPDATE meme_comments SET text = %s, updated_at = %s "
+        "WHERE comment_id = %s AND client_id = %s",
+        (text, _now_iso(), comment_id, client_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def delete_comment(conn: sqlite3.Connection, comment_id: str, client_id: str) -> bool:
+    """刪除自己的留言（client_id 需相符）。回傳是否有刪到。"""
+    cur = conn.execute(
+        "DELETE FROM meme_comments WHERE comment_id = %s AND client_id = %s",
+        (comment_id, client_id),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def set_user_nickname(conn: sqlite3.Connection, user_id: str, nickname: str) -> None:
+    """設定登入使用者的顯示暱稱。"""
+    conn.execute("UPDATE users SET nickname = %s WHERE user_id = %s", (nickname, user_id))
+    conn.commit()
 
 
 def list_reported_memes(conn: sqlite3.Connection) -> list[dict]:

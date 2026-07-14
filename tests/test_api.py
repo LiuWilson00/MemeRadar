@@ -538,6 +538,63 @@ class TestGoogleAuth:
         bad = client.get("/auth/me", headers={"Authorization": "Bearer garbage"})
         assert bad.status_code == 401
 
+    def test_set_nickname(self, tmp_path):
+        client, _ = _auth_client(tmp_path)
+        token = client.post("/auth/google", json={"credential": "good-cred"}).json()["token"]
+        h = {"Authorization": f"Bearer {token}"}
+        resp = client.put("/auth/nickname", json={"nickname": "邪惡飛魚"}, headers=h)
+        assert resp.status_code == 200
+        assert client.get("/auth/me", headers=h).json()["nickname"] == "邪惡飛魚"
+
+    def test_set_nickname_requires_login(self, tmp_path):
+        client, _ = _auth_client(tmp_path)
+        assert client.put("/auth/nickname", json={"nickname": "路人"}).status_code == 401
+
+
+class TestGalleryEndpoints:
+    def test_gallery_lists_active_memes_with_image_url(self, env):
+        client, _, memes, _ = env
+        items = client.get("/gallery?client_id=c1&seed=s").json()
+        assert {i["meme_id"] for i in items} == {m.meme_id for m in memes}
+        assert all(i["image_url"] == f"/memes/{i['meme_id']}/image" for i in items)
+
+    def test_like_toggle_and_404(self, env):
+        client, _, memes, _ = env
+        mid = memes[0].meme_id
+        assert client.post(f"/memes/{mid}/like", json={"client_id": "c1"}).json() == {
+            "likes": 1, "liked": True}
+        assert client.post(f"/memes/{mid}/like", json={"client_id": "c1"}).json() == {
+            "likes": 0, "liked": False}
+        assert client.post("/memes/m_no/like", json={"client_id": "c1"}).status_code == 404
+
+    def test_comment_add_list_edit_delete(self, env):
+        client, _, memes, _ = env
+        mid = memes[0].meme_id
+        created = client.post(
+            f"/memes/{mid}/comments",
+            json={"client_id": "c1", "author_name": "臭臭束褲", "text": "笑死"})
+        assert created.status_code == 201
+        cid = created.json()["comment_id"]
+        got = client.get(f"/memes/{mid}/comments?client_id=c1").json()
+        assert len(got) == 1 and got[0]["mine"] is True and got[0]["author_name"] == "臭臭束褲"
+        # 非本人不能刪 / 改
+        assert client.delete(f"/memes/{mid}/comments/{cid}?client_id=cX").status_code == 403
+        # 本人編修
+        assert client.patch(
+            f"/memes/{mid}/comments/{cid}",
+            json={"client_id": "c1", "text": "改一下"}).status_code == 200
+        assert client.get(f"/memes/{mid}/comments?client_id=c1").json()[0]["text"] == "改一下"
+        # 本人刪除
+        assert client.delete(f"/memes/{mid}/comments/{cid}?client_id=c1").status_code == 200
+        assert client.get(f"/memes/{mid}/comments?client_id=c1").json() == []
+
+    def test_comment_too_long_422(self, env):
+        client, _, memes, _ = env
+        resp = client.post(
+            f"/memes/{memes[0].meme_id}/comments",
+            json={"client_id": "c1", "author_name": "路人", "text": "字" * 200})
+        assert resp.status_code == 422
+
 
 class TestAnonDailyQuota:
     def _client(self, tmp_path, quota):

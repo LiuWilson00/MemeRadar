@@ -24,12 +24,16 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from memeradar.api.pipeline import run_recommendation
 from memeradar.api.ratelimit import RateLimiter
 from memeradar.api.schemas import (
+    CommentRequest,
+    CommentUpdateRequest,
     DedupResolutionRequest,
     EventRequest,
     FeedbackRequest,
     GoogleAuthRequest,
     LibraryUploadRequest,
+    LikeRequest,
     ModelSettingsRequest,
+    NicknameRequest,
     ParseScreenshotRequest,
     RecommendRequest,
     ReportRequest,
@@ -128,7 +132,8 @@ def _default_deps() -> Deps:
 # 註：/auth/* 為前台使用者登入，非後台 admin，故列公開（其自身以 Bearer 把關）。
 _PUBLIC_EXACT = {
     "/health", "/recommend", "/feedback", "/meta", "/tasks", "/events", "/leaderboard",
-    "/auth/google", "/auth/me", "/library/memes", "/docs", "/openapi.json",
+    "/auth/google", "/auth/me", "/auth/nickname", "/library/memes", "/gallery",
+    "/docs", "/openapi.json",
 }
 
 # /events 接受的事件類型（白名單，防亂塞）
@@ -145,6 +150,11 @@ def _is_public(method: str, path: str) -> bool:
         return True
     # 檢舉：前台任何人都能檢舉一張梗圖（僅 POST）
     if method == "POST" and re.match(r"^/memes/[^/]+/report$", path) is not None:
+        return True
+    # 探索圖庫：按讚 / 彈幕留言（前台，各種方法）
+    if re.match(r"^/memes/[^/]+/(like|comments)$", path) is not None:
+        return True
+    if re.match(r"^/memes/[^/]+/comments/[^/]+$", path) is not None:
         return True
     # 任務進度查詢：前台輪詢，公開（僅 GET）
     return method == "GET" and re.match(r"^/tasks/[^/]+$", path) is not None
@@ -215,7 +225,7 @@ def _persist_image(conn: psycopg.Connection, meme_id: str, image_uri: str, conte
 
 def _public_user(user: dict) -> dict:
     """對外只回這幾個欄位（隱去 google_sub 等內部欄位）。"""
-    return {k: user.get(k) for k in ("user_id", "email", "name", "picture", "role")}
+    return {k: user.get(k) for k in ("user_id", "email", "name", "picture", "role", "nickname")}
 
 
 def _bearer_token(request: Request) -> str | None:
@@ -438,6 +448,75 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         for row in rows:
             row["image_url"] = f"/memes/{row['meme_id']}/image"
         return rows
+
+    @app.get("/gallery")
+    def gallery(client_id: str = "", seed: str = "", offset: int = 0, limit: int = 24,
+                conn: psycopg.Connection = Depends(get_conn)):
+        """探索圖庫一頁（瀑布流）：active 非 NSFW 梗圖，隨機但依 seed 穩定分頁。"""
+        items = repo.list_gallery(
+            conn, seed=seed or "default", offset=max(0, offset),
+            limit=min(max(1, limit), 48), client_id=client_id)
+        for it in items:
+            it["image_url"] = f"/memes/{it['meme_id']}/image"
+        return items
+
+    @app.post("/memes/{meme_id}/like")
+    def like_meme(meme_id: str, request: LikeRequest, http_request: Request,
+                  conn: psycopg.Connection = Depends(get_conn)):
+        """按讚 / 取消讚（回新的讚數與狀態）。"""
+        _enforce_rate_limit(deps, http_request)
+        if repo.get_meme(conn, meme_id) is None:
+            raise HTTPException(status_code=404, detail="梗圖不存在")
+        return repo.toggle_like(conn, meme_id, request.client_id)
+
+    @app.get("/memes/{meme_id}/comments")
+    def list_meme_comments(meme_id: str, client_id: str = "",
+                           conn: psycopg.Connection = Depends(get_conn)):
+        """某梗圖的彈幕留言（舊到新）。"""
+        return repo.list_comments(conn, meme_id, client_id=client_id or None)
+
+    @app.post("/memes/{meme_id}/comments", status_code=201)
+    def add_meme_comment(meme_id: str, request: CommentRequest, http_request: Request,
+                         conn: psycopg.Connection = Depends(get_conn)):
+        """留一則彈幕（限流、長度上限見 schema）。"""
+        _enforce_rate_limit(deps, http_request)
+        if repo.get_meme(conn, meme_id) is None:
+            raise HTTPException(status_code=404, detail="梗圖不存在")
+        text = request.text.strip()
+        if not text:
+            raise HTTPException(status_code=422, detail="留言不可為空")
+        return repo.add_comment(
+            conn, meme_id, request.client_id, request.author_name.strip() or "路人", text)
+
+    @app.patch("/memes/{meme_id}/comments/{comment_id}")
+    def edit_meme_comment(meme_id: str, comment_id: str, request: CommentUpdateRequest,
+                          conn: psycopg.Connection = Depends(get_conn)):
+        """編修自己的彈幕（client_id 需相符）。"""
+        text = request.text.strip()
+        if not text:
+            raise HTTPException(status_code=422, detail="留言不可為空")
+        if not repo.update_comment(conn, comment_id, request.client_id, text):
+            raise HTTPException(status_code=403, detail="只能編修自己的留言")
+        return {"ok": True}
+
+    @app.delete("/memes/{meme_id}/comments/{comment_id}")
+    def delete_meme_comment(meme_id: str, comment_id: str, client_id: str = "",
+                            conn: psycopg.Connection = Depends(get_conn)):
+        """刪除自己的彈幕（client_id 需相符）。"""
+        if not repo.delete_comment(conn, comment_id, client_id):
+            raise HTTPException(status_code=403, detail="只能刪除自己的留言")
+        return {"ok": True}
+
+    @app.put("/auth/nickname")
+    def set_nickname(request: NicknameRequest, http_request: Request,
+                     conn: psycopg.Connection = Depends(get_conn)):
+        """登入使用者設定顯示暱稱。"""
+        user = _resolve_user(deps, http_request, conn)
+        if user is None:
+            raise HTTPException(status_code=401, detail="請先登入")
+        nickname = request.nickname.strip()
+        repo.set_user_nickname(conn, user["user_id"], nickname)
+        return {"nickname": nickname}
 
     @app.post("/auth/google")
     def auth_google(request: GoogleAuthRequest,

@@ -136,3 +136,30 @@ class ReportResolutionRequest(BaseModel):
     """後台處理被檢舉的梗圖：下架或忽略。"""
 
     action: Literal["remove", "dismiss"]
+
+
+class LikeRequest(BaseModel):
+    """探索圖庫按讚 / 取消讚（以匿名 client_id 記）。"""
+
+    client_id: str
+
+
+class CommentRequest(BaseModel):
+    """在梗圖留一則彈幕。"""
+
+    client_id: str
+    author_name: str = Field(min_length=1, max_length=24)
+    text: str = Field(min_length=1, max_length=80)
+
+
+class CommentUpdateRequest(BaseModel):
+    """編修自己的彈幕。"""
+
+    client_id: str
+    text: str = Field(min_length=1, max_length=80)
+
+
+class NicknameRequest(BaseModel):
+    """登入使用者設定顯示暱稱。"""
+
+    nickname: str = Field(min_length=1, max_length=24)
