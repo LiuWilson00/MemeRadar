@@ -118,3 +118,100 @@ def build_feedback_report(conn: sqlite3.Connection) -> dict:
         "by_params": _group_rows(by_params),
         "down_notes": list(reversed(down_notes)),  # 新到舊
     }
+
+
+def build_dashboard(conn: sqlite3.Connection) -> dict:
+    """全站監控儀表板：使用量 / 推薦延遲 / NVIDIA 用量 / 標註速度 / 回饋 / 圖庫。"""
+    from datetime import UTC, datetime, timedelta
+
+    from memeradar.shared import repository as repo
+
+    now = datetime.now(UTC)
+    cutoff_7d = (now - timedelta(days=7)).isoformat()
+    cutoff_14d = (now - timedelta(days=14)).date().isoformat()
+
+    def scalar(sql: str, params: tuple = ()) -> int:
+        row = conn.execute(sql, params).fetchone()
+        return row["n"] if row else 0
+
+    def _int(x) -> int | None:
+        return int(x) if x is not None else None
+
+    fb = conn.execute(
+        "SELECT COALESCE(SUM(CASE WHEN rating='up' THEN 1 ELSE 0 END), 0) AS ups, "
+        "COALESCE(SUM(CASE WHEN rating='down' THEN 1 ELSE 0 END), 0) AS downs FROM feedback_events"
+    ).fetchone()
+    ups, downs = fb["ups"], fb["downs"]
+    memes_active = scalar("SELECT COUNT(*) AS n FROM memes WHERE status = 'active'")
+    embeddings = scalar("SELECT COUNT(*) AS n FROM embeddings WHERE kind = 'text_retrieval'")
+
+    overview = {
+        "recommendations_total": scalar("SELECT COUNT(*) AS n FROM recommendation_logs"),
+        "recommendations_7d": scalar(
+            "SELECT COUNT(*) AS n FROM recommendation_logs WHERE created_at >= %s", (cutoff_7d,)
+        ),
+        "unique_clients": scalar(
+            "SELECT COUNT(DISTINCT client_id) AS n FROM recommendation_logs "
+            "WHERE client_id IS NOT NULL"
+        ),
+        "tasks_total": scalar("SELECT COUNT(*) AS n FROM tasks"),
+        "memes_active": memes_active,
+        "memes_total": scalar("SELECT COUNT(*) AS n FROM memes"),
+        "embeddings": embeddings,
+        "annotations": scalar("SELECT COUNT(*) AS n FROM meme_annotations"),
+        "vlm_calls_total": scalar("SELECT COUNT(*) AS n FROM vlm_calls"),
+        "feedback_ups": ups,
+        "feedback_downs": downs,
+        "feedback_up_rate": _rate(ups, downs),
+        "embedding_coverage": (min(1.0, embeddings / memes_active) if memes_active else None),
+    }
+
+    tasks_by_status = {
+        r["status"]: r["n"]
+        for r in conn.execute("SELECT status, COUNT(*) AS n FROM tasks GROUP BY status").fetchall()
+    }
+
+    daily = [
+        {"date": r["day"], "count": r["n"]}
+        for r in conn.execute(
+            "SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS n FROM recommendation_logs "
+            "WHERE created_at >= %s GROUP BY day ORDER BY day",
+            (cutoff_14d,),
+        ).fetchall()
+    ]
+
+    # 各階段延遲 p50 / p95（timings 為 TEXT JSON，查詢時 ::jsonb 取值）
+    stages = ("intent", "retrieval", "rerank", "total")
+    select = ", ".join(
+        f"percentile_cont({q}) WITHIN GROUP "
+        f"(ORDER BY (timings::jsonb->>'{s}')::numeric) AS {s}_{name}"
+        for s in stages
+        for q, name in ((0.5, "p50"), (0.95, "p95"))
+    )
+    lat_row = conn.execute(
+        f"SELECT {select} FROM recommendation_logs WHERE timings IS NOT NULL"
+    ).fetchone()
+    latency = {k: _int(v) for k, v in dict(lat_row).items()}
+
+    vlm_calls = [
+        {"task": r["task"], "status": r["status"], "count": r["n"], "avg_ms": _int(r["avg_ms"])}
+        for r in conn.execute(
+            "SELECT task, status, COUNT(*) AS n, AVG(latency_ms) AS avg_ms "
+            "FROM vlm_calls GROUP BY task, status ORDER BY task, status"
+        ).fetchall()
+    ]
+
+    franchises = list(repo.franchise_counts(conn).items())[:8]
+    categories = list(repo.category_counts(conn).items())[:8]
+
+    return {
+        "overview": overview,
+        "tasks_by_status": tasks_by_status,
+        "daily_recommendations": daily,
+        "latency_ms": latency,
+        "vlm_calls": vlm_calls,
+        "library": {
+            "by_franchise": [{"name": k, "count": v} for k, v in franchises],
+            "by_category": [{"name": k, "count": v} for k, v in categories],
+        },
+    }

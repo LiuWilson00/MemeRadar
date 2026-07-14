@@ -2,6 +2,7 @@ import { AlertTriangle, LogOut } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import AdminGate, { logout } from "./components/AdminGate";
 import ConversationEditor from "./components/ConversationEditor";
+import DashboardView from "./components/DashboardView";
 import DebugPanel from "./components/DebugPanel";
 import HistoryView from "./components/HistoryView";
 import LibraryView from "./components/LibraryView";
@@ -16,9 +17,18 @@ import { apiFetch, DEFAULT_FILTERS, DEFAULT_PARAMS, fetchMeta, recommend } from 
 import { navigate, useRoute } from "./lib/router";
 import type { Filters, HistoryDetail, Meta, Params, RecommendResponse, Turn } from "./types";
 
-type Tab = "work" | "history" | "library" | "upload" | "review" | "report" | "settings";
+type Tab =
+  | "work"
+  | "dashboard"
+  | "history"
+  | "library"
+  | "upload"
+  | "review"
+  | "report"
+  | "settings";
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "work", label: "工作台" },
+  { id: "dashboard", label: "儀表板" },
   { id: "history", label: "查詢歷史" },
   { id: "library", label: "梗圖庫" },
   { id: "upload", label: "上傳" },
@@ -130,6 +140,7 @@ export default function App() {
         </button>
       </header>
 
+      {tab === "dashboard" && <DashboardView />}
       {tab === "history" && <HistoryView onReplay={replay} />}
       {tab === "library" && <LibraryView meta={meta} />}
       {tab === "upload" && (

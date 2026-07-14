@@ -11,7 +11,7 @@ from memeradar.shared.models import (
     RecommendationLog,
     new_id,
 )
-from memeradar.shared.reporting import build_feedback_report
+from memeradar.shared.reporting import build_dashboard, build_feedback_report
 
 
 @pytest.fixture
@@ -158,3 +158,44 @@ class TestFeedbackReport:
         assert report["totals"]["up_rate"] is None
         assert report["daily"] == []
         assert report["down_notes"] == []
+
+
+class TestDashboard:
+    def test_aggregates_usage_latency_vlm_library(self, conn):
+        from memeradar.shared.models import Embedding
+
+        m = seed_meme(conn, ocr="我就爛", franchise="海綿寶寶")
+        repo.add_embedding(conn, Embedding(
+            meme_id=m.meme_id, kind="text_retrieval", model="bge-m3|doc-v1", vector=[0.1, 0.2]))
+        log = RecommendationLog(
+            query_id=new_id("q"), conversation=[{"speaker": "other", "text": "x"}],
+            params_snapshot={"params": {}}, client_id="c_1",
+            timings={"intent": 100, "retrieval": 10, "rerank": 200, "total": 310},
+            created_at="2026-07-14T10:00:00+00:00",
+        )
+        repo.insert_recommendation_log(conn, log)
+        feedback(conn, log, m, rating="up")
+        repo.create_task(conn, "t1", client_id="c_1", input_type="text", label="x")
+        repo.set_task_status(conn, "t1", "done", result={"ok": 1})
+        repo.insert_vlm_call(conn, {"key_id": "…abcd", "model": "qwen", "task": "annotate",
+                                    "status": "ok", "latency_ms": 5000})
+
+        d = build_dashboard(conn)
+
+        ov = d["overview"]
+        assert ov["recommendations_total"] == 1
+        assert ov["memes_active"] == 1 and ov["embeddings"] == 1
+        assert ov["unique_clients"] == 1
+        assert ov["feedback_ups"] == 1 and ov["feedback_up_rate"] == 1.0
+        assert d["tasks_by_status"] == {"done": 1}
+        assert d["latency_ms"]["total_p50"] == 310 and d["latency_ms"]["intent_p50"] == 100
+        assert {"task": "annotate", "status": "ok", "count": 1, "avg_ms": 5000} in d["vlm_calls"]
+        assert any(f["name"] == "海綿寶寶" for f in d["library"]["by_franchise"])
+        assert len(d["daily_recommendations"]) == 1
+
+    def test_empty_db_is_all_zero(self, conn):
+        d = build_dashboard(conn)
+        assert d["overview"]["recommendations_total"] == 0
+        assert d["overview"]["feedback_up_rate"] is None
+        assert d["latency_ms"]["total_p50"] is None
+        assert d["vlm_calls"] == [] and d["daily_recommendations"] == []

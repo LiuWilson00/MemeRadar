@@ -92,6 +92,32 @@ export interface VlmUsageRow {
   avg_ms: number | null;
 }
 
+export interface Dashboard {
+  overview: {
+    recommendations_total: number;
+    recommendations_7d: number;
+    unique_clients: number;
+    tasks_total: number;
+    memes_active: number;
+    memes_total: number;
+    embeddings: number;
+    annotations: number;
+    vlm_calls_total: number;
+    feedback_ups: number;
+    feedback_downs: number;
+    feedback_up_rate: number | null;
+    embedding_coverage: number | null;
+  };
+  tasks_by_status: Record<string, number>;
+  daily_recommendations: { date: string; count: number }[];
+  latency_ms: Record<string, number | null>;
+  vlm_calls: { task: string; status: string; count: number; avg_ms: number | null }[];
+  library: {
+    by_franchise: { name: string; count: number }[];
+    by_category: { name: string; count: number }[];
+  };
+}
+
 export type TaskStatus = "pending" | "running" | "done" | "error";
 
 /** 歷史列表項（精簡，不含完整 result；has_result 為 SQLite 0/1）。 */

@@ -500,6 +500,12 @@ def create_app(deps: Deps | None = None) -> FastAPI:
 
         return build_feedback_report(conn)
 
+    @app.get("/report/dashboard")
+    def dashboard(conn: psycopg.Connection = Depends(get_conn)):
+        from memeradar.shared.reporting import build_dashboard
+
+        return build_dashboard(conn)
+
     @app.get("/vlm/models")
     def vlm_models() -> dict:
         """標註可用的 NVIDIA vision 模型清單 + 目前預設（Console 切換按鈕用）。"""

@@ -7,6 +7,7 @@ import type {
   HistoryItem,
   LibraryMeme,
   Meta,
+  Dashboard,
   ModelSettings,
   Params,
   RecommendResponse,
@@ -304,6 +305,11 @@ export async function uploadMemeClassified(
 
 export async function fetchFeedbackReport(): Promise<FeedbackReport> {
   return unwrap<FeedbackReport>(await apiFetch("/report/feedback"));
+}
+
+/** 後台監控儀表板：使用量 / 延遲 / NVIDIA 用量 / 標註速度 / 回饋 / 圖庫。 */
+export async function fetchDashboard(): Promise<Dashboard> {
+  return unwrap<Dashboard>(await apiFetch("/report/dashboard"));
 }
 
 /** 標註複核：通過（可帶標籤修補，後端會重建向量）或淘汰。 */
