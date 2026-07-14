@@ -8,6 +8,7 @@ import HistoryView from "./components/HistoryView";
 import LibraryView from "./components/LibraryView";
 import ParamsPanel from "./components/ParamsPanel";
 import RadarLoading from "./components/RadarLoading";
+import ReportsView from "./components/ReportsView";
 import ReportView from "./components/ReportView";
 import ResultCard from "./components/ResultCard";
 import ReviewView from "./components/ReviewView";
@@ -24,6 +25,7 @@ type Tab =
   | "library"
   | "upload"
   | "review"
+  | "reports"
   | "report"
   | "settings";
 const TABS: Array<{ id: Tab; label: string }> = [
@@ -33,6 +35,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "library", label: "梗圖庫" },
   { id: "upload", label: "上傳" },
   { id: "review", label: "複核" },
+  { id: "reports", label: "檢舉" },
   { id: "report", label: "報表" },
   { id: "settings", label: "設定" },
 ];
@@ -147,6 +150,7 @@ export default function App() {
         <UploadView onDone={() => fetchMeta().then(setMeta).catch(() => {})} />
       )}
       {tab === "review" && <ReviewView meta={meta} />}
+      {tab === "reports" && <ReportsView />}
       {tab === "report" && <ReportView />}
       {tab === "settings" && <SettingsView />}
 

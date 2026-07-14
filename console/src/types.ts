@@ -214,6 +214,16 @@ export interface User {
   role: string;
 }
 
+/** 後台被檢舉的梗圖一列。 */
+export interface ReportedMeme {
+  meme_id: string;
+  ocr_text: string | null;
+  franchise: string | null;
+  status: string;
+  reports: number;
+  last_reported: string;
+}
+
 /** 熱門梗圖榜一列（綜合熱度 = 讚×3 + 下載）。 */
 export interface LeaderboardEntry {
   meme_id: string;

@@ -32,6 +32,8 @@ from memeradar.api.schemas import (
     ModelSettingsRequest,
     ParseScreenshotRequest,
     RecommendRequest,
+    ReportRequest,
+    ReportResolutionRequest,
     ReviewAnnotationRequest,
     UploadMemeRequest,
 )
@@ -140,6 +142,9 @@ def _is_public(method: str, path: str) -> bool:
         return True
     # 梗圖圖片：手機端要顯示，公開（僅 GET）
     if method == "GET" and re.match(r"^/memes/[^/]+/image$", path) is not None:
+        return True
+    # 檢舉：前台任何人都能檢舉一張梗圖（僅 POST）
+    if method == "POST" and re.match(r"^/memes/[^/]+/report$", path) is not None:
         return True
     # 任務進度查詢：前台輪詢，公開（僅 GET）
     return method == "GET" and re.match(r"^/tasks/[^/]+$", path) is not None
@@ -664,6 +669,41 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             merge_duplicate_into(conn, review["meme_id"], review["matched_meme_id"])
         repo.set_dedup_review_resolution(conn, review_id, request.resolution)
         return {"review_id": review_id, "resolution": request.resolution}
+
+    @app.post("/memes/{meme_id}/report", status_code=202)
+    def report_meme(meme_id: str, request: ReportRequest, http_request: Request,
+                    conn: psycopg.Connection = Depends(get_conn)):
+        """前台檢舉一張梗圖（任何人可用）。記為 report 事件，供後台審視。"""
+        _enforce_rate_limit(deps, http_request)
+        if repo.get_meme(conn, meme_id) is None:
+            raise HTTPException(status_code=404, detail="梗圖不存在")
+        user = _resolve_user(deps, http_request, conn)
+        # distinct 計數用的檢舉人：優先前台匿名碼 > 登入者 > 連線 IP，確保非空
+        reporter = (
+            request.client_id or (user["user_id"] if user else None)
+            or _client_key(http_request)
+        )
+        repo.insert_event(
+            conn, "report", client_id=reporter, meme_id=meme_id,
+            meta={"reason": request.reason} if request.reason else None,
+        )
+        return {"ok": True}
+
+    @app.get("/review/reports")
+    def list_reports(conn: psycopg.Connection = Depends(get_conn)):
+        """後台：被檢舉且未處理的梗圖清單（依檢舉人數排序）。"""
+        return repo.list_reported_memes(conn)
+
+    @app.post("/review/reports/{meme_id}")
+    def resolve_report(meme_id: str, request: ReportResolutionRequest,
+                       conn: psycopg.Connection = Depends(get_conn)):
+        """後台處理被檢舉的梗圖：remove=下架、dismiss=保留；兩者都清出待辦清單。"""
+        if repo.get_meme(conn, meme_id) is None:
+            raise HTTPException(status_code=404, detail="梗圖不存在")
+        if request.action == "remove":
+            repo.set_status(conn, meme_id, "removed")
+        repo.resolve_reports(conn, meme_id)
+        return {"meme_id": meme_id, "status": repo.get_meme(conn, meme_id).status}
 
     @app.get("/report/feedback")
     def feedback_report(conn: psycopg.Connection = Depends(get_conn)):

@@ -123,3 +123,16 @@ class LibraryUploadRequest(BaseModel):
 
     image: str  # base64（PNG / JPEG / WebP）
     title_hint: str | None = None  # 標註上下文提示（如主題名）
+
+
+class ReportRequest(BaseModel):
+    """前台檢舉一張梗圖（不宜 / 冒犯等）。"""
+
+    reason: str | None = None
+    client_id: str | None = None  # 匿名代碼，供 distinct 計數（不重複灌報）
+
+
+class ReportResolutionRequest(BaseModel):
+    """後台處理被檢舉的梗圖：下架或忽略。"""
+
+    action: Literal["remove", "dismiss"]

@@ -5,6 +5,7 @@ import {
   ChevronRight,
   Clock,
   Download,
+  Flag,
   Flame,
   History as HistoryIcon,
   Loader2,
@@ -32,6 +33,7 @@ import {
   imageUrl,
   logEvent,
   QuotaError,
+  reportMeme,
   sendFeedback,
   submitTask,
   type TaskInput,
@@ -944,6 +946,7 @@ function DetailSheet({
   intentSummary: string;
   onClose: () => void;
 }) {
+  const [reported, setReported] = useState(false);
   return (
     <div className="fixed inset-0 z-20 flex items-end bg-ink/70" onClick={onClose}>
       <div
@@ -980,6 +983,20 @@ function DetailSheet({
         >
           關閉
         </button>
+
+        {reported ? (
+          <p className="mt-3 text-center text-xs text-muted">已收到你的回報，謝謝 🙏</p>
+        ) : (
+          <button
+            onClick={() => {
+              setReported(true);
+              void reportMeme(item.meme_id);
+            }}
+            className="mt-3 flex w-full items-center justify-center gap-1.5 text-xs text-muted active:text-danger"
+          >
+            <Flag className="size-3.5" /> 檢舉這張不宜
+          </button>
+        )}
       </div>
     </div>
   );

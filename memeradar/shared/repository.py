@@ -811,6 +811,34 @@ def leaderboard(conn: sqlite3.Connection, limit: int = 20) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def list_reported_memes(conn: sqlite3.Connection) -> list[dict]:
+    """後台檢舉清單：仍未處理（event_type=report）的梗圖，依 distinct 檢舉人數排序。"""
+    rows = conn.execute(
+        """
+        SELECT m.meme_id, a.ocr_text, a.franchise, m.status,
+               COUNT(DISTINCT e.client_id) AS reports,
+               MAX(e.created_at) AS last_reported
+        FROM events e
+        JOIN memes m ON m.meme_id = e.meme_id
+        LEFT JOIN meme_annotations a ON a.meme_id = m.meme_id
+        WHERE e.event_type = 'report'
+        GROUP BY m.meme_id, a.ocr_text, a.franchise, m.status
+        ORDER BY reports DESC, last_reported DESC
+        """
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def resolve_reports(conn: sqlite3.Connection, meme_id: str) -> None:
+    """把該梗圖的檢舉標記為已處理（改 event_type，保留列供審計），清出待辦清單。"""
+    conn.execute(
+        "UPDATE events SET event_type = 'report_resolved' "
+        "WHERE meme_id = %s AND event_type = 'report'",
+        (meme_id,),
+    )
+    conn.commit()
+
+
 # ── users（Google 登入的使用者）────────────────────────────────────────
 
 

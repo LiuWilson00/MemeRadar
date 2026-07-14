@@ -690,6 +690,44 @@ class TestLibraryUpload:
         assert resp.json()["detail"]["error"] == "upload_quota_exceeded"
 
 
+class TestReports:
+    def test_report_logs_and_lists_distinct_clients(self, env):
+        client, _, memes, _ = env
+        mid = memes[0].meme_id
+        assert client.post(f"/memes/{mid}/report", json={"client_id": "c1", "reason": "冒犯"}
+                           ).status_code == 202
+        client.post(f"/memes/{mid}/report", json={"client_id": "c1"})  # 同人重複不加計
+        client.post(f"/memes/{mid}/report", json={"client_id": "c2"})
+        reports = client.get("/review/reports").json()
+        assert len(reports) == 1
+        assert reports[0]["meme_id"] == mid
+        assert reports[0]["reports"] == 2  # distinct c1, c2
+
+    def test_report_unknown_meme_404(self, env):
+        client, *_ = env
+        assert client.post("/memes/m_nope/report", json={"client_id": "c1"}).status_code == 404
+
+    def test_remove_takes_down_and_clears_list(self, env):
+        client, conn, memes, _ = env
+        mid = memes[0].meme_id
+        client.post(f"/memes/{mid}/report", json={"client_id": "c1"})
+        assert client.post(f"/review/reports/{mid}", json={"action": "remove"}).status_code == 200
+        assert repo.get_meme(conn, mid).status == "removed"
+        assert client.get("/review/reports").json() == []
+
+    def test_dismiss_keeps_active_but_clears_then_reappears(self, env):
+        client, conn, memes, _ = env
+        mid = memes[0].meme_id
+        client.post(f"/memes/{mid}/report", json={"client_id": "c1"})
+        client.post(f"/review/reports/{mid}", json={"action": "dismiss"})
+        assert repo.get_meme(conn, mid).status == "active"  # 保留、不下架
+        assert client.get("/review/reports").json() == []  # 已處理，清出清單
+        # 之後有新檢舉會再出現（舊的已標記 resolved，不重複計）
+        client.post(f"/memes/{mid}/report", json={"client_id": "c2"})
+        again = client.get("/review/reports").json()
+        assert len(again) == 1 and again[0]["reports"] == 1
+
+
 class TestHistory:
     def test_list_with_feedback_counts_and_detail_for_replay(self, env):
         client, *_ = env

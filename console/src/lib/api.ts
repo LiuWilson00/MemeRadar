@@ -12,6 +12,7 @@ import type {
   ModelSettings,
   Params,
   RecommendResponse,
+  ReportedMeme,
   ScreenshotParse,
   TaskDetail,
   TaskStatus,
@@ -237,6 +238,30 @@ export async function googleLogin(credential: string): Promise<{ token: string; 
 /** 取目前登入使用者（需帶有效 Bearer）；未登入回 401。 */
 export async function fetchMe(): Promise<User> {
   return unwrap<User>(await apiFetch("/auth/me"));
+}
+
+/** 前台檢舉一張梗圖（不宜 / 冒犯）。best-effort：失敗也不打擾使用者。 */
+export async function reportMeme(memeId: string, reason?: string): Promise<void> {
+  await apiFetch(`/memes/${memeId}/report`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason: reason ?? null, client_id: getClientId() }),
+  }).catch(() => {});
+}
+
+/** 後台：被檢舉且未處理的梗圖清單。 */
+export async function fetchReports(): Promise<ReportedMeme[]> {
+  return unwrap<ReportedMeme[]>(await apiFetch("/review/reports"));
+}
+
+/** 後台：處理被檢舉的梗圖——remove 下架、dismiss 保留；兩者都清出清單。 */
+export async function resolveReport(memeId: string, action: "remove" | "dismiss"): Promise<void> {
+  const response = await apiFetch(`/review/reports/${memeId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action }),
+  });
+  await unwrap(response);
 }
 
 /** 熱門梗圖榜（讚×3 + 下載）。資料少時後端自然回短 / 空清單。 */
