@@ -480,6 +480,63 @@ class TestEventsAndLeaderboard:
         assert client.get("/leaderboard").json() == []
 
 
+class StubGoogleVerifier:
+    """測試用 Google token 驗證器：已知 credential → claims，其餘丟 ValueError。"""
+
+    def __init__(self, mapping):
+        self.mapping = dict(mapping)
+
+    def __call__(self, credential):
+        try:
+            return self.mapping[credential]
+        except KeyError:
+            raise ValueError("invalid token") from None
+
+
+def _auth_client(tmp_path):
+    db_path = tmp_path / "db.sqlite3"
+    conn = connect(db_path)
+    migrate(conn)
+    verifier = StubGoogleVerifier({
+        "good-cred": {"sub": "g-1", "email": "a@x.com", "name": "Amy", "picture": "http://p/a.png"},
+    })
+    deps = Deps(
+        client=DualStubClient(), vlm=StubVlm(), embedder=FakeEmbedder(),
+        db_path=db_path, data_dir=tmp_path,
+        session_secret="s3cr3t", token_verifier=verifier, google_client_id="cid",
+    )
+    return TestClient(create_app(deps)), conn
+
+
+class TestGoogleAuth:
+    def test_login_issues_token_and_creates_user(self, tmp_path):
+        client, conn = _auth_client(tmp_path)
+        resp = client.post("/auth/google", json={"credential": "good-cred"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["user"]["email"] == "a@x.com"
+        assert body["user"]["name"] == "Amy"
+        assert body["token"]
+        assert conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"] == 1
+
+    def test_me_returns_current_user_with_token(self, tmp_path):
+        client, _ = _auth_client(tmp_path)
+        token = client.post("/auth/google", json={"credential": "good-cred"}).json()["token"]
+        me = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert me.status_code == 200
+        assert me.json()["email"] == "a@x.com"
+
+    def test_invalid_credential_401(self, tmp_path):
+        client, _ = _auth_client(tmp_path)
+        assert client.post("/auth/google", json={"credential": "nope"}).status_code == 401
+
+    def test_me_requires_valid_bearer(self, tmp_path):
+        client, _ = _auth_client(tmp_path)
+        assert client.get("/auth/me").status_code == 401
+        bad = client.get("/auth/me", headers={"Authorization": "Bearer garbage"})
+        assert bad.status_code == 401
+
+
 class TestHistory:
     def test_list_with_feedback_counts_and_detail_for_replay(self, env):
         client, *_ = env

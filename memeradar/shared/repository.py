@@ -811,6 +811,42 @@ def leaderboard(conn: sqlite3.Connection, limit: int = 20) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# ── users（Google 登入的使用者）────────────────────────────────────────
+
+
+def upsert_user(
+    conn: sqlite3.Connection,
+    *,
+    google_sub: str,
+    email: str | None,
+    name: str | None,
+    picture: str | None,
+) -> dict:
+    """依 Google 唯一 ID 建立或更新使用者，回傳整列（含 user_id）。"""
+    now = _now_iso()
+    row = conn.execute(
+        """
+        INSERT INTO users
+            (user_id, google_sub, email, name, picture, role, created_at, last_login_at)
+        VALUES (%s, %s, %s, %s, %s, 'user', %s, %s)
+        ON CONFLICT (google_sub) DO UPDATE SET
+            email = EXCLUDED.email,
+            name = EXCLUDED.name,
+            picture = EXCLUDED.picture,
+            last_login_at = EXCLUDED.last_login_at
+        RETURNING *
+        """,
+        (new_id("u"), google_sub, email, name, picture, now, now),
+    ).fetchone()
+    conn.commit()
+    return dict(row)
+
+
+def get_user(conn: sqlite3.Connection, user_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM users WHERE user_id = %s", (user_id,)).fetchone()
+    return dict(row) if row else None
+
+
 # ── tasks（非同步推薦任務）──────────────────────────────────────────────
 
 

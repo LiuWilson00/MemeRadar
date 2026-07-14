@@ -18,16 +18,21 @@ import type {
   TaskSummary,
   Turn,
   UploadResult,
+  User,
   VlmUsageRow,
 } from "../types";
+import { getUserToken } from "./auth";
 import { getClientId } from "./clientId";
 import type { UploadOutcome } from "./uploadQueue";
 
 // API base：跨源部署時設 VITE_API_BASE_URL（build 期注入）；本地 / 同源部署留空＝相對路徑。
 const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "";
 
-/** 後台登入憑證（sessionStorage，由登入頁寫入）；帶在每個請求上，公開端點會忽略它。 */
+/** 認證標頭：前台使用者已登入 → Bearer（優先）；否則帶後台 admin 的 Basic（若有）。
+ * 兩者不會同時需要（前台無 admin 帳密、後台無 Google 登入），故單一 Authorization 即可。 */
 function authHeaders(): Record<string, string> {
+  const token = getUserToken();
+  if (token) return { Authorization: `Bearer ${token}` };
   if (typeof sessionStorage === "undefined") return {};
   const creds = sessionStorage.getItem("memeradar.adminAuth");
   return creds ? { Authorization: `Basic ${creds}` } : {};
@@ -200,6 +205,21 @@ export async function sendFeedback(body: {
 
 export async function fetchMeta(): Promise<Meta> {
   return unwrap<Meta>(await apiFetch("/meta"));
+}
+
+/** Google 登入：把 Google 回傳的 credential 換成我方 session token + 使用者資料。 */
+export async function googleLogin(credential: string): Promise<{ token: string; user: User }> {
+  const response = await apiFetch("/auth/google", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ credential }),
+  });
+  return unwrap<{ token: string; user: User }>(response);
+}
+
+/** 取目前登入使用者（需帶有效 Bearer）；未登入回 401。 */
+export async function fetchMe(): Promise<User> {
+  return unwrap<User>(await apiFetch("/auth/me"));
 }
 
 /** 熱門梗圖榜（讚×3 + 下載）。資料少時後端自然回短 / 空清單。 */

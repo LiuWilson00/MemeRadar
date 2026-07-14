@@ -1,10 +1,13 @@
-import { Check } from "lucide-react";
+import { GoogleLogin } from "@react-oauth/google";
+import { Check, LogOut, User as UserIcon } from "lucide-react";
 import { useState } from "react";
+import { googleLogin } from "../lib/api";
+import { clearSession, GOOGLE_CLIENT_ID, saveSession, useCurrentUser } from "../lib/auth";
 import type { UserSettings } from "../lib/settings";
 import type { Meta } from "../types";
 import Chip, { toggle } from "./Chip";
 
-/** 設定頁：使用者偏好（存 localStorage，套用到每次推薦）。 */
+/** 設定頁：帳號（Google 登入）＋使用者偏好（存 localStorage，套用到每次推薦）。 */
 export default function SettingsScreen({
   settings,
   meta,
@@ -17,6 +20,8 @@ export default function SettingsScreen({
   const [cleared, setCleared] = useState(false);
   return (
     <div className="flex-1 space-y-6 overflow-y-auto px-5 py-4">
+      <AccountSection />
+
       <section>
         <h2 className="mb-2 text-sm font-semibold">內容過濾</h2>
         <label className="flex items-center justify-between rounded-2xl border border-line bg-panel px-4 py-3">
@@ -100,5 +105,70 @@ export default function SettingsScreen({
         </div>
       </section>
     </div>
+  );
+}
+
+/** 帳號區：未登入顯示 Google 登入按鈕；已登入顯示頭像／名稱＋登出。
+ * 未設定 Client ID（本地未配置）時整區隱藏。 */
+function AccountSection() {
+  const user = useCurrentUser();
+  const [err, setErr] = useState<string | null>(null);
+
+  if (!GOOGLE_CLIENT_ID) return null;
+
+  if (user) {
+    return (
+      <section>
+        <h2 className="mb-2 text-sm font-semibold">帳號</h2>
+        <div className="flex items-center gap-3 rounded-2xl border border-line bg-panel px-4 py-3">
+          {user.picture ? (
+            <img src={user.picture} alt="" className="size-9 rounded-full" />
+          ) : (
+            <div className="grid size-9 place-items-center rounded-full bg-amber-soft text-amber">
+              <UserIcon className="size-5" />
+            </div>
+          )}
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm text-fg">{user.name || "已登入"}</p>
+            <p className="truncate text-xs text-muted">{user.email}</p>
+          </div>
+          <button
+            onClick={() => clearSession()}
+            className="flex items-center gap-1 rounded-full border border-line px-3 py-1.5 text-xs text-muted active:bg-raised"
+          >
+            <LogOut className="size-3.5" /> 登出
+          </button>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section>
+      <h2 className="mb-1 text-sm font-semibold">登入</h2>
+      <p className="mb-3 text-xs text-muted">
+        用 Google 登入即可<span className="text-fg">無限使用</span>，還能貢獻梗圖到大家的共用圖庫。
+      </p>
+      <GoogleLogin
+        theme="filled_black"
+        shape="pill"
+        text="signin_with"
+        onSuccess={async (cr) => {
+          setErr(null);
+          if (!cr.credential) {
+            setErr("登入失敗，請再試一次");
+            return;
+          }
+          try {
+            const { token, user } = await googleLogin(cr.credential);
+            saveSession(token, user);
+          } catch (e) {
+            setErr(e instanceof Error ? e.message : "登入失敗，請稍後再試");
+          }
+        }}
+        onError={() => setErr("Google 登入被中斷")}
+      />
+      {err && <p className="mt-2 text-xs text-danger">{err}</p>}
+    </section>
   );
 }

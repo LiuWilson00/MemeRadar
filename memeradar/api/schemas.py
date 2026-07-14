@@ -110,3 +110,9 @@ class EventRequest(BaseModel):
     client_id: str | None = None
     meme_id: str | None = None
     meta: dict | None = None
+
+
+class GoogleAuthRequest(BaseModel):
+    """前端 Google 登入回傳的 ID token（credential）。"""
+
+    credential: str

@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     rate_limit_per_min: int = 30
     # embedding 後端：nvidia-bge-m3（hosted，免容器 torch）或 bge-m3（本地離線）。
     embedding_backend: str = "nvidia-bge-m3"
+    # Google 登入（前台使用者）：填了 client id 才啟用。session_secret 用來簽我方 JWT，
+    # 上 prod 務必設一個隨機值（見 .env.example）。兩者皆空 = 不開放使用者登入。
+    google_client_id: str = ""
+    session_secret: str = ""
     # Cloudflare R2（物件儲存 + CDN）。填了 public base 就改用 R2 服務圖片（302 導向），
     # 上傳則需完整 S3 憑證。留空 = 沿用 DB image_data / 檔案系統。
     r2_account_id: str = ""

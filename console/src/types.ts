@@ -205,6 +205,15 @@ export interface Meta {
   emotions: string[];
 }
 
+/** 登入使用者（Google 登入後由後端回傳的公開欄位）。 */
+export interface User {
+  user_id: string;
+  email: string | null;
+  name: string | null;
+  picture: string | null;
+  role: string;
+}
+
 /** 熱門梗圖榜一列（綜合熱度 = 讚×3 + 下載）。 */
 export interface LeaderboardEntry {
   meme_id: string;

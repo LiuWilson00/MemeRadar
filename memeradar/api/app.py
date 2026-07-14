@@ -27,6 +27,7 @@ from memeradar.api.schemas import (
     DedupResolutionRequest,
     EventRequest,
     FeedbackRequest,
+    GoogleAuthRequest,
     ModelSettingsRequest,
     ParseScreenshotRequest,
     RecommendRequest,
@@ -38,6 +39,7 @@ from memeradar.ingestion.seed_import import import_image_bytes
 from memeradar.matching.intent import IntentRefusedError
 from memeradar.matching.screenshot import ScreenshotParseError, parse_screenshot
 from memeradar.shared import repository as repo
+from memeradar.shared.auth import issue_session, verify_session
 from memeradar.shared.db import connect, get_pool, migrate
 from memeradar.shared.models import Embedding, FeedbackEvent, new_id
 from memeradar.shared.taxonomy import get_taxonomy
@@ -72,11 +74,17 @@ class Deps:
     # 背景任務排程器：接一個 no-arg callable。None = 用內建 thread pool；
     # 測試注入 ``lambda fn: fn()`` 讓非同步任務同步跑完。每請求讀取，故可事後覆寫。
     run_async: Any = None
+    # Google 登入：token_verifier 為 callable(credential)->claims，驗無效丟 ValueError；
+    # session_secret 用來簽我方 JWT。三者皆空 = 未啟用使用者登入。
+    google_client_id: str = ""
+    session_secret: str = ""
+    token_verifier: Any = None
 
 
 def _default_deps() -> Deps:
     import anthropic
 
+    from memeradar.api.google_auth import build_google_verifier
     from memeradar.shared.config import get_settings
     from memeradar.understanding.annotator import build_default_vlm
     from memeradar.understanding.embedding import get_embedder
@@ -98,13 +106,20 @@ def _default_deps() -> Deps:
             if settings.rate_limit_per_min > 0
             else None
         ),
+        google_client_id=settings.google_client_id,
+        session_secret=settings.session_secret,
+        token_verifier=(
+            build_google_verifier(settings.google_client_id)
+            if settings.google_client_id else None
+        ),
     )
 
 
 # 前台（手機 client）需要的公開路徑；其餘一律歸後台（admin）
+# 註：/auth/* 為前台使用者登入，非後台 admin，故列公開（其自身以 Bearer 把關）。
 _PUBLIC_EXACT = {
     "/health", "/recommend", "/feedback", "/meta", "/tasks", "/events", "/leaderboard",
-    "/docs", "/openapi.json",
+    "/auth/google", "/auth/me", "/docs", "/openapi.json",
 }
 
 # /events 接受的事件類型（白名單，防亂塞）
@@ -170,6 +185,31 @@ def _run_task(deps: Deps, task_id: str, request: RecommendRequest,
         repo.set_task_status(conn, task_id, "error", error=f"推薦失敗：{exc}")
     finally:
         conn.close()
+
+
+def _public_user(user: dict) -> dict:
+    """對外只回這幾個欄位（隱去 google_sub 等內部欄位）。"""
+    return {k: user.get(k) for k in ("user_id", "email", "name", "picture", "role")}
+
+
+def _bearer_token(request: Request) -> str | None:
+    header = request.headers.get("Authorization")
+    if header and header.startswith("Bearer "):
+        return header[7:].strip()
+    return None
+
+
+def _resolve_user(deps: Deps, request: Request, conn: psycopg.Connection) -> dict | None:
+    """從 Authorization: Bearer 解出登入使用者；未登入 / 無效回 None。"""
+    if not deps.session_secret:
+        return None
+    token = _bearer_token(request)
+    if not token:
+        return None
+    user_id = verify_session(token, deps.session_secret)
+    if not user_id:
+        return None
+    return repo.get_user(conn, user_id)
 
 
 def _check_basic_auth(header: str | None, user: str, password: str) -> bool:
@@ -361,6 +401,34 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         for row in rows:
             row["image_url"] = f"/memes/{row['meme_id']}/image"
         return rows
+
+    @app.post("/auth/google")
+    def auth_google(request: GoogleAuthRequest,
+                    conn: psycopg.Connection = Depends(get_conn)):
+        """Google 登入：驗 ID token → 建/更新使用者 → 回我方 session token。"""
+        if deps.token_verifier is None or not deps.session_secret:
+            raise HTTPException(status_code=503, detail="使用者登入尚未設定")
+        try:
+            claims = deps.token_verifier(request.credential)
+        except Exception:  # noqa: BLE001 驗證器對任何無效 token 皆丟例外
+            raise HTTPException(status_code=401, detail="Google 登入驗證失敗") from None
+        sub = claims.get("sub")
+        if not sub:
+            raise HTTPException(status_code=401, detail="Google 登入驗證失敗")
+        user = repo.upsert_user(
+            conn, google_sub=str(sub), email=claims.get("email"),
+            name=claims.get("name"), picture=claims.get("picture"),
+        )
+        return {"token": issue_session(user["user_id"], deps.session_secret),
+                "user": _public_user(user)}
+
+    @app.get("/auth/me")
+    def auth_me(http_request: Request, conn: psycopg.Connection = Depends(get_conn)):
+        """回目前登入使用者；未帶有效 Bearer 則 401。"""
+        user = _resolve_user(deps, http_request, conn)
+        if user is None:
+            raise HTTPException(status_code=401, detail="尚未登入")
+        return _public_user(user)
 
     @app.get("/history")
     def history(limit: int = 50, offset: int = 0,
