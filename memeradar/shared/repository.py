@@ -766,6 +766,51 @@ def set_task_models(conn: sqlite3.Connection, mapping: dict[str, str | None]) ->
     conn.commit()
 
 
+# ── events（輕量行為事件）+ 排行榜 ─────────────────────────────────────
+
+
+def insert_event(
+    conn: sqlite3.Connection,
+    event_type: str,
+    *,
+    client_id: str | None = None,
+    meme_id: str | None = None,
+    meta: object | None = None,
+) -> None:
+    """記一筆行為事件（下載 / 選分類 等）。best-effort，不擋主流程。"""
+    conn.execute(
+        "INSERT INTO events (event_id, event_type, client_id, meme_id, meta, created_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s)",
+        (new_id("ev"), event_type, client_id, meme_id,
+         _dumps(meta) if meta is not None else None, _now_iso()),
+    )
+    conn.commit()
+
+
+def leaderboard(conn: sqlite3.Connection, limit: int = 20) -> list[dict]:
+    """熱門梗圖榜：綜合熱度 = 讚×3 + 下載；只列有互動者（資料少時自然短/空）。"""
+    rows = conn.execute(
+        """
+        SELECT m.meme_id, a.ocr_text, a.franchise,
+               COALESCE(likes.n, 0) AS likes,
+               COALESCE(dl.n, 0) AS downloads,
+               COALESCE(likes.n, 0) * 3 + COALESCE(dl.n, 0) AS score
+        FROM memes m
+        JOIN meme_annotations a ON a.meme_id = m.meme_id
+        LEFT JOIN (SELECT meme_id, COUNT(*) AS n FROM feedback_events
+                   WHERE rating = 'up' GROUP BY meme_id) likes ON likes.meme_id = m.meme_id
+        LEFT JOIN (SELECT meme_id, COUNT(*) AS n FROM events
+                   WHERE event_type = 'download' GROUP BY meme_id) dl ON dl.meme_id = m.meme_id
+        WHERE m.status = 'active'
+          AND (COALESCE(likes.n, 0) + COALESCE(dl.n, 0)) > 0
+        ORDER BY score DESC, m.meme_id
+        LIMIT %s
+        """,
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 # ── tasks（非同步推薦任務）──────────────────────────────────────────────
 
 

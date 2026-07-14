@@ -438,6 +438,48 @@ class TestFeedback:
         assert resp.status_code == 422
 
 
+class TestEventsAndLeaderboard:
+    def test_log_download_event(self, env):
+        client, conn, memes, _ = env
+        resp = client.post("/events", json={
+            "event_type": "download", "client_id": "c1",
+            "meme_id": memes[0].meme_id, "meta": {"src": "mobile"},
+        })
+        assert resp.status_code == 202
+        n = conn.execute("SELECT COUNT(*) AS n FROM events").fetchone()["n"]
+        assert n == 1
+
+    def test_unknown_event_type_422(self, env):
+        client, *_ = env
+        assert client.post("/events", json={"event_type": "hack"}).status_code == 422
+
+    def test_bad_meme_id_is_swallowed(self, env):
+        # best-effort：meme_id 不存在也不該讓前台收到錯誤
+        client, *_ = env
+        resp = client.post("/events", json={"event_type": "download", "meme_id": "m_nope"})
+        assert resp.status_code == 202
+
+    def test_leaderboard_ranks_by_likes_and_downloads(self, env):
+        client, _, memes, _ = env
+        body = client.post("/recommend", json=BASE_REQUEST).json()
+        top = body["results"][0]
+        client.post("/feedback", json={
+            "query_id": body["query_id"], "meme_id": top["meme_id"],
+            "rank": top["rank"], "rating": "up",
+        })
+        client.post("/events", json={"event_type": "download", "meme_id": top["meme_id"]})
+
+        board = client.get("/leaderboard").json()
+        assert board[0]["meme_id"] == top["meme_id"]
+        assert board[0]["likes"] == 1 and board[0]["downloads"] == 1
+        assert board[0]["score"] == 4
+        assert board[0]["image_url"] == f"/memes/{top['meme_id']}/image"
+
+    def test_leaderboard_empty_with_no_engagement(self, env):
+        client, *_ = env
+        assert client.get("/leaderboard").json() == []
+
+
 class TestHistory:
     def test_list_with_feedback_counts_and_detail_for_replay(self, env):
         client, *_ = env

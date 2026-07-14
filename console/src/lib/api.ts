@@ -5,6 +5,7 @@ import type {
   Filters,
   HistoryDetail,
   HistoryItem,
+  LeaderboardEntry,
   LibraryMeme,
   Meta,
   Dashboard,
@@ -199,6 +200,28 @@ export async function sendFeedback(body: {
 
 export async function fetchMeta(): Promise<Meta> {
   return unwrap<Meta>(await apiFetch("/meta"));
+}
+
+/** 熱門梗圖榜（讚×3 + 下載）。資料少時後端自然回短 / 空清單。 */
+export async function fetchLeaderboard(limit = 20): Promise<LeaderboardEntry[]> {
+  return unwrap<LeaderboardEntry[]>(await apiFetch(`/leaderboard?limit=${limit}`));
+}
+
+/** 記一筆前台行為事件（下載 / 選分類）。best-effort：失敗也不擋使用者流程。 */
+export function logEvent(
+  eventType: "download" | "category" | "search",
+  opts: { memeId?: string; meta?: Record<string, unknown> } = {},
+): void {
+  void apiFetch("/events", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      event_type: eventType,
+      client_id: getClientId(),
+      meme_id: opts.memeId ?? null,
+      meta: opts.meta ?? null,
+    }),
+  }).catch(() => {});
 }
 
 export async function fetchHistory(): Promise<HistoryItem[]> {

@@ -205,6 +205,17 @@ export interface Meta {
   emotions: string[];
 }
 
+/** 熱門梗圖榜一列（綜合熱度 = 讚×3 + 下載）。 */
+export interface LeaderboardEntry {
+  meme_id: string;
+  image_url: string;
+  ocr_text: string | null;
+  franchise: string | null;
+  likes: number;
+  downloads: number;
+  score: number;
+}
+
 export interface GroupRow {
   key: string | number;
   ups: number;

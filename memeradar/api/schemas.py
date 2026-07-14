@@ -101,3 +101,12 @@ class ModelSettingsRequest(BaseModel):
     """後台各任務模型設定；值為 None / 空字串 = 回 VLM 預設。"""
 
     models: dict[str, str | None] = Field(default_factory=dict)
+
+
+class EventRequest(BaseModel):
+    """前台行為事件（下載 / 選分類 等）；best-effort 分析用。"""
+
+    event_type: str
+    client_id: str | None = None
+    meme_id: str | None = None
+    meta: dict | None = None

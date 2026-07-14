@@ -25,6 +25,7 @@ from memeradar.api.pipeline import run_recommendation
 from memeradar.api.ratelimit import RateLimiter
 from memeradar.api.schemas import (
     DedupResolutionRequest,
+    EventRequest,
     FeedbackRequest,
     ModelSettingsRequest,
     ParseScreenshotRequest,
@@ -102,8 +103,12 @@ def _default_deps() -> Deps:
 
 # 前台（手機 client）需要的公開路徑；其餘一律歸後台（admin）
 _PUBLIC_EXACT = {
-    "/health", "/recommend", "/feedback", "/meta", "/tasks", "/docs", "/openapi.json"
+    "/health", "/recommend", "/feedback", "/meta", "/tasks", "/events", "/leaderboard",
+    "/docs", "/openapi.json",
 }
+
+# /events 接受的事件類型（白名單，防亂塞）
+_ALLOWED_EVENTS = {"download", "category", "search"}
 
 
 def _is_public(method: str, path: str) -> bool:
@@ -334,6 +339,28 @@ def create_app(deps: Deps | None = None) -> FastAPI:
                 status_code=404, detail="query_id 或 meme_id 不存在"
             ) from None
         return {"feedback_id": event.feedback_id}
+
+    @app.post("/events", status_code=202)
+    def log_event(request: EventRequest, http_request: Request,
+                  conn: psycopg.Connection = Depends(get_conn)):
+        """前台行為事件（下載/選分類）。best-effort：型別不合或寫入失敗都不擋前台。"""
+        _enforce_rate_limit(deps, http_request)
+        if request.event_type not in _ALLOWED_EVENTS:
+            raise HTTPException(status_code=422, detail="未知的事件類型")
+        try:
+            repo.insert_event(conn, request.event_type, client_id=request.client_id,
+                              meme_id=request.meme_id, meta=request.meta)
+        except psycopg.errors.Error:
+            conn.rollback()  # meme_id 不存在等 → 忽略，不回報錯誤
+        return {"ok": True}
+
+    @app.get("/leaderboard")
+    def leaderboard(limit: int = 20, conn: psycopg.Connection = Depends(get_conn)):
+        """熱門梗圖榜（讚×3 + 下載）；公開，供前台 Modal。資料少時自然回短/空清單。"""
+        rows = repo.leaderboard(conn, limit=min(max(1, limit), 50))
+        for row in rows:
+            row["image_url"] = f"/memes/{row['meme_id']}/image"
+        return rows
 
     @app.get("/history")
     def history(limit: int = 50, offset: int = 0,

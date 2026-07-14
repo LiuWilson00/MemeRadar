@@ -5,6 +5,7 @@ import {
   ChevronRight,
   Clock,
   Download,
+  Flame,
   History as HistoryIcon,
   Loader2,
   RotateCcw,
@@ -15,16 +16,19 @@ import {
   Swords,
   ThumbsDown,
   ThumbsUp,
+  Trophy,
   XCircle,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import MemeImage from "../components/MemeImage";
 import {
   DEFAULT_PARAMS,
+  fetchLeaderboard,
   fetchMeta,
   fetchTask,
   fetchTaskHistory,
   imageUrl,
+  logEvent,
   sendFeedback,
   submitTask,
   type TaskInput,
@@ -38,6 +42,7 @@ import {
 } from "../lib/settings";
 import type {
   Filters,
+  LeaderboardEntry,
   Meta,
   Params,
   RecommendResponse,
@@ -104,6 +109,7 @@ export default function MobileApp() {
   const [tab, setTab] = useState<Tab>("home");
   const [settings, setSettings] = useState<UserSettings>(() => loadSettings());
   const [meta, setMeta] = useState<Meta | null>(null);
+  const [showBoard, setShowBoard] = useState(false);
 
   // 非同步任務：送出得 task_id，背景執行，前台輪詢 fetchTask 直到 done/error。
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
@@ -270,11 +276,18 @@ export default function MobileApp() {
 
   return (
     <div className="mx-auto flex min-h-[100dvh] max-w-md flex-col">
-      <header className="flex items-center justify-center gap-2 px-4 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))]">
+      <header className="relative flex items-center justify-center gap-2 px-4 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))]">
         <span className="radar h-5 w-5 shrink-0" aria-hidden />
         <h1 className="font-mono text-sm font-semibold tracking-[0.35em]">
           MEME<span className="text-amber">RADAR</span>
         </h1>
+        <button
+          onClick={() => setShowBoard(true)}
+          className="absolute right-3 top-[max(0.55rem,env(safe-area-inset-top))] flex size-8 items-center justify-center rounded-full text-muted active:bg-panel active:text-amber"
+          aria-label="梗圖風雲榜"
+        >
+          <Trophy className="size-5" strokeWidth={1.9} />
+        </button>
       </header>
 
       <main className="flex min-h-0 flex-1 flex-col">
@@ -288,6 +301,8 @@ export default function MobileApp() {
       </main>
 
       <NavBar tab={tab} onTab={setTab} running={loading} />
+
+      {showBoard && <LeaderboardModal onClose={() => setShowBoard(false)} />}
 
       <input
         ref={fileRef}
@@ -821,7 +836,10 @@ function Slide({
           {item.matched_strategy}
         </span>
         <button
-          onClick={() => saveImage(imageUrl(item.image_url), `memeradar-${item.meme_id.slice(2, 10)}`)}
+          onClick={() => {
+            logEvent("download", { memeId: item.meme_id, meta: { src: "mobile", rank: item.rank } });
+            void saveImage(imageUrl(item.image_url), `memeradar-${item.meme_id.slice(2, 10)}`);
+          }}
           className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-full bg-ink/80 px-3 py-1.5 text-xs text-fg active:bg-ink"
           aria-label="儲存這張梗圖"
         >
@@ -922,6 +940,120 @@ function ScoreBar({ label, value, accent }: { label: string; value: number; acce
         />
       </div>
       <span className="w-9 text-right font-mono text-xs">{value.toFixed(2)}</span>
+    </div>
+  );
+}
+
+const MEDALS = ["🥇", "🥈", "🥉"];
+
+/** 梗圖風雲榜：小彩蛋，點頭上的獎盃跳出。綜合熱度 = 讚×3 + 下載。 */
+function LeaderboardModal({ onClose }: { onClose: () => void }) {
+  const [rows, setRows] = useState<LeaderboardEntry[] | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    fetchLeaderboard(20)
+      .then(setRows)
+      .catch(() => setFailed(true));
+  }, []);
+
+  return (
+    <div className="fixed inset-0 z-30 flex items-end bg-ink/70" onClick={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="max-h-[82dvh] w-full overflow-y-auto rounded-t-3xl border-t border-amber/40 bg-panel
+                   px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-3"
+      >
+        <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-line" />
+        <div className="mb-1 flex items-center gap-2">
+          <Trophy className="size-5 text-amber" strokeWidth={1.9} />
+          <p className="text-base font-semibold">梗圖風雲榜</p>
+        </div>
+        <p className="mb-4 text-xs text-muted">大家最愛存、最常按讚的幾張（讚 ×3 ＋ 下載）。</p>
+
+        {failed ? (
+          <EmptyBoard text="榜單暫時拿不到，晚點再回來看看。" />
+        ) : rows === null ? (
+          <div className="flex justify-center py-12">
+            <Loader2 className="size-6 animate-spin text-muted" />
+          </div>
+        ) : rows.length === 0 ? (
+          <EmptyBoard text="還沒有人互動——去存幾張、按幾個讚，這裡就熱鬧起來了。" />
+        ) : (
+          <>
+            <ol className="flex flex-col gap-2">
+              {rows.map((row, i) => (
+                <LeaderRow key={row.meme_id} row={row} place={i + 1} />
+              ))}
+            </ol>
+            {rows.length < 3 && (
+              <p className="mt-3 text-center text-xs text-muted">榜單剛起步，多互動就會長出更多名次。</p>
+            )}
+          </>
+        )}
+
+        <button
+          onClick={onClose}
+          className="mt-5 w-full rounded-full border border-line py-2.5 text-sm text-muted active:bg-raised"
+        >
+          關閉
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function LeaderRow({ row, place }: { row: LeaderboardEntry; place: number }) {
+  const medal = MEDALS[place - 1];
+  const top = place <= 3;
+  return (
+    <li
+      className={`flex items-center gap-3 rounded-2xl border px-3 py-2.5 ${
+        top ? "border-amber/50 bg-amber-soft" : "border-line bg-raised"
+      }`}
+    >
+      <span
+        className={`w-7 shrink-0 text-center ${
+          medal ? "text-xl" : "font-mono text-sm text-muted"
+        }`}
+      >
+        {medal ?? place}
+      </span>
+      <MemeImage
+        src={row.image_url}
+        alt={row.ocr_text ?? "梗圖"}
+        className="size-12 shrink-0 rounded-lg object-cover"
+      />
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm text-fg">
+          {row.ocr_text?.trim() || row.franchise || "梗圖"}
+        </p>
+        {row.franchise && (
+          <p className="mt-0.5 truncate text-xs text-muted">{row.franchise}</p>
+        )}
+      </div>
+      <div className="flex shrink-0 flex-col items-end">
+        <span className="flex items-center gap-1 font-mono text-sm font-semibold text-amber">
+          <Flame className="size-3.5" strokeWidth={2} /> {row.score}
+        </span>
+        <span className="mt-0.5 flex items-center gap-2 text-[11px] text-muted">
+          <span className="flex items-center gap-0.5">
+            <ThumbsUp className="size-3" /> {row.likes}
+          </span>
+          <span className="flex items-center gap-0.5">
+            <Download className="size-3" /> {row.downloads}
+          </span>
+        </span>
+      </div>
+    </li>
+  );
+}
+
+function EmptyBoard({ text }: { text: string }) {
+  return (
+    <div className="flex flex-col items-center gap-3 px-6 py-10 text-center">
+      <Trophy className="size-9 text-line" strokeWidth={1.5} />
+      <p className="text-sm text-muted">{text}</p>
     </div>
   );
 }
