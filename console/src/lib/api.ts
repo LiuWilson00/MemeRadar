@@ -3,10 +3,12 @@ import type {
   DedupReviewItem,
   FeedbackReport,
   Filters,
+  GalleryItem,
   HistoryDetail,
   HistoryItem,
   LeaderboardEntry,
   LibraryMeme,
+  MemeComment,
   Meta,
   Dashboard,
   ModelSettings,
@@ -238,6 +240,78 @@ export async function googleLogin(credential: string): Promise<{ token: string; 
 /** 取目前登入使用者（需帶有效 Bearer）；未登入回 401。 */
 export async function fetchMe(): Promise<User> {
   return unwrap<User>(await apiFetch("/auth/me"));
+}
+
+/** 登入使用者設定顯示暱稱。 */
+export async function setNickname(nickname: string): Promise<void> {
+  const response = await apiFetch("/auth/nickname", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ nickname }),
+  });
+  await unwrap(response);
+}
+
+// ── 探索圖庫 ─────────────────────────────────────────────────────────
+
+/** 探索圖庫一頁（seed 讓隨機排序在分頁間穩定）。 */
+export async function fetchGallery(
+  seed: string,
+  offset: number,
+  limit = 24,
+): Promise<GalleryItem[]> {
+  const query = new URLSearchParams({
+    client_id: getClientId(),
+    seed,
+    offset: String(offset),
+    limit: String(limit),
+  });
+  return unwrap<GalleryItem[]>(await apiFetch(`/gallery?${query}`));
+}
+
+/** 按讚 / 取消讚（回新的讚數與狀態）。 */
+export async function toggleLike(memeId: string): Promise<{ likes: number; liked: boolean }> {
+  const response = await apiFetch(`/memes/${memeId}/like`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ client_id: getClientId() }),
+  });
+  return unwrap(response);
+}
+
+export async function fetchComments(memeId: string): Promise<MemeComment[]> {
+  const query = new URLSearchParams({ client_id: getClientId() });
+  return unwrap<MemeComment[]>(await apiFetch(`/memes/${memeId}/comments?${query}`));
+}
+
+export async function addComment(
+  memeId: string,
+  authorName: string,
+  text: string,
+): Promise<MemeComment> {
+  const response = await apiFetch(`/memes/${memeId}/comments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ client_id: getClientId(), author_name: authorName, text }),
+  });
+  return unwrap<MemeComment>(response);
+}
+
+export async function editComment(memeId: string, commentId: string, text: string): Promise<void> {
+  const response = await apiFetch(`/memes/${memeId}/comments/${commentId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ client_id: getClientId(), text }),
+  });
+  await unwrap(response);
+}
+
+export async function deleteComment(memeId: string, commentId: string): Promise<void> {
+  const query = new URLSearchParams({ client_id: getClientId() });
+  const response = await apiFetch(`/memes/${memeId}/comments/${commentId}?${query}`, {
+    method: "DELETE",
+  });
+  await unwrap(response);
 }
 
 /** 前台檢舉一張梗圖（不宜 / 冒犯）。best-effort：失敗也不打擾使用者。 */

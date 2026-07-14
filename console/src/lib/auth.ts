@@ -40,6 +40,14 @@ export function clearSession(): void {
   emit();
 }
 
+/** 局部更新已存的使用者（如改暱稱後），並通知 UI。 */
+export function updateStoredUser(patch: Partial<User>): void {
+  const current = readUser();
+  if (!current || typeof localStorage === "undefined") return;
+  localStorage.setItem(USER_KEY, JSON.stringify({ ...current, ...patch }));
+  emit();
+}
+
 // 同分頁即時更新（跨分頁靠瀏覽器的 storage 事件）
 const listeners = new Set<() => void>();
 function emit() {

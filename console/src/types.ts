@@ -212,6 +212,30 @@ export interface User {
   name: string | null;
   picture: string | null;
   role: string;
+  nickname: string | null;
+}
+
+/** 探索圖庫一張卡（含尺寸供瀑布流、讚/留言數、此裝置是否已讚）。 */
+export interface GalleryItem {
+  meme_id: string;
+  image_url: string;
+  width: number | null;
+  height: number | null;
+  ocr_text: string | null;
+  franchise: string | null;
+  likes: number;
+  comments: number;
+  liked: boolean;
+}
+
+/** 一則彈幕留言。 */
+export interface MemeComment {
+  comment_id: string;
+  author_name: string;
+  text: string;
+  created_at: string;
+  edited: boolean;
+  mine: boolean;
 }
 
 /** 後台被檢舉的梗圖一列。 */

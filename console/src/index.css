@@ -158,6 +158,22 @@ body {
   animation-delay: calc(var(--i, 0) * 70ms);
 }
 
+/* 彈幕：留言由右向左飄過圖片 */
+@keyframes danmaku {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(-120%);
+  }
+}
+.danmaku-item {
+  position: absolute;
+  white-space: nowrap;
+  animation: danmaku linear infinite;
+  will-change: transform;
+}
+
 /* 圖片載入淡入（避免硬跳出）；load 後加 is-loaded */
 .img-fade {
   opacity: 0;
@@ -178,5 +194,9 @@ body {
   .img-fade {
     opacity: 1;
     transition: none;
+  }
+  /* 減少動態：關掉飄動彈幕（改看下方留言列表） */
+  .danmaku-item {
+    display: none;
   }
 }

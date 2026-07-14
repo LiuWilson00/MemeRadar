@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  Compass,
   Download,
   Flag,
   Flame,
@@ -58,9 +59,10 @@ import type {
   TaskSummary,
 } from "../types";
 import Chip, { toggle } from "./Chip";
+import ExploreScreen from "./ExploreScreen";
 import SettingsScreen from "./SettingsScreen";
 
-type Tab = "home" | "history" | "settings";
+type Tab = "home" | "explore" | "history" | "settings";
 type Mode = "screenshot" | "battle";
 type Input = TaskInput;
 
@@ -324,6 +326,8 @@ export default function MobileApp() {
           <SettingsScreen settings={settings} meta={meta} onChange={updateSettings} />
         ) : tab === "history" ? (
           <HistoryScreen activeId={activeTaskId} onOpen={openTask} />
+        ) : tab === "explore" ? (
+          <ExploreScreen />
         ) : (
           home
         )}
@@ -358,6 +362,7 @@ function NavBar({
 }) {
   const items: Array<{ id: Tab; label: string; Icon: typeof Sparkles; busy?: boolean }> = [
     { id: "home", label: "推薦", Icon: Sparkles },
+    { id: "explore", label: "探索", Icon: Compass },
     { id: "history", label: "歷史", Icon: HistoryIcon, busy: running },
     { id: "settings", label: "設定", Icon: SlidersHorizontal },
   ];
