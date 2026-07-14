@@ -44,6 +44,22 @@ class Settings(BaseSettings):
     rate_limit_per_min: int = 30
     # embedding 後端：nvidia-bge-m3（hosted，免容器 torch）或 bge-m3（本地離線）。
     embedding_backend: str = "nvidia-bge-m3"
+    # Cloudflare R2（物件儲存 + CDN）。填了 public base 就改用 R2 服務圖片（302 導向），
+    # 上傳則需完整 S3 憑證。留空 = 沿用 DB image_data / 檔案系統。
+    r2_account_id: str = ""
+    r2_bucket: str = ""
+    r2_access_key_id: str = ""
+    r2_secret_access_key: str = ""
+    r2_public_base_url: str = ""  # 如 https://pub-xxx.r2.dev 或 custom domain
+
+    def r2_serving_enabled(self) -> bool:
+        return bool(self.r2_public_base_url)
+
+    def r2_upload_enabled(self) -> bool:
+        return bool(
+            self.r2_account_id and self.r2_bucket
+            and self.r2_access_key_id and self.r2_secret_access_key
+        )
 
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

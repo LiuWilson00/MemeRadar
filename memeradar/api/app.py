@@ -19,7 +19,7 @@ from typing import Any
 import psycopg
 import psycopg.errors
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 from memeradar.api.pipeline import run_recommendation
 from memeradar.api.ratelimit import RateLimiter
@@ -66,6 +66,7 @@ class Deps:
     admin_username: str = ""  # 後台登入；空 = 不設防
     admin_password: str = ""
     cors_origins: tuple[str, ...] = ()  # 允許跨源的前端網域（本地留空＝走 vite proxy）
+    r2_public_base_url: str = ""  # 有值 = 圖片改由 R2 CDN 服務（302 導向）
     rate_limiter: Any = None  # RateLimiter | None；None = 不限流（測試預設）
     # 背景任務排程器：接一個 no-arg callable。None = 用內建 thread pool；
     # 測試注入 ``lambda fn: fn()`` 讓非同步任務同步跑完。每請求讀取，故可事後覆寫。
@@ -90,6 +91,7 @@ def _default_deps() -> Deps:
         admin_username=settings.admin_username,
         admin_password=settings.admin_password,
         cors_origins=tuple(settings.cors_origin_list()),
+        r2_public_base_url=settings.r2_public_base_url,
         rate_limiter=(
             RateLimiter(settings.rate_limit_per_min, 60.0)
             if settings.rate_limit_per_min > 0
@@ -375,11 +377,19 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=422, detail="無法讀取圖片（僅支援 PNG / JPEG / WebP）"
             )
-        # 圖檔位元組也存進 DB（雲端免 volume；重部署不掉圖）
-        conn.execute(
-            "UPDATE memes SET image_data = %s WHERE meme_id = %s", (content, meme.meme_id)
-        )
-        conn.commit()
+        # 圖檔落地：有設 R2 就上傳到 R2（CDN 服務）；否則存進 DB image_data（免 volume）
+        from memeradar.shared.config import get_settings
+
+        _settings = get_settings()
+        if _settings.r2_upload_enabled():
+            from memeradar.shared import storage
+
+            storage.put_image(_settings, meme.image_uri, content)
+        else:
+            conn.execute(
+                "UPDATE memes SET image_data = %s WHERE meme_id = %s", (content, meme.meme_id)
+            )
+            conn.commit()
         # 模型優先序：此次請求指定 > 後台設定的標註模型 > VLM 預設
         model = request.model or repo.get_task_models(conn).get("annotation")
         annotation = annotate_meme(
@@ -532,9 +542,18 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         meme = repo.get_meme(conn, meme_id)
         if meme is None:
             raise HTTPException(status_code=404, detail="梗圖不存在")
+        # 有設 R2 → 導向 CDN 公開網址（圖片位元組不再經過 API/DB）；快取此導向
+        if deps.r2_public_base_url:
+            from memeradar.shared.storage import public_url
+
+            return RedirectResponse(
+                public_url(deps.r2_public_base_url, meme.image_uri),
+                status_code=302,
+                headers={"Cache-Control": "public, max-age=86400"},
+            )
         suffix = Path(meme.image_uri).suffix.lower()
         media_type = _MEDIA_TYPES.get(suffix, "application/octet-stream")
-        # 優先服務 DB 內的 image_data（雲端免 volume）；沒有才回退檔案系統（本地開發）
+        # 否則優先服務 DB 內的 image_data（雲端免 volume）；再回退檔案系統（本地開發）
         row = conn.execute(
             "SELECT image_data FROM memes WHERE meme_id = %s", (meme_id,)
         ).fetchone()
