@@ -28,6 +28,7 @@ from memeradar.api.schemas import (
     EventRequest,
     FeedbackRequest,
     GoogleAuthRequest,
+    LibraryUploadRequest,
     ModelSettingsRequest,
     ParseScreenshotRequest,
     RecommendRequest,
@@ -81,6 +82,8 @@ class Deps:
     token_verifier: Any = None
     # 未登入者每日推薦次數上限（登入者不限）；僅在登入啟用（session_secret）時生效。
     anon_daily_quota: int = 5
+    # 每位登入使用者每日上傳共用圖庫的上限（防洗版）；0 = 不限。
+    user_upload_daily_quota: int = 10
 
 
 def _default_deps() -> Deps:
@@ -115,6 +118,7 @@ def _default_deps() -> Deps:
             if settings.google_client_id else None
         ),
         anon_daily_quota=settings.anon_daily_quota,
+        user_upload_daily_quota=settings.user_upload_daily_quota,
     )
 
 
@@ -122,7 +126,7 @@ def _default_deps() -> Deps:
 # 註：/auth/* 為前台使用者登入，非後台 admin，故列公開（其自身以 Bearer 把關）。
 _PUBLIC_EXACT = {
     "/health", "/recommend", "/feedback", "/meta", "/tasks", "/events", "/leaderboard",
-    "/auth/google", "/auth/me", "/docs", "/openapi.json",
+    "/auth/google", "/auth/me", "/library/memes", "/docs", "/openapi.json",
 }
 
 # /events 接受的事件類型（白名單，防亂塞）
@@ -188,6 +192,20 @@ def _run_task(deps: Deps, task_id: str, request: RecommendRequest,
         repo.set_task_status(conn, task_id, "error", error=f"推薦失敗：{exc}")
     finally:
         conn.close()
+
+
+def _persist_image(conn: psycopg.Connection, meme_id: str, image_uri: str, content: bytes) -> None:
+    """圖檔落地：有 R2 憑證就上傳 R2（CDN 服務）；否則存進 DB image_data（免 volume）。"""
+    from memeradar.shared.config import get_settings
+
+    settings = get_settings()
+    if settings.r2_upload_enabled():
+        from memeradar.shared import storage
+
+        storage.put_image(settings, image_uri, content)
+    else:
+        conn.execute("UPDATE memes SET image_data = %s WHERE meme_id = %s", (content, meme_id))
+        conn.commit()
 
 
 def _public_user(user: dict) -> dict:
@@ -486,19 +504,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=422, detail="無法讀取圖片（僅支援 PNG / JPEG / WebP）"
             )
-        # 圖檔落地：有設 R2 就上傳到 R2（CDN 服務）；否則存進 DB image_data（免 volume）
-        from memeradar.shared.config import get_settings
-
-        _settings = get_settings()
-        if _settings.r2_upload_enabled():
-            from memeradar.shared import storage
-
-            storage.put_image(_settings, meme.image_uri, content)
-        else:
-            conn.execute(
-                "UPDATE memes SET image_data = %s WHERE meme_id = %s", (content, meme.meme_id)
-            )
-            conn.commit()
+        _persist_image(conn, meme.meme_id, meme.image_uri, content)
         # 模型優先序：此次請求指定 > 後台設定的標註模型 > VLM 預設
         model = request.model or repo.get_task_models(conn).get("annotation")
         annotation = annotate_meme(
@@ -514,6 +520,62 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             "annotation": asdict(annotation) if annotation is not None else None,
             "embedded": embedded > 0,
             "image_url": f"/memes/{meme.meme_id}/image",
+        }
+
+    @app.post("/library/memes", status_code=201)
+    def library_upload(request: LibraryUploadRequest, http_request: Request,
+                       conn: psycopg.Connection = Depends(get_conn)):
+        """登入使用者上傳到共用圖庫：去重先於標註（省成本）→ 嚴格 NSFW 把關 → 乾淨即自動上架。"""
+        from memeradar.ingestion.dedup import Deduplicator
+
+        user = _resolve_user(deps, http_request, conn)
+        if user is None:
+            raise HTTPException(status_code=401, detail="請先登入才能貢獻梗圖")
+        # 每日上傳上限（防洗版）——最便宜，先擋
+        cap = deps.user_upload_daily_quota
+        if cap > 0 and repo.count_uploads_today(conn, user["user_id"]) >= cap:
+            raise HTTPException(status_code=429, detail={
+                "error": "upload_quota_exceeded",
+                "limit": cap,
+                "message": f"今天的上傳上限（{cap} 張）到了，明天再來。",
+            })
+        content = _decode_image(request.image)
+        # 去重先於標註：完全相同（sha256）或高度相似（phash）都擋，省一次 VLM 呼叫
+        if Deduplicator(conn).check(content).layer in ("duplicate", "review"):
+            raise HTTPException(status_code=409, detail="圖庫已有相同或非常相似的梗圖了")
+        meme, status = import_image_bytes(
+            conn, content, data_dir=deps.data_dir,
+            source_title=request.title_hint, platform="user",
+        )
+        if status in ("error", "unsupported"):
+            raise HTTPException(
+                status_code=422, detail="無法讀取圖片（僅支援 PNG / JPEG / WebP）")
+        if status == "duplicate":  # dedup 應已擋下，保險
+            raise HTTPException(status_code=409, detail="圖片已存在")
+        # 立即歸屬（含被拒者也計入每日配額，避免洗版者靠丟垃圾重試）
+        repo.set_meme_uploaded_by(conn, meme.meme_id, user["user_id"])
+        _persist_image(conn, meme.meme_id, meme.image_uri, content)
+        annotation = annotate_meme(conn, deps.vlm, meme, data_dir=deps.data_dir)
+        # 嚴格把關：拒答 / 非梗圖 / NSFW → 下架、不進推薦池
+        reason = None
+        if annotation is None:
+            reason = "看不懂這張圖，換一張再試"
+        elif not annotation.is_meme:
+            reason = "這看起來不是梗圖"
+        elif annotation.nsfw:
+            reason = "偵測到不宜內容，無法上架"
+        if reason is not None:
+            repo.set_status(conn, meme.meme_id, "removed")
+            raise HTTPException(status_code=422, detail=reason)
+        # 乾淨 → 自動上架（覆蓋低信心的 pending_review）+ 向量化 + 登記 phash（供之後去重）
+        repo.set_status(conn, meme.meme_id, "active")
+        embed_pending_memes(conn, deps.embedder)
+        Deduplicator(conn).register(meme, content)
+        return {
+            "meme_id": meme.meme_id,
+            "status": "published",
+            "image_url": f"/memes/{meme.meme_id}/image",
+            "annotation": {"ocr_text": annotation.ocr_text, "franchise": annotation.franchise},
         }
 
     @app.post("/review/annotations/{meme_id}")

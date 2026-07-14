@@ -302,6 +302,58 @@ async function errorDetail(response: Response, fallback: string): Promise<string
     .catch(() => fallback);
 }
 
+/** 使用者上傳到共用圖庫的結果（以 HTTP 狀態碼分流，不丟例外）。 */
+export type LibraryUploadOutcome =
+  | { kind: "published"; memeId: string; ocr: string; franchise: string | null }
+  | { kind: "duplicate"; message: string }
+  | { kind: "rejected"; message: string } // NSFW / 非梗圖 / 壞圖
+  | { kind: "quota"; message: string }
+  | { kind: "error"; message: string };
+
+/** 登入使用者上傳梗圖到共用圖庫（登入才可用）。約 8–12 秒（含標註）。 */
+export async function uploadToLibrary(
+  imageBase64: string,
+  titleHint?: string,
+): Promise<LibraryUploadOutcome> {
+  let response: Response;
+  try {
+    response = await apiFetch("/library/memes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image: imageBase64, title_hint: titleHint || null }),
+    });
+  } catch (e) {
+    return { kind: "error", message: e instanceof Error ? e.message : "網路錯誤" };
+  }
+  if (response.status === 201) {
+    const body = (await response.json()) as {
+      meme_id: string;
+      annotation?: { ocr_text?: string; franchise?: string | null };
+    };
+    return {
+      kind: "published",
+      memeId: body.meme_id,
+      ocr: body.annotation?.ocr_text ?? "",
+      franchise: body.annotation?.franchise ?? null,
+    };
+  }
+  if (response.status === 401) return { kind: "error", message: "請先登入" };
+  if (response.status === 409) {
+    return { kind: "duplicate", message: await errorDetail(response, "圖庫已經有這張了") };
+  }
+  if (response.status === 429) {
+    const detail = await response.json().then((b) => b?.detail).catch(() => null);
+    const message =
+      detail && typeof detail === "object"
+        ? detail.message
+        : typeof detail === "string"
+          ? detail
+          : "太頻繁了，稍後再試";
+    return { kind: "quota", message };
+  }
+  return { kind: "rejected", message: await errorDetail(response, "這張無法上架") };
+}
+
 export async function fetchVlmModels(): Promise<{ models: string[]; default: string | null }> {
   return unwrap(await apiFetch("/vlm/models"));
 }

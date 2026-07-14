@@ -116,3 +116,10 @@ class GoogleAuthRequest(BaseModel):
     """前端 Google 登入回傳的 ID token（credential）。"""
 
     credential: str
+
+
+class LibraryUploadRequest(BaseModel):
+    """登入使用者上傳梗圖到共用圖庫。"""
+
+    image: str  # base64（PNG / JPEG / WebP）
+    title_hint: str | None = None  # 標註上下文提示（如主題名）

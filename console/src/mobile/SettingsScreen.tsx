@@ -1,11 +1,12 @@
 import { GoogleLogin } from "@react-oauth/google";
-import { Check, LogOut, User as UserIcon } from "lucide-react";
+import { Check, ImagePlus, LogOut, User as UserIcon } from "lucide-react";
 import { useState } from "react";
 import { googleLogin } from "../lib/api";
 import { clearSession, GOOGLE_CLIENT_ID, saveSession, useCurrentUser } from "../lib/auth";
 import type { UserSettings } from "../lib/settings";
 import type { Meta } from "../types";
 import Chip, { toggle } from "./Chip";
+import ContributeModal from "./ContributeModal";
 
 /** 設定頁：帳號（Google 登入）＋使用者偏好（存 localStorage，套用到每次推薦）。 */
 export default function SettingsScreen({
@@ -113,6 +114,7 @@ export default function SettingsScreen({
 function AccountSection() {
   const user = useCurrentUser();
   const [err, setErr] = useState<string | null>(null);
+  const [contributing, setContributing] = useState(false);
 
   if (!GOOGLE_CLIENT_ID) return null;
 
@@ -139,6 +141,19 @@ function AccountSection() {
             <LogOut className="size-3.5" /> 登出
           </button>
         </div>
+
+        <button
+          onClick={() => setContributing(true)}
+          className="mt-2 flex w-full items-center gap-3 rounded-2xl border border-line bg-panel px-4 py-3 text-left active:bg-raised"
+        >
+          <ImagePlus className="size-5 shrink-0 text-amber" strokeWidth={1.75} />
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm text-fg">貢獻梗圖</span>
+            <span className="block text-xs text-muted">上傳你的梗圖到大家的共用圖庫</span>
+          </span>
+        </button>
+
+        {contributing && <ContributeModal onClose={() => setContributing(false)} />}
       </section>
     );
   }

@@ -847,6 +847,22 @@ def get_user(conn: sqlite3.Connection, user_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def set_meme_uploaded_by(conn: sqlite3.Connection, meme_id: str, user_id: str) -> None:
+    """把梗圖歸屬到上傳的使用者（共用圖庫貢獻）。"""
+    conn.execute("UPDATE memes SET uploaded_by = %s WHERE meme_id = %s", (user_id, meme_id))
+    conn.commit()
+
+
+def count_uploads_today(conn: sqlite3.Connection, user_id: str) -> int:
+    """某使用者今天（UTC）上傳的張數；供每日上傳配額判斷（含被拒者，防洗版）。"""
+    today = _now_iso()[:10]
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM memes WHERE uploaded_by = %s AND LEFT(first_seen_at, 10) = %s",
+        (user_id, today),
+    ).fetchone()
+    return row["n"]
+
+
 # ── tasks（非同步推薦任務）──────────────────────────────────────────────
 
 

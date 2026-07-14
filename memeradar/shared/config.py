@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     session_secret: str = ""
     # 未登入者每日推薦次數上限（登入者不限）。僅在有設 GOOGLE 登入時才會擋。
     anon_daily_quota: int = 5
+    # 每位登入使用者每日上傳共用圖庫上限（防洗版）；0 = 不限。
+    user_upload_daily_quota: int = 10
     # Cloudflare R2（物件儲存 + CDN）。填了 public base 就改用 R2 服務圖片（302 導向），
     # 上傳則需完整 S3 憑證。留空 = 沿用 DB image_data / 檔案系統。
     r2_account_id: str = ""

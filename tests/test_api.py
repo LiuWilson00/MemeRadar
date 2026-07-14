@@ -4,6 +4,7 @@
 """
 
 import base64
+import io
 
 import pytest
 from fastapi.testclient import TestClient
@@ -580,6 +581,113 @@ class TestAnonDailyQuota:
         assert client.post("/tasks", json=body, headers=headers).status_code == 202
         # 匿名上限=1 已達，但登入者不受限
         assert client.post("/tasks", json=body, headers=headers).status_code == 202
+
+
+class _AnnVlm(StubVlm):
+    """回可控標註結果（is_meme / nsfw）的 VLM stub，供共用圖庫上傳把關測試。"""
+
+    def __init__(self, *, is_meme=True, nsfw=False):
+        super().__init__()
+        self._payload = AnnotationResult(
+            is_meme=is_meme, nsfw=nsfw, ocr_text="使用者上傳", description="d",
+            characters=[], franchise="海綿寶寶", template_name=None,
+            emotions=["得意"], usage_hints=["用途"], categories=["卡通動畫"], confidence=0.9)
+
+    def annotate(self, image_b64, media_type, system, user_text, *, task="annotate",
+                 log=None, **kwargs):
+        if log is not None:
+            log({"key_id": "…test", "model": self.model, "task": task,
+                 "meme_id": kwargs.get("meme_id"), "status": "ok", "latency_ms": 100,
+                 "prompt_tokens": 100, "completion_tokens": 50, "error": None})
+        return self._payload.model_dump_json()
+
+
+def _png_b64(seed=0):
+    """產生內容各異的小 PNG（sha256 與 phash 都不同），避免測試間誤判重複。"""
+    img = Image.new("RGB", (64, 64))
+    px = img.load()
+    for y in range(64):
+        for x in range(64):
+            px[x, y] = ((x * 7 + seed) % 256, (y * 5 + seed * 3) % 256, (x + y + seed) % 256)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+class TestLibraryUpload:
+    def _client(self, tmp_path, *, vlm=None, quota=10):
+        db_path = tmp_path / "db.sqlite3"
+        conn = connect(db_path)
+        migrate(conn)
+        deps = Deps(
+            client=DualStubClient(), vlm=vlm or _AnnVlm(), embedder=FakeEmbedder(),
+            db_path=db_path, data_dir=tmp_path,
+            session_secret="s3cr3t", user_upload_daily_quota=quota,
+        )
+        client = TestClient(create_app(deps))
+        user = repo.upsert_user(conn, google_sub="g-1", email="a@x.com", name="A", picture="")
+        headers = {"Authorization": f"Bearer {auth.issue_session(user['user_id'], 's3cr3t')}"}
+        return client, conn, user, headers
+
+    def _own_meme(self, conn, user_id):
+        m = Meme(meme_id=new_id("m"), image_uri=f"images/{new_id('x')}.png",
+                 sha256=new_id("h").ljust(64, "0")[:64])
+        repo.insert_meme(conn, m)
+        repo.set_meme_uploaded_by(conn, m.meme_id, user_id)
+        return m
+
+    def test_login_required(self, tmp_path):
+        client, *_ = self._client(tmp_path)
+        assert client.post("/library/memes", json={"image": _png_b64()}).status_code == 401
+
+    def test_clean_upload_publishes_and_activates(self, tmp_path):
+        client, conn, user, headers = self._client(tmp_path)
+        resp = client.post("/library/memes", json={"image": _png_b64(1)}, headers=headers)
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["status"] == "published"
+        meme_id = body["meme_id"]
+        assert repo.get_meme(conn, meme_id).status == "active"  # 自動上架
+        owner = conn.execute(
+            "SELECT uploaded_by FROM memes WHERE meme_id = %s", (meme_id,)).fetchone()
+        assert owner["uploaded_by"] == user["user_id"]
+        n = conn.execute(
+            "SELECT COUNT(*) AS n FROM embeddings WHERE meme_id = %s", (meme_id,)).fetchone()["n"]
+        assert n == 1  # 已向量化，可被推薦
+
+    def test_nsfw_rejected_and_not_activated(self, tmp_path):
+        client, conn, _, headers = self._client(tmp_path, vlm=_AnnVlm(nsfw=True))
+        resp = client.post("/library/memes", json={"image": _png_b64(2)}, headers=headers)
+        assert resp.status_code == 422
+        # 被拒者不留在推薦池
+        row = conn.execute("SELECT status FROM memes ORDER BY first_seen_at DESC").fetchone()
+        assert row["status"] == "removed"
+        n = conn.execute("SELECT COUNT(*) AS n FROM embeddings").fetchone()["n"]
+        assert n == 0
+
+    def test_not_a_meme_rejected(self, tmp_path):
+        client, conn, _, headers = self._client(tmp_path, vlm=_AnnVlm(is_meme=False))
+        resp = client.post("/library/memes", json={"image": _png_b64(3)}, headers=headers)
+        assert resp.status_code == 422
+        row = conn.execute("SELECT status FROM memes ORDER BY first_seen_at DESC").fetchone()
+        assert row["status"] == "removed"
+
+    def test_duplicate_rejected_before_annotation(self, tmp_path):
+        client, _, _, headers = self._client(tmp_path)
+        img = _png_b64(4)
+        first = client.post("/library/memes", json={"image": img}, headers=headers)
+        assert first.status_code == 201
+        dup = client.post("/library/memes", json={"image": img}, headers=headers)
+        assert dup.status_code == 409
+
+    def test_daily_upload_cap(self, tmp_path):
+        client, conn, user, headers = self._client(tmp_path, quota=2)
+        self._own_meme(conn, user["user_id"])
+        self._own_meme(conn, user["user_id"])
+        assert repo.count_uploads_today(conn, user["user_id"]) == 2
+        resp = client.post("/library/memes", json={"image": _png_b64(5)}, headers=headers)
+        assert resp.status_code == 429
+        assert resp.json()["detail"]["error"] == "upload_quota_exceeded"
 
 
 class TestHistory:
