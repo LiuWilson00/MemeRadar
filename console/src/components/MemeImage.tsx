@@ -13,11 +13,13 @@ export default function MemeImage({
   alt,
   className,
   href,
+  aspectRatio,
 }: {
   src: string;
   alt: string;
   className?: string;
   href?: string;
+  aspectRatio?: number; // 給了就先用寬高比預留空間，避免載入前高度 0 造成瀑布流閃動
 }) {
   const [failed, setFailed] = useState(false);
   const [reload, setReload] = useState(0);
@@ -63,6 +65,7 @@ export default function MemeImage({
       }
       alt={alt}
       className={`${className ?? ""} img-fade ${loaded ? "is-loaded" : ""}`}
+      style={aspectRatio ? { aspectRatio } : undefined}
       loading="lazy"
       onLoad={() => setLoaded(true)}
       onError={() => setFailed(true)}

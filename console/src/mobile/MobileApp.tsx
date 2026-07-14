@@ -346,17 +346,32 @@ export default function MobileApp() {
   return (
     <div className="mx-auto flex min-h-[100dvh] max-w-md flex-col">
       <header className="relative flex items-center justify-center gap-2 px-4 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))]">
+        {tab === "explore" && (
+          <button
+            onClick={() => setTab("home")}
+            className="absolute left-2 top-[max(0.5rem,env(safe-area-inset-top))] flex items-center gap-0.5 rounded-full px-2 py-1 text-sm text-muted active:bg-panel active:text-fg"
+            aria-label="返回"
+          >
+            <ChevronLeft className="size-5" /> 返回
+          </button>
+        )}
         <span className="radar h-5 w-5 shrink-0" aria-hidden />
         <h1 className="font-mono text-sm font-semibold tracking-[0.35em]">
-          MEME<span className="text-amber">RADAR</span>
+          {tab === "explore" ? "探索圖庫" : (
+            <>
+              MEME<span className="text-amber">RADAR</span>
+            </>
+          )}
         </h1>
-        <button
-          onClick={() => setShowBoard(true)}
-          className="absolute right-3 top-[max(0.55rem,env(safe-area-inset-top))] flex size-8 items-center justify-center rounded-full text-muted active:bg-panel active:text-amber"
-          aria-label="梗圖風雲榜"
-        >
-          <Trophy className="size-5" strokeWidth={1.9} />
-        </button>
+        {tab !== "explore" && (
+          <button
+            onClick={() => setShowBoard(true)}
+            className="absolute right-3 top-[max(0.55rem,env(safe-area-inset-top))] flex size-8 items-center justify-center rounded-full text-muted active:bg-panel active:text-amber"
+            aria-label="梗圖風雲榜"
+          >
+            <Trophy className="size-5" strokeWidth={1.9} />
+          </button>
+        )}
       </header>
 
       <main className="flex min-h-0 flex-1 flex-col">
@@ -371,7 +386,8 @@ export default function MobileApp() {
         )}
       </main>
 
-      <NavBar tab={tab} onTab={setTab} running={loading} />
+      {/* 探索圖庫沉浸式：隱藏底部導覽，改用左上「返回」（沿用你偏好的體驗） */}
+      {tab !== "explore" && <NavBar tab={tab} onTab={setTab} running={loading} />}
 
       {showBoard && <LeaderboardModal onClose={() => setShowBoard(false)} />}
 

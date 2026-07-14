@@ -72,7 +72,7 @@ export default function ExploreScreen() {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto px-3 py-3">
+    <div className="flex-1 overflow-y-auto px-3 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))]">
       <p className="px-1 pb-2 text-xs text-muted">大家的梗圖庫 —— 逛一逛、按讚、留彈幕。</p>
 
       {items.length === 0 && loading ? (
@@ -94,7 +94,12 @@ export default function ExploreScreen() {
                          bg-panel text-left transition-transform active:scale-[0.98]"
             >
               <div className="relative">
-                <MemeImage src={it.image_url} alt={it.ocr_text ?? "梗圖"} className="w-full" />
+                <MemeImage
+                  src={it.image_url}
+                  alt={it.ocr_text ?? "梗圖"}
+                  className="w-full bg-ink object-cover"
+                  aspectRatio={it.width && it.height ? it.width / it.height : undefined}
+                />
                 <span
                   role="button"
                   aria-label={it.liked ? "取消讚" : "讚"}
