@@ -934,3 +934,13 @@ def list_tasks_by_client(
         (client_id, limit),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def count_tasks_today(conn: sqlite3.Connection, client_id: str) -> int:
+    """某 client 今天（UTC）建立的任務數；供未登入者每日配額判斷。"""
+    today = _now_iso()[:10]  # YYYY-MM-DD
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM tasks WHERE client_id = %s AND LEFT(created_at, 10) = %s",
+        (client_id, today),
+    ).fetchone()
+    return row["n"]

@@ -164,6 +164,16 @@ export function buildTaskRequest(input: TaskInput, filters: Filters, params: Par
   };
 }
 
+/** 未登入者當日推薦配額用罄（後端回 429 + quota_exceeded）。前台用它切換到登入引導。 */
+export class QuotaError extends Error {
+  limit: number;
+  constructor(message: string, limit: number) {
+    super(message);
+    this.name = "QuotaError";
+    this.limit = limit;
+  }
+}
+
 /** 送出非同步推薦任務，回 task_id（實際運算在後端背景進行）。 */
 export async function submitTask(
   input: TaskInput,
@@ -175,6 +185,13 @@ export async function submitTask(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(buildTaskRequest(input, filters, params)),
   });
+  if (response.status === 429) {
+    const detail = await response.json().then((b) => b?.detail).catch(() => null);
+    if (detail && typeof detail === "object" && detail.error === "quota_exceeded") {
+      throw new QuotaError(detail.message ?? "今天的免費次數已用完", detail.limit ?? 5);
+    }
+    throw new Error(typeof detail === "string" ? detail : "請求過於頻繁，請稍後再試");
+  }
   return unwrap(response);
 }
 

@@ -79,6 +79,8 @@ class Deps:
     google_client_id: str = ""
     session_secret: str = ""
     token_verifier: Any = None
+    # 未登入者每日推薦次數上限（登入者不限）；僅在登入啟用（session_secret）時生效。
+    anon_daily_quota: int = 5
 
 
 def _default_deps() -> Deps:
@@ -112,6 +114,7 @@ def _default_deps() -> Deps:
             build_google_verifier(settings.google_client_id)
             if settings.google_client_id else None
         ),
+        anon_daily_quota=settings.anon_daily_quota,
     )
 
 
@@ -325,6 +328,17 @@ def create_app(deps: Deps | None = None) -> FastAPI:
                     conn: psycopg.Connection = Depends(get_conn)):
         """送出非同步推薦：立刻回 task_id，實際運算在背景跑（user 可離開再回來查）。"""
         _enforce_rate_limit(deps, http_request)
+        # 未登入者每日配額（僅在登入啟用時生效；登入者不受限，藉此鼓勵註冊）
+        if deps.session_secret and deps.anon_daily_quota > 0:
+            if _resolve_user(deps, http_request, conn) is None:
+                used = repo.count_tasks_today(conn, request.client_id or "")
+                if used >= deps.anon_daily_quota:
+                    raise HTTPException(status_code=429, detail={
+                        "error": "quota_exceeded",
+                        "limit": deps.anon_daily_quota,
+                        "message": f"今天的免費次數用完了（{deps.anon_daily_quota}/"
+                                   f"{deps.anon_daily_quota}），登入即可無限使用。",
+                    })
         image_bytes: bytes | None = None
         if request.input_type in ("screenshot", "meme_battle"):
             image_bytes = _decode_image(request.image)  # 壞 base64 當場 422，不進背景

@@ -48,6 +48,8 @@ class Settings(BaseSettings):
     # 上 prod 務必設一個隨機值（見 .env.example）。兩者皆空 = 不開放使用者登入。
     google_client_id: str = ""
     session_secret: str = ""
+    # 未登入者每日推薦次數上限（登入者不限）。僅在有設 GOOGLE 登入時才會擋。
+    anon_daily_quota: int = 5
     # Cloudflare R2（物件儲存 + CDN）。填了 public base 就改用 R2 服務圖片（302 導向），
     # 上傳則需完整 S3 憑證。留空 = 沿用 DB image_data / 檔案系統。
     r2_account_id: str = ""

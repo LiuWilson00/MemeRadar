@@ -13,6 +13,7 @@ from memeradar.api.app import Deps, create_app
 from memeradar.matching.intent import IntentResult
 from memeradar.matching.rerank import CandidateScore, RerankResult
 from memeradar.matching.screenshot import ScreenshotParseResult
+from memeradar.shared import auth
 from memeradar.shared import repository as repo
 from memeradar.shared.db import connect, migrate
 from memeradar.shared.models import Embedding, Meme, MemeAnnotation, new_id
@@ -535,6 +536,50 @@ class TestGoogleAuth:
         assert client.get("/auth/me").status_code == 401
         bad = client.get("/auth/me", headers={"Authorization": "Bearer garbage"})
         assert bad.status_code == 401
+
+
+class TestAnonDailyQuota:
+    def _client(self, tmp_path, quota):
+        db_path = tmp_path / "db.sqlite3"
+        conn = connect(db_path)
+        migrate(conn)
+        deps = Deps(
+            client=DualStubClient(), vlm=StubVlm(), embedder=FakeEmbedder(),
+            db_path=db_path, data_dir=tmp_path,
+            session_secret="s3cr3t", anon_daily_quota=quota,
+            run_async=lambda fn: None,  # 不實際跑背景任務，只驗配額擋門
+        )
+        return TestClient(create_app(deps)), conn
+
+    def test_count_tasks_today_only_counts_today_and_client(self, tmp_path):
+        _, conn = self._client(tmp_path, 5)
+        repo.create_task(conn, new_id("task"), client_id="c1", input_type="text", label="a")
+        repo.create_task(conn, new_id("task"), client_id="c1", input_type="text", label="b")
+        repo.create_task(conn, new_id("task"), client_id="c2", input_type="text", label="c")
+        repo.create_task(conn, new_id("task"), client_id="c1", input_type="text", label="old",
+                         created_at="2000-01-01T00:00:00+00:00")
+        assert repo.count_tasks_today(conn, "c1") == 2
+        assert repo.count_tasks_today(conn, "c2") == 1
+
+    def test_anon_blocked_after_quota(self, tmp_path):
+        client, _ = self._client(tmp_path, 2)
+        body = {**BASE_REQUEST, "client_id": "c1"}
+        assert client.post("/tasks", json=body).status_code == 202
+        assert client.post("/tasks", json=body).status_code == 202
+        resp = client.post("/tasks", json=body)
+        assert resp.status_code == 429
+        detail = resp.json()["detail"]
+        assert detail["error"] == "quota_exceeded"
+        assert detail["limit"] == 2
+
+    def test_logged_in_user_is_exempt(self, tmp_path):
+        client, conn = self._client(tmp_path, 1)
+        user = repo.upsert_user(conn, google_sub="g-1", email="a@x.com", name="A", picture="")
+        headers = {"Authorization": f"Bearer {auth.issue_session(user['user_id'], 's3cr3t')}"}
+        body = {**BASE_REQUEST, "client_id": "c1"}
+        assert client.post("/tasks", json=body, headers=headers).status_code == 202
+        # 匿名上限=1 已達，但登入者不受限
+        assert client.post("/tasks", json=body, headers=headers).status_code == 202
 
 
 class TestHistory:

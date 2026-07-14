@@ -8,6 +8,8 @@ import {
   Flame,
   History as HistoryIcon,
   Loader2,
+  Lock,
+  LogIn,
   RotateCcw,
   Search,
   SearchX,
@@ -29,6 +31,7 @@ import {
   fetchTaskHistory,
   imageUrl,
   logEvent,
+  QuotaError,
   sendFeedback,
   submitTask,
   type TaskInput,
@@ -116,6 +119,7 @@ export default function MobileApp() {
   const [task, setTask] = useState<TaskDetail | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [homeError, setHomeError] = useState<string | null>(null);
+  const [quota, setQuota] = useState<{ limit: number } | null>(null);
   const [battleImage, setBattleImage] = useState<string | null>(null);
   const [typing, setTyping] = useState(false);
   const [text, setText] = useState("");
@@ -157,6 +161,7 @@ export default function MobileApp() {
   const submit = useCallback(async (input: Input, filters: Filters, params: Params) => {
     lastInput.current = input;
     setHomeError(null);
+    setQuota(null);
     setTask(null);
     setActiveTaskId(null);
     setTab("home");
@@ -165,7 +170,11 @@ export default function MobileApp() {
       const { task_id } = await submitTask(input, filters, params);
       setActiveTaskId(task_id); // 觸發輪詢
     } catch (e) {
-      setHomeError(e instanceof Error ? e.message : "送出失敗，請再試一次");
+      if (e instanceof QuotaError) {
+        setQuota({ limit: e.limit }); // 免費次數用完 → 引導登入
+      } else {
+        setHomeError(e instanceof Error ? e.message : "送出失敗，請再試一次");
+      }
     } finally {
       setSubmitting(false);
     }
@@ -224,6 +233,7 @@ export default function MobileApp() {
     setActiveTaskId(null);
     setTask(null);
     setHomeError(null);
+    setQuota(null);
     setText("");
     setTyping(false);
     setBattleImage(null);
@@ -236,7 +246,18 @@ export default function MobileApp() {
     task?.input_type === "meme_battle" || lastInput.current?.kind === "battle";
 
   let home;
-  if (loading) {
+  if (quota) {
+    home = (
+      <QuotaScreen
+        limit={quota.limit}
+        onLogin={() => {
+          setQuota(null);
+          setTab("settings");
+        }}
+        onReset={reset}
+      />
+    );
+  } else if (loading) {
     home = <LoadingScreen battle={loadingBattle} />;
   } else if (errorMsg) {
     home = (
@@ -431,6 +452,41 @@ function IdleScreen({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** 免費次數用完：引導登入解鎖無限（登入區在設定頁）。 */
+function QuotaScreen({
+  limit,
+  onLogin,
+  onReset,
+}: {
+  limit: number;
+  onLogin: () => void;
+  onReset: () => void;
+}) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-5 px-8 text-center">
+      <div className="grid size-16 place-items-center rounded-full bg-amber-soft">
+        <Lock className="size-8 text-amber" strokeWidth={1.75} />
+      </div>
+      <div>
+        <p className="text-base font-semibold">今天的免費次數用完了</p>
+        <p className="mx-auto mt-1.5 max-w-[17rem] text-sm leading-relaxed text-muted">
+          免費每天 {limit} 次。用 Google 登入即可
+          <span className="text-amber">無限使用</span>，還能貢獻梗圖到大家的共用圖庫。
+        </p>
+      </div>
+      <button
+        onClick={onLogin}
+        className="flex items-center gap-2 rounded-full bg-amber px-7 py-3 text-sm font-semibold text-ink active:opacity-80"
+      >
+        <LogIn className="size-4" /> 用 Google 登入
+      </button>
+      <button onClick={onReset} className="text-xs text-muted underline underline-offset-4">
+        明天再來
+      </button>
     </div>
   );
 }
