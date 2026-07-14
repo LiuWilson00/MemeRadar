@@ -7,15 +7,7 @@ const API = "http://127.0.0.1:8000";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  build: {
-    // 雙入口：/ = 手機 client（前台，公開），/admin.html = 調適 Console（後台）
-    rollupOptions: {
-      input: {
-        main: "index.html",
-        admin: "admin.html",
-      },
-    },
-  },
+  // 單一 SPA 入口（index.html）；前台 "/" 與後台 "/admin/*" 由 client-side router 分流
   server: {
     // 放行 ngrok 隧道網域（Vite 6 預設擋未知 Host → "Blocked request"）
     allowedHosts: [".ngrok-free.app", ".ngrok.app", ".ngrok-free.dev", ".ngrok.dev", ".ngrok.io"],

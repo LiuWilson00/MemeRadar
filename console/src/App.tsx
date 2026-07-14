@@ -12,7 +12,8 @@ import ResultCard from "./components/ResultCard";
 import ReviewView from "./components/ReviewView";
 import SettingsView from "./components/SettingsView";
 import UploadView from "./components/UploadView";
-import { DEFAULT_FILTERS, DEFAULT_PARAMS, fetchMeta, recommend } from "./lib/api";
+import { apiFetch, DEFAULT_FILTERS, DEFAULT_PARAMS, fetchMeta, recommend } from "./lib/api";
+import { navigate, useRoute } from "./lib/router";
 import type { Filters, HistoryDetail, Meta, Params, RecommendResponse, Turn } from "./types";
 
 type Tab = "work" | "history" | "library" | "upload" | "review" | "report" | "settings";
@@ -25,9 +26,14 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "report", label: "報表" },
   { id: "settings", label: "設定" },
 ];
+const TAB_IDS = TABS.map((t) => t.id) as string[];
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>("work");
+  // 分頁狀態綁定路由：/admin/<tab>，重整不失憶
+  const path = useRoute();
+  const seg = path.split("/")[2] ?? "";
+  const tab: Tab = (TAB_IDS.includes(seg) ? seg : "work") as Tab;
+  const setTab = (t: Tab) => navigate(`/admin/${t}`);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [filters, setFilters] = useState<Filters>({ ...DEFAULT_FILTERS });
   const [params, setParams] = useState<Params>({ ...DEFAULT_PARAMS });
@@ -38,7 +44,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/health")
+    apiFetch("/health")
       .then((r) => setApiUp(r.ok))
       .catch(() => setApiUp(false));
     fetchMeta()

@@ -86,7 +86,7 @@ API 很重（torch + BGE ~2–4GB RAM、冷啟 ~40s，且掛 Volume 後每次重
 - 設定（Variables 分頁）：
   - `ZBPACK_OUTPUT_DIR=dist`（build 產物目錄）
   - `VITE_API_BASE_URL=https://<api 的網域>.zeabur.app`（**build 期**注入；見 §3 前端修改）
-- **SPA fallback 自動**：找不到檔案時回 `index.html`（前台 `/`）。後台在 `/admin.html`（多入口已在 vite build 設定）。
+- **SPA fallback 自動**：找不到檔案時回 `index.html`。單一 SPA 入口 + client-side router：前台 `/`、後台 `/admin/*`（無 .html）。
 
 來源：`.../guides/static`、`.../guides/nodejs/vite`、`.../guides/nodejs`
 
@@ -274,7 +274,7 @@ CMD alembic upgrade head && \
 
 若想**零前端程式碼改動、免 CORS**：讓 FastAPI 直接服務 build 好的前端（`StaticFiles`）。
 - 多階段 Dockerfile：stage1 `node` build `console/dist`，stage2 python 複製 `dist` 並 `app.mount("/", StaticFiles(directory="dist", html=True))`。
-- 相對路徑 `fetch("/recommend")` 因同源直接可用；後台 `/admin.html` 為 top-level 導覽 → 若加 Basic Auth 閘門會**彈瀏覽器原生登入框**（省掉 SPA 登入頁）。
+- 相對路徑 `fetch("/recommend")` 因同源直接可用；後台 `/admin` 由 SPA router 分流 → 若加 Basic Auth 閘門會**彈瀏覽器原生登入框**（省掉 SPA 登入頁）。
 - 代價：前台可用性與重量級 API 耦合、映像更大、部署耦合。**規模小、想最快上線可選這個。**
 
 ---
@@ -287,7 +287,7 @@ curl https://<api>.zeabur.app/health           # {"status":"ok"}
 curl https://<api>.zeabur.app/meta             # franchises 應有數字（資料有搬的話）
 # 前端
 open https://<frontend>.zeabur.app             # 前台載入
-open https://<frontend>.zeabur.app/admin.html  # 後台（設了帳密應要登入）
+open https://<frontend>.zeabur.app/admin      # 後台（設了帳密應要登入）
 ```
 - 送一筆推薦（前台打字），觀察是否走非同步任務、歷史頁最後出現結果（NVIDIA 免費層會慢）。
 - 後台「設定」→ NVIDIA 用量表應累積呼叫紀錄。
