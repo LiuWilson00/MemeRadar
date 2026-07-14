@@ -495,9 +495,15 @@ export async function uploadMemeClassified(
         title_hint: titleHint || null,
         model: model || null,
       }),
+      // 安全逾時：後端標註最壞約 180s（限流等待）；4 分鐘還沒回就當逾時、放行佇列往下跑
+      signal: AbortSignal.timeout(240_000),
     });
   } catch (e) {
-    return { kind: "error", message: e instanceof Error ? e.message : "網路錯誤" };
+    const timedOut = e instanceof DOMException && e.name === "TimeoutError";
+    return {
+      kind: "error",
+      message: timedOut ? "逾時（伺服器忙碌／限流），可稍後重傳" : e instanceof Error ? e.message : "網路錯誤",
+    };
   }
   if (response.status === 409) {
     return { kind: "duplicate", message: await errorDetail(response, "圖片已存在") };

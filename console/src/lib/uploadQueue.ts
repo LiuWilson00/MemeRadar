@@ -5,7 +5,7 @@
  * 終態（完成/重複/失敗）存 localStorage，重整後仍看得到；排隊/處理中因無 File
  * 位元組無法續跑，故不持久化（重整後未跑完的需重新拖入）。
  */
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const STORAGE_KEY = "memeradar.uploadHistory";
 const MAX_ITEMS = 300;
@@ -79,6 +79,18 @@ export function useUploadQueue(uploadOne: (file: File) => Promise<UploadOutcome>
   const runningRef = useRef(false);
   const uploadRef = useRef(uploadOne);
   uploadRef.current = uploadOne;
+
+  // 未跑完的佇列因無 File 位元組無法續跑；重整前先提醒，避免整批白排。
+  const activeCount = items.reduce((n, it) => n + (isTerminal(it.status) ? 0 : 1), 0);
+  useEffect(() => {
+    if (activeCount === 0) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [activeCount]);
 
   const patch = useCallback((id: string, p: Partial<UploadItem>) => {
     setItems((prev) => {
