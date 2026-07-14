@@ -69,6 +69,37 @@ type Input = TaskInput;
 const POLL_MS = 1800;
 const RUNNING: TaskStatus[] = ["pending", "running"];
 
+// 進行中的搜尋存 localStorage → 重整後續跑同一個任務（不重新搜、不歸零計時）。
+// startedAt 用「本機送出時間」而非伺服器 created_at，避免裝置/伺服器時鐘差導致秒數歸零。
+const ACTIVE_SEARCH_KEY = "memeradar.activeSearch";
+
+function loadActiveSearch(): { taskId: string; startedAt: number } | null {
+  try {
+    const raw = localStorage.getItem(ACTIVE_SEARCH_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as { taskId?: string; startedAt?: number };
+    return v.taskId ? { taskId: v.taskId, startedAt: v.startedAt ?? 0 } : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveActiveSearch(taskId: string, startedAt: number): void {
+  try {
+    localStorage.setItem(ACTIVE_SEARCH_KEY, JSON.stringify({ taskId, startedAt }));
+  } catch {
+    /* localStorage 不可用 → 略過 */
+  }
+}
+
+function clearActiveSearch(): void {
+  try {
+    localStorage.removeItem(ACTIVE_SEARCH_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 // 搜尋更多：拉高多樣性、放寬相似度門檻，換一批不同的圖
 const REFINE_PARAMS: Params = { ...DEFAULT_PARAMS, diversity: 0.85, min_similarity: 0.3, candidate_k: 80 };
 
@@ -120,7 +151,8 @@ export default function MobileApp() {
   const [showBoard, setShowBoard] = useState(false);
 
   // 非同步任務：送出得 task_id，背景執行，前台輪詢 fetchTask 直到 done/error。
-  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  // 初始值自 localStorage 還原 → 重整後續跑上次的搜尋（進行中就繼續等、完成就顯示結果）。
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(() => loadActiveSearch()?.taskId ?? null);
   const [task, setTask] = useState<TaskDetail | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [homeError, setHomeError] = useState<string | null>(null);
@@ -131,7 +163,7 @@ export default function MobileApp() {
   const modeRef = useRef<Mode>("screenshot");
   const fileRef = useRef<HTMLInputElement>(null);
   const lastInput = useRef<Input | null>(null);
-  const startRef = useRef(0); // 任務起算時間（ms）；載入計時以它為準，切分頁不歸零
+  const startRef = useRef(loadActiveSearch()?.startedAt ?? 0); // 本機任務起算時間（ms）
 
   useEffect(() => {
     fetchMeta().then(setMeta).catch(() => {});
@@ -176,6 +208,7 @@ export default function MobileApp() {
     try {
       const { task_id } = await submitTask(input, filters, params);
       setActiveTaskId(task_id); // 觸發輪詢
+      saveActiveSearch(task_id, startRef.current); // 存起來 → 重整可續跑
     } catch (e) {
       if (e instanceof QuotaError) {
         setQuota({ limit: e.limit }); // 免費次數用完 → 引導登入
@@ -189,7 +222,8 @@ export default function MobileApp() {
 
   // 從歷史開啟某任務：done 立刻顯示結果，仍在跑則接續輪詢
   const openTask = useCallback((id: string) => {
-    startRef.current = Date.now(); // 首次輪詢前的過渡值；拿到 task.created_at 後即以伺服器時間為準
+    startRef.current = 0; // 從歷史開啟：無本機起算時間 → 計時退回伺服器 created_at
+    saveActiveSearch(id, 0);
     setHomeError(null);
     setBattleImage(null); // 歷史不留存對方梗圖
     setTab("home");
@@ -238,6 +272,8 @@ export default function MobileApp() {
   };
 
   const reset = () => {
+    clearActiveSearch();
+    startRef.current = 0;
     setActiveTaskId(null);
     setTask(null);
     setHomeError(null);
@@ -252,8 +288,10 @@ export default function MobileApp() {
   const loading = submitting || (activeTaskId !== null && !done && task?.status !== "error");
   const loadingBattle =
     task?.input_type === "meme_battle" || lastInput.current?.kind === "battle";
-  // 已跑秒數的起算點：優先用伺服器的 task.created_at（跨分頁/重整都一致），否則用本機送出時間
-  const loadingStartMs = task?.created_at ? Date.parse(task.created_at) : startRef.current;
+  // 已跑秒數的起算點：優先用「本機送出時間」（無時鐘差、跨分頁/重整都對），
+  // 只有從歷史開啟、沒有本機起算時間時，才退回伺服器 created_at。
+  const loadingStartMs =
+    startRef.current || (task?.created_at ? Date.parse(task.created_at) : Date.now());
 
   let home;
   if (quota) {

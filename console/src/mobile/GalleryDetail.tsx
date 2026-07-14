@@ -1,4 +1,4 @@
-import { Heart, Loader2, MessageCircle, Pencil, Send, Trash2, X } from "lucide-react";
+import { ChevronLeft, Heart, Loader2, MessageCircle, Pencil, Send, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import MemeImage from "../components/MemeImage";
 import { addComment, deleteComment, editComment, fetchComments, toggleLike } from "../lib/api";
@@ -82,14 +82,13 @@ export default function GalleryDetail({
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-ink animate-fade-in">
       <div className="mx-auto flex min-h-[100dvh] w-full max-w-md flex-col">
-        <header className="flex items-center justify-between px-4 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))]">
-          <h1 className="text-sm font-semibold">梗圖</h1>
+        <header className="flex items-center gap-1 px-2 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))]">
           <button
             onClick={onClose}
-            className="grid size-8 place-items-center rounded-full text-muted active:bg-panel"
-            aria-label="關閉"
+            className="flex items-center gap-1 rounded-full px-2.5 py-1.5 text-sm text-fg active:bg-panel"
+            aria-label="返回圖庫"
           >
-            <X className="size-5" />
+            <ChevronLeft className="size-5" /> 返回
           </button>
         </header>
 
