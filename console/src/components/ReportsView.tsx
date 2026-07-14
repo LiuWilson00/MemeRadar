@@ -47,7 +47,7 @@ export default function ReportsView() {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 animate-fade-in">
       <p className="text-xs text-muted">
         前台使用者檢舉的梗圖，依檢舉人數排序。下架＝從推薦池移除；忽略＝保留但清出清單。
       </p>

@@ -1,5 +1,5 @@
 import { ImageOff } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { imageUrl } from "../lib/api";
 
 /** 梗圖顯示元件：載入失敗時顯示可點擊重試的佔位，避免破圖 icon + 版面壓扁。
@@ -21,9 +21,16 @@ export default function MemeImage({
 }) {
   const [failed, setFailed] = useState(false);
   const [reload, setReload] = useState(0);
+  const [loaded, setLoaded] = useState(false);
+  const imgRef = useRef<HTMLImageElement>(null);
   // 跨源部署時圖片 URL 要帶 API base；同源時不變
   const resolvedSrc = imageUrl(src);
   const resolvedHref = href ? imageUrl(href) : undefined;
+
+  // 快取圖片的 onLoad 可能在掛載前就觸發過 → 用 complete 補判，確保淡入不會卡住看不見
+  useEffect(() => {
+    if (imgRef.current?.complete && imgRef.current.naturalWidth > 0) setLoaded(true);
+  }, [reload]);
 
   if (failed) {
     return (
@@ -33,6 +40,7 @@ export default function MemeImage({
           e.preventDefault();
           e.stopPropagation();
           setFailed(false);
+          setLoaded(false);
           setReload((k) => k + 1);
         }}
         title="重新載入圖片"
@@ -47,14 +55,16 @@ export default function MemeImage({
 
   const img = (
     <img
+      ref={imgRef}
       src={
         reload
           ? `${resolvedSrc}${resolvedSrc.includes("?") ? "&" : "?"}r=${reload}`
           : resolvedSrc
       }
       alt={alt}
-      className={className}
+      className={`${className ?? ""} img-fade ${loaded ? "is-loaded" : ""}`}
       loading="lazy"
+      onLoad={() => setLoaded(true)}
       onError={() => setFailed(true)}
     />
   );

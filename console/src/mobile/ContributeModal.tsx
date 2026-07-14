@@ -40,7 +40,7 @@ export default function ContributeModal({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex flex-col bg-ink">
+    <div className="fixed inset-0 z-40 flex flex-col bg-ink animate-fade-in">
       <div className="mx-auto flex min-h-[100dvh] w-full max-w-md flex-col">
         <header className="flex items-center justify-between px-4 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))]">
           <h1 className="text-sm font-semibold">貢獻梗圖</h1>
@@ -134,7 +134,7 @@ export default function ContributeModal({ onClose }: { onClose: () => void }) {
 function ResultBanner({ result }: { result: LibraryUploadOutcome }) {
   if (result.kind === "published") {
     return (
-      <div className="flex items-start gap-2.5 rounded-2xl border border-signal/40 bg-signal/10 px-4 py-3">
+      <div className="flex items-start gap-2.5 rounded-2xl border border-signal/40 bg-signal/10 px-4 py-3 animate-fade-in-up">
         <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-signal" />
         <div className="text-sm">
           <p className="font-semibold text-fg">上架成功，謝謝你！</p>
@@ -151,7 +151,7 @@ function ResultBanner({ result }: { result: LibraryUploadOutcome }) {
   const Icon = isInfo ? Info : XCircle;
   const tone = isInfo ? "border-amber/40 bg-amber-soft text-amber" : "border-danger/40 bg-danger/10 text-danger";
   return (
-    <div className={`flex items-start gap-2.5 rounded-2xl border px-4 py-3 ${tone}`}>
+    <div className={`flex items-start gap-2.5 rounded-2xl border px-4 py-3 animate-fade-in-up ${tone}`}>
       <Icon className="mt-0.5 size-5 shrink-0" />
       <p className="text-sm text-fg">{result.message}</p>
     </div>

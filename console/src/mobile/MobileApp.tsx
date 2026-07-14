@@ -263,7 +263,7 @@ export default function MobileApp() {
     home = <LoadingScreen battle={loadingBattle} />;
   } else if (errorMsg) {
     home = (
-      <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center">
+      <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center animate-fade-in">
         <p className="text-sm text-danger">{errorMsg}</p>
         <button
           onClick={reset}
@@ -361,12 +361,15 @@ function NavBar({
         <button
           key={id}
           onClick={() => onTab(id)}
-          className={`relative flex flex-1 flex-col items-center gap-0.5 py-2.5 text-[11px] ${
+          className={`relative flex flex-1 flex-col items-center gap-0.5 py-2.5 text-[11px] transition-colors ${
             tab === id ? "text-amber" : "text-muted"
           }`}
           aria-current={tab === id}
         >
-          <Icon className="size-5" strokeWidth={tab === id ? 2.2 : 1.75} />
+          <Icon
+            className={`size-5 transition-transform duration-200 ${tab === id ? "scale-110" : ""}`}
+            strokeWidth={tab === id ? 2.2 : 1.75}
+          />
           {label}
           {busy && tab !== id && (
             <span className="absolute right-[calc(50%-1.1rem)] top-1.5 size-2 animate-pulse rounded-full bg-amber" />
@@ -394,7 +397,10 @@ function IdleScreen({
 }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-6 px-6 pb-4">
-      <div className="text-center">
+      <div
+        className="text-center animate-fade-in-up stagger"
+        style={{ "--i": 0 } as React.CSSProperties}
+      >
         <p className="text-lg font-semibold leading-relaxed">
           不知道怎麼回？
           <br />
@@ -404,8 +410,9 @@ function IdleScreen({
 
       <button
         onClick={() => onPick("screenshot")}
+        style={{ "--i": 1 } as React.CSSProperties}
         className="flex w-full items-center gap-4 rounded-2xl border border-line bg-panel px-5 py-5
-                   text-left active:scale-[0.99] active:bg-raised"
+                   text-left transition-transform animate-fade-in-up stagger active:scale-[0.99] active:bg-raised"
       >
         <Camera className="size-7 shrink-0 text-amber" strokeWidth={1.75} />
         <span>
@@ -416,8 +423,9 @@ function IdleScreen({
 
       <button
         onClick={() => onPick("battle")}
+        style={{ "--i": 2 } as React.CSSProperties}
         className="flex w-full items-center gap-4 rounded-2xl border border-amber/50 bg-amber-soft
-                   px-5 py-5 text-left active:scale-[0.99] active:bg-amber/20"
+                   px-5 py-5 text-left transition-transform animate-fade-in-up stagger active:scale-[0.99] active:bg-amber/20"
       >
         <Swords className="size-7 shrink-0 text-amber" strokeWidth={1.75} />
         <span>
@@ -426,7 +434,10 @@ function IdleScreen({
         </span>
       </button>
 
-      <div className="w-full">
+      <div
+        className="w-full animate-fade-in-up stagger"
+        style={{ "--i": 3 } as React.CSSProperties}
+      >
         <button
           onClick={onToggleTyping}
           className="mx-auto block text-xs text-muted underline underline-offset-4 active:text-fg"
@@ -469,8 +480,8 @@ function QuotaScreen({
   onReset: () => void;
 }) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-5 px-8 text-center">
-      <div className="grid size-16 place-items-center rounded-full bg-amber-soft">
+    <div className="flex flex-1 flex-col items-center justify-center gap-5 px-8 text-center animate-fade-in">
+      <div className="grid size-16 place-items-center rounded-full bg-amber-soft animate-scale-in">
         <Lock className="size-8 text-amber" strokeWidth={1.75} />
       </div>
       <div>
@@ -519,7 +530,7 @@ function LoadingScreen({ battle }: { battle: boolean }) {
 
   return (
     <div
-      className="flex flex-1 flex-col items-center justify-center gap-7 px-8 text-center"
+      className="flex flex-1 flex-col items-center justify-center gap-7 px-8 text-center animate-fade-in"
       role="status"
       aria-live="polite"
     >
@@ -684,7 +695,7 @@ function ResultsScreen({
 
   if (results.length === 0) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center">
+      <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center animate-fade-in">
         <SearchX className="size-10 text-muted" strokeWidth={1.5} />
         <p className="text-sm">這次沒找到夠合適的梗圖</p>
         <p className="text-xs text-muted">
@@ -715,7 +726,7 @@ function ResultsScreen({
   }
 
   return (
-    <div className="flex flex-1 flex-col">
+    <div className="flex flex-1 flex-col animate-fade-in">
       {response.intent.sensitive && (
         <p className="mx-4 mb-1 flex items-center justify-center gap-1.5 rounded-full bg-amber-soft px-3 py-1.5 text-center text-xs text-amber">
           <AlertTriangle className="size-3.5" /> 偵測到敏感情境，回應已降級為安撫
@@ -810,11 +821,11 @@ function RefineSheet({
   const [categories, setCategories] = useState<string[]>(initial.categories);
 
   return (
-    <div className="fixed inset-0 z-20 flex items-end bg-ink/70" onClick={onClose}>
+    <div className="fixed inset-0 z-20 flex items-end bg-ink/70 animate-fade-in" onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
         className="max-h-[80dvh] w-full overflow-y-auto rounded-t-3xl border-t border-line bg-panel px-5
-                   pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-3"
+                   animate-sheet-up pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-3"
       >
         <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-line" />
         <p className="mb-1 text-base font-semibold">想看哪種？</p>
@@ -914,7 +925,10 @@ function Slide({
           aria-label="這張讚"
           aria-pressed={sent === "up"}
         >
-          <ThumbsUp className="size-5" strokeWidth={sent === "up" ? 2.4 : 1.75} />
+          <ThumbsUp
+            className={`size-5 ${sent === "up" ? "animate-pop" : ""}`}
+            strokeWidth={sent === "up" ? 2.4 : 1.75}
+          />
         </button>
         <button
           onClick={() => rate("down")}
@@ -924,7 +938,10 @@ function Slide({
           aria-label="這張不行"
           aria-pressed={sent === "down"}
         >
-          <ThumbsDown className="size-5" strokeWidth={sent === "down" ? 2.4 : 1.75} />
+          <ThumbsDown
+            className={`size-5 ${sent === "down" ? "animate-pop" : ""}`}
+            strokeWidth={sent === "down" ? 2.4 : 1.75}
+          />
         </button>
         <button
           onClick={onDetail}
@@ -948,10 +965,10 @@ function DetailSheet({
 }) {
   const [reported, setReported] = useState(false);
   return (
-    <div className="fixed inset-0 z-20 flex items-end bg-ink/70" onClick={onClose}>
+    <div className="fixed inset-0 z-20 flex items-end bg-ink/70 animate-fade-in" onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full rounded-t-3xl border-t border-line bg-panel px-5
+        className="w-full rounded-t-3xl border-t border-line bg-panel px-5 animate-sheet-up
                    pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-3"
       >
         <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-line" />
@@ -985,7 +1002,7 @@ function DetailSheet({
         </button>
 
         {reported ? (
-          <p className="mt-3 text-center text-xs text-muted">已收到你的回報，謝謝 🙏</p>
+          <p className="mt-3 text-center text-xs text-muted animate-fade-in">已收到你的回報，謝謝 🙏</p>
         ) : (
           <button
             onClick={() => {
@@ -1031,11 +1048,11 @@ function LeaderboardModal({ onClose }: { onClose: () => void }) {
   }, []);
 
   return (
-    <div className="fixed inset-0 z-30 flex items-end bg-ink/70" onClick={onClose}>
+    <div className="fixed inset-0 z-30 flex items-end bg-ink/70 animate-fade-in" onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
         className="max-h-[82dvh] w-full overflow-y-auto rounded-t-3xl border-t border-amber/40 bg-panel
-                   px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-3"
+                   animate-sheet-up px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-3"
       >
         <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-line" />
         <div className="mb-1 flex items-center gap-2">
@@ -1056,7 +1073,7 @@ function LeaderboardModal({ onClose }: { onClose: () => void }) {
           <>
             <ol className="flex flex-col gap-2">
               {rows.map((row, i) => (
-                <LeaderRow key={row.meme_id} row={row} place={i + 1} />
+                <LeaderRow key={row.meme_id} row={row} place={i + 1} index={i} />
               ))}
             </ol>
             {rows.length < 3 && (
@@ -1076,12 +1093,13 @@ function LeaderboardModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-function LeaderRow({ row, place }: { row: LeaderboardEntry; place: number }) {
+function LeaderRow({ row, place, index }: { row: LeaderboardEntry; place: number; index: number }) {
   const medal = MEDALS[place - 1];
   const top = place <= 3;
   return (
     <li
-      className={`flex items-center gap-3 rounded-2xl border px-3 py-2.5 ${
+      style={{ "--i": index } as React.CSSProperties}
+      className={`flex items-center gap-3 rounded-2xl border px-3 py-2.5 animate-fade-in-up stagger ${
         top ? "border-amber/50 bg-amber-soft" : "border-line bg-raised"
       }`}
     >
