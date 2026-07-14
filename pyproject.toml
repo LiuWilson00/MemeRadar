@@ -25,6 +25,7 @@ dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.2",
     "pyyaml>=6.0",
+    "requests>=2.31",  # google.auth.transport.requests 需要（google-auth 不會自動帶）
     "uvicorn>=0.29",
 ]
 
