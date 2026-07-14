@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   Camera,
   CheckCircle2,
+  ChevronLeft,
   ChevronRight,
   Clock,
   Download,
@@ -128,6 +129,7 @@ export default function MobileApp() {
   const modeRef = useRef<Mode>("screenshot");
   const fileRef = useRef<HTMLInputElement>(null);
   const lastInput = useRef<Input | null>(null);
+  const startRef = useRef(0); // 任務起算時間（ms）；載入計時以它為準，切分頁不歸零
 
   useEffect(() => {
     fetchMeta().then(setMeta).catch(() => {});
@@ -162,6 +164,7 @@ export default function MobileApp() {
 
   const submit = useCallback(async (input: Input, filters: Filters, params: Params) => {
     lastInput.current = input;
+    startRef.current = Date.now();
     setHomeError(null);
     setQuota(null);
     setTask(null);
@@ -184,6 +187,7 @@ export default function MobileApp() {
 
   // 從歷史開啟某任務：done 立刻顯示結果，仍在跑則接續輪詢
   const openTask = useCallback((id: string) => {
+    startRef.current = Date.now(); // 首次輪詢前的過渡值；拿到 task.created_at 後即以伺服器時間為準
     setHomeError(null);
     setBattleImage(null); // 歷史不留存對方梗圖
     setTab("home");
@@ -246,6 +250,8 @@ export default function MobileApp() {
   const loading = submitting || (activeTaskId !== null && !done && task?.status !== "error");
   const loadingBattle =
     task?.input_type === "meme_battle" || lastInput.current?.kind === "battle";
+  // 已跑秒數的起算點：優先用伺服器的 task.created_at（跨分頁/重整都一致），否則用本機送出時間
+  const loadingStartMs = task?.created_at ? Date.parse(task.created_at) : startRef.current;
 
   let home;
   if (quota) {
@@ -260,7 +266,7 @@ export default function MobileApp() {
       />
     );
   } else if (loading) {
-    home = <LoadingScreen battle={loadingBattle} />;
+    home = <LoadingScreen battle={loadingBattle} startedAtMs={loadingStartMs} />;
   } else if (errorMsg) {
     home = (
       <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center animate-fade-in">
@@ -509,28 +515,47 @@ const LOADING_STAGES = {
   normal: ["讀取對話……", "解讀對方情緒……", "掃描梗圖庫……", "排出最貼的幾張……"],
 };
 
-function LoadingScreen({ battle }: { battle: boolean }) {
+// 等待時輪播的幽默台詞（梗圖口吻，隨機出）
+const LOADING_QUIPS = [
+  "免費仔的宿命，稍等一下下 🙏",
+  "正在你的梗圖庫裡翻箱倒櫃……",
+  "思考要多嗆你朋友中……",
+  "梗圖們正在排隊試鏡 🎬",
+  "正在計算最大傷害輸出 💥",
+  "已讀不回的藝術，交給我 🫡",
+  "翻遍整庫只為那一張……",
+  "誠意十足，網速盡力 🛜",
+  "醞釀一個不失禮又到位的回擊……",
+  "AI 也想給你最嗆的那張 😤",
+  "正在偷看你朋友會不會森 77……",
+  "梗圖挑選中，品味需要時間 💅",
+];
+
+function pickQuip(): string {
+  return LOADING_QUIPS[Math.floor(Math.random() * LOADING_QUIPS.length)];
+}
+
+/** startedAtMs：任務起算時間（毫秒 epoch）。以它算已跑秒數 → 切到其他分頁再回來也不會歸零。 */
+function LoadingScreen({ battle, startedAtMs }: { battle: boolean; startedAtMs: number }) {
   const stages = battle ? LOADING_STAGES.battle : LOADING_STAGES.normal;
-  const [step, setStep] = useState(0);
-  const [secs, setSecs] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+  const [quip, setQuip] = useState(() => pickQuip());
 
   useEffect(() => {
-    setStep(0);
-    setSecs(0);
-    const advance = setInterval(
-      () => setStep((s) => Math.min(s + 1, stages.length - 1)),
-      2600,
-    );
-    const clock = setInterval(() => setSecs((s) => s + 1), 1000);
+    const clock = setInterval(() => setNow(Date.now()), 1000);
+    const rotate = setInterval(() => setQuip(pickQuip()), 2600);
     return () => {
-      clearInterval(advance);
       clearInterval(clock);
+      clearInterval(rotate);
     };
-  }, [stages.length]);
+  }, []);
+
+  const secs = Math.max(0, Math.floor((now - startedAtMs) / 1000));
+  const step = Math.min(Math.floor(secs / 3), stages.length - 1);
 
   return (
     <div
-      className="flex flex-1 flex-col items-center justify-center gap-7 px-8 text-center animate-fade-in"
+      className="flex flex-1 flex-col items-center justify-center gap-6 px-8 text-center animate-fade-in"
       role="status"
       aria-live="polite"
     >
@@ -540,10 +565,13 @@ function LoadingScreen({ battle }: { battle: boolean }) {
         <span className="radar-blip" style={{ left: "52%", top: "70%", animationDelay: "1.6s" }} />
       </div>
 
-      <div className="flex flex-col items-center gap-3">
-        <p className="min-h-[1.5rem] text-sm font-medium text-fg transition-all">
-          {stages[step]}
-        </p>
+      {/* 輪播幽默台詞（key 換 → 每句淡入） */}
+      <p key={quip} className="min-h-[2.5rem] max-w-[17rem] text-sm font-medium text-amber animate-fade-in">
+        {quip}
+      </p>
+
+      <div className="flex flex-col items-center gap-2.5">
+        <p className="text-xs text-muted transition-all">{stages[step]}</p>
         <div className="flex items-center gap-1.5">
           {stages.map((_, i) => (
             <span
@@ -687,10 +715,19 @@ function ResultsScreen({
   const [detail, setDetail] = useState<ResultItem | null>(null);
   const [refining, setRefining] = useState(false);
   const results = response.results;
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const onScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
     setIndex(Math.round(el.scrollLeft / el.clientWidth));
+  };
+
+  // 點點 / 箭頭跳到指定張（滑鼠也能換，不只靠觸控滑動）
+  const goTo = (i: number) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const to = Math.max(0, Math.min(results.length - 1, i));
+    el.scrollTo({ left: to * el.clientWidth, behavior: "smooth" });
   };
 
   if (results.length === 0) {
@@ -743,6 +780,7 @@ function ResultsScreen({
       )}
 
       <div
+        ref={scrollRef}
         onScroll={onScroll}
         className="flex flex-1 snap-x snap-mandatory overflow-x-auto scroll-smooth"
         style={{ scrollbarWidth: "none" }}
@@ -757,15 +795,42 @@ function ResultsScreen({
         ))}
       </div>
 
-      <div className="flex items-center justify-center gap-1.5 py-2.5">
-        {results.map((item, i) => (
-          <span
-            key={item.meme_id}
-            className={`h-1.5 rounded-full transition-all ${
-              i === index ? "w-5 bg-amber" : "w-1.5 bg-line"
-            }`}
-          />
-        ))}
+      <div className="flex items-center justify-center gap-3 py-2.5">
+        <button
+          onClick={() => goTo(index - 1)}
+          disabled={index === 0}
+          className="grid size-7 place-items-center rounded-full border border-line text-muted
+                     transition-colors active:bg-panel disabled:opacity-30"
+          aria-label="上一張"
+        >
+          <ChevronLeft className="size-4" />
+        </button>
+        <div className="flex items-center gap-1.5">
+          {results.map((item, i) => (
+            <button
+              key={item.meme_id}
+              onClick={() => goTo(i)}
+              className="p-1"
+              aria-label={`第 ${i + 1} 張`}
+              aria-current={i === index}
+            >
+              <span
+                className={`block h-1.5 rounded-full transition-all ${
+                  i === index ? "w-5 bg-amber" : "w-1.5 bg-line"
+                }`}
+              />
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={() => goTo(index + 1)}
+          disabled={index === results.length - 1}
+          className="grid size-7 place-items-center rounded-full border border-line text-muted
+                     transition-colors active:bg-panel disabled:opacity-30"
+          aria-label="下一張"
+        >
+          <ChevronRight className="size-4" />
+        </button>
       </div>
 
       <div className="space-y-2 px-4 pb-3">
