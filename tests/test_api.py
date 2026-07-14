@@ -747,6 +747,40 @@ class TestLibraryUpload:
         assert resp.json()["detail"]["error"] == "upload_quota_exceeded"
 
 
+class TestDecoupledImport:
+    def test_import_only_skips_annotation_and_embedding(self, env):
+        client, conn, _, _ = env
+        resp = client.post("/memes", json={"image": _png_b64(77), "annotate": False})
+        assert resp.status_code == 200
+        body = resp.json()
+        mid = body["meme_id"]
+        assert body["annotation_pending"] is True
+        assert body["annotation"] is None
+        n_ann = conn.execute(
+            "SELECT COUNT(*) AS n FROM meme_annotations WHERE meme_id = %s", (mid,)).fetchone()["n"]
+        n_emb = conn.execute(
+            "SELECT COUNT(*) AS n FROM embeddings WHERE meme_id = %s", (mid,)).fetchone()["n"]
+        assert n_ann == 0 and n_emb == 0
+
+    def test_pending_count_then_background_worker_annotates(self, env):
+        client, conn, _, deps = env
+        client.post("/memes", json={"image": _png_b64(78), "annotate": False})
+        assert client.get("/annotation/pending").json()["pending"] == 1
+        # 背景工作單元跑一次 → 標註 + 向量化完成，佇列歸零
+        from memeradar.api.app import annotate_one_pending
+        assert annotate_one_pending(deps, conn) is True
+        assert client.get("/annotation/pending").json()["pending"] == 0
+        row = conn.execute("SELECT meme_id FROM memes ORDER BY first_seen_at DESC").fetchone()
+        assert conn.execute(
+            "SELECT COUNT(*) AS n FROM meme_annotations WHERE meme_id = %s", (row["meme_id"],)
+        ).fetchone()["n"] == 1
+
+    def test_annotate_one_pending_noop_when_empty(self, env):
+        _, conn, _, deps = env
+        from memeradar.api.app import annotate_one_pending
+        assert annotate_one_pending(deps, conn) is False
+
+
 class TestReports:
     def test_report_logs_and_lists_distinct_clients(self, env):
         client, _, memes, _ = env

@@ -457,6 +457,11 @@ export async function fetchVlmModels(): Promise<{ models: string[]; default: str
   return unwrap(await apiFetch("/vlm/models"));
 }
 
+/** 後台：待背景標註的張數（大量匯入時顯示進度）。 */
+export async function fetchAnnotationPending(): Promise<{ pending: number }> {
+  return unwrap<{ pending: number }>(await apiFetch("/annotation/pending"));
+}
+
 /** 後台：各任務模型設定（含可選清單與 VLM 預設）。 */
 export async function fetchModelSettings(): Promise<ModelSettings> {
   return unwrap<ModelSettings>(await apiFetch("/settings/models"));
@@ -479,11 +484,13 @@ export async function fetchVlmUsage(): Promise<VlmUsageRow[]> {
   return unwrap<VlmUsageRow[]>(await apiFetch("/vlm/usage"));
 }
 
-/** 分類版上傳（批次佇列用）：以 HTTP 狀態碼區分成功 / 重複 / 失敗，不丟例外。 */
+/** 分類版上傳（批次佇列用）：以 HTTP 狀態碼區分成功 / 重複 / 失敗，不丟例外。
+ * annotate=false → 只入庫（秒級），標註交給後端背景 worker（大量匯入不卡）。 */
 export async function uploadMemeClassified(
   imageBase64: string,
   titleHint: string,
   model?: string,
+  annotate = true,
 ): Promise<UploadOutcome> {
   let response: Response;
   try {
@@ -494,9 +501,10 @@ export async function uploadMemeClassified(
         image: imageBase64,
         title_hint: titleHint || null,
         model: model || null,
+        annotate,
       }),
-      // 安全逾時：後端標註最壞約 180s（限流等待）；4 分鐘還沒回就當逾時、放行佇列往下跑
-      signal: AbortSignal.timeout(240_000),
+      // 安全逾時：只入庫時秒級回；同步標註最壞約 180s。3 分鐘還沒回就當逾時、放行佇列
+      signal: AbortSignal.timeout(180_000),
     });
   } catch (e) {
     const timedOut = e instanceof DOMException && e.name === "TimeoutError";

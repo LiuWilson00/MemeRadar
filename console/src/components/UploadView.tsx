@@ -1,7 +1,7 @@
-import { Ban, Check, CircleDashed, LoaderCircle, Trash2, X } from "lucide-react";
+import { Ban, Check, CircleDashed, LoaderCircle, Sparkles, Trash2, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchVlmModels, uploadMemeClassified } from "../lib/api";
+import { fetchAnnotationPending, fetchVlmModels, uploadMemeClassified } from "../lib/api";
 import { fileToBase64, imageFilesFrom } from "../lib/files";
 import { summarize, useUploadQueue, type UploadItem } from "../lib/uploadQueue";
 
@@ -13,8 +13,8 @@ const STATUS: Record<
   { Icon: LucideIcon; cls: string; label: string; spin?: boolean }
 > = {
   queued: { Icon: CircleDashed, cls: "text-muted", label: "排隊中" },
-  uploading: { Icon: LoaderCircle, cls: "text-amber", label: "入庫標註中…", spin: true },
-  done: { Icon: Check, cls: "text-chart-up", label: "完成" },
+  uploading: { Icon: LoaderCircle, cls: "text-amber", label: "入庫中…", spin: true },
+  done: { Icon: Check, cls: "text-chart-up", label: "已入庫" },
   duplicate: { Icon: Ban, cls: "text-muted", label: "已存在" },
   error: { Icon: X, cls: "text-danger", label: "失敗" },
 };
@@ -26,8 +26,11 @@ export default function UploadView({ onDone }: { onDone?: () => void }) {
   const [model, setModel] = useState<string>("");
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const [pending, setPending] = useState<number | null>(null);
+  // 只入庫（annotate=false）→ 秒級回，標註由後端背景 worker 慢慢消化
   const uploadOne = useCallback(
-    async (file: File) => uploadMemeClassified(await fileToBase64(file), titleHint.trim(), model),
+    async (file: File) =>
+      uploadMemeClassified(await fileToBase64(file), titleHint.trim(), model, false),
     [titleHint, model],
   );
   const { items, running, add, clear } = useUploadQueue(uploadOne);
@@ -40,6 +43,22 @@ export default function UploadView({ onDone }: { onDone?: () => void }) {
         setModel(r.default ?? r.models[0] ?? "");
       })
       .catch(() => {});
+  }, []);
+
+  // 背景標註進度：每 4 秒查一次待標註張數
+  useEffect(() => {
+    let alive = true;
+    const poll = () => {
+      fetchAnnotationPending()
+        .then((r) => alive && setPending(r.pending))
+        .catch(() => {});
+    };
+    poll();
+    const timer = setInterval(poll, 4000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
   }, []);
 
   // 佇列跑完（idle）就刷新一次上層（梗圖庫 / meta 計數）
@@ -107,7 +126,7 @@ export default function UploadView({ onDone }: { onDone?: () => void }) {
           )}
         </p>
         <p className="text-xs text-muted">
-          支援 PNG / JPEG / WebP · 每張約 8–12 秒（入庫 → 標註 → 向量化）· 重複自動略過
+          支援 PNG / JPEG / WebP · <span className="text-fg">秒級入庫</span>，標註在背景進行 · 重複自動略過
         </p>
         <input
           ref={inputRef}
@@ -125,12 +144,14 @@ export default function UploadView({ onDone }: { onDone?: () => void }) {
       {items.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded border border-line bg-panel px-4 py-2 text-sm">
           <span className="font-semibold">佇列 {summary.total}</span>
-          {summary.active > 0 && <span className="text-amber">進行中 {summary.active}</span>}
+          {summary.active > 0 && <span className="text-amber">上傳中 {summary.active}</span>}
           <span className="text-chart-up">入庫 {summary.done}</span>
           <span className="text-muted">重複 {summary.duplicate}</span>
           <span className="text-danger">失敗 {summary.error}</span>
-          {summary.pendingReview > 0 && (
-            <span className="text-amber">待複核 {summary.pendingReview}</span>
+          {pending != null && pending > 0 && (
+            <span className="flex items-center gap-1 text-amber">
+              <Sparkles className="size-3.5 animate-pulse" /> 背景標註中 {pending}
+            </span>
           )}
           <button
             onClick={clear}

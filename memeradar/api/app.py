@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import base64
 import binascii
+import threading
+import time
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -90,6 +92,8 @@ class Deps:
     anon_daily_quota: int = 5
     # 每位登入使用者每日上傳共用圖庫的上限（防洗版）；0 = 不限。
     user_upload_daily_quota: int = 10
+    # 是否啟動背景標註 worker（大量匯入時先入庫、標註丟背景）；測試預設關。
+    enable_annotation_worker: bool = False
 
 
 def _default_deps() -> Deps:
@@ -125,6 +129,7 @@ def _default_deps() -> Deps:
         ),
         anon_daily_quota=settings.anon_daily_quota,
         user_upload_daily_quota=settings.user_upload_daily_quota,
+        enable_annotation_worker=True,
     )
 
 
@@ -248,6 +253,35 @@ def _resolve_user(deps: Deps, request: Request, conn: psycopg.Connection) -> dic
     return repo.get_user(conn, user_id)
 
 
+def annotate_one_pending(deps: Deps, conn: psycopg.Connection) -> bool:
+    """背景標註佇列的一次工作單元：撿一張未標註的 active 梗圖，標註＋向量化。
+
+    回傳是否有處理到（False = 佇列空）。標註本身可能拒答→轉 pending_review，
+    或限流耗盡→拋例外（由呼叫端吞掉，下輪再試）。
+    """
+    pending = repo.list_active_unannotated(conn, limit=1)
+    if not pending:
+        return False
+    annotation = annotate_meme(conn, deps.vlm, pending[0], data_dir=deps.data_dir)
+    if annotation is not None and annotation.is_meme:
+        embed_pending_memes(conn, deps.embedder)
+    return True
+
+
+def _annotation_worker(deps: Deps) -> None:
+    """常駐背景執行緒：慢慢把待標註的梗圖標註完（照 NVIDIA 限流節奏）。"""
+    while True:
+        did = False
+        conn = connect(deps.db_path)
+        try:
+            did = annotate_one_pending(deps, conn)
+        except Exception:  # noqa: BLE001 限流耗盡等 → 留待下輪，別讓 worker 掛掉
+            did = False
+        finally:
+            conn.close()
+        time.sleep(1.0 if did else 8.0)  # 有活就快點跑；沒活就緩一緩
+
+
 def _check_basic_auth(header: str | None, user: str, password: str) -> bool:
     import binascii
     import secrets
@@ -277,6 +311,10 @@ def create_app(deps: Deps | None = None) -> FastAPI:
     # 背景任務池不跨程序重啟：把上次殘留的 pending/running 標成 error，前台才不會永遠輪詢
     repo.abort_orphan_tasks(startup_conn)
     startup_conn.close()
+
+    # 背景標註 worker：大量匯入時「先入庫、標註丟背景」，這條常駐執行緒慢慢消化佇列。
+    if deps.enable_annotation_worker:
+        threading.Thread(target=_annotation_worker, args=(deps,), daemon=True).start()
 
     app = FastAPI(title="MemeRadar API", version="0.1.0")
 
@@ -589,6 +627,18 @@ def create_app(deps: Deps | None = None) -> FastAPI:
                 status_code=422, detail="無法讀取圖片（僅支援 PNG / JPEG / WebP）"
             )
         _persist_image(conn, meme.meme_id, meme.image_uri, content)
+        # 大量匯入模式：只入庫，標註交給背景 worker（秒級回、不卡）；圖尚無標註/向量，
+        # 故暫不進推薦池與圖庫，等背景標註完才浮現。
+        if not request.annotate:
+            return {
+                "meme_id": meme.meme_id,
+                "status": "imported",
+                "meme_status": repo.get_meme(conn, meme.meme_id).status,
+                "annotation": None,
+                "embedded": False,
+                "annotation_pending": True,
+                "image_url": f"/memes/{meme.meme_id}/image",
+            }
         # 模型優先序：此次請求指定 > 後台設定的標註模型 > VLM 預設
         model = request.model or repo.get_task_models(conn).get("annotation")
         annotation = annotate_meme(
@@ -603,8 +653,14 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             "meme_status": repo.get_meme(conn, meme.meme_id).status,
             "annotation": asdict(annotation) if annotation is not None else None,
             "embedded": embedded > 0,
+            "annotation_pending": False,
             "image_url": f"/memes/{meme.meme_id}/image",
         }
+
+    @app.get("/annotation/pending")
+    def annotation_pending(conn: psycopg.Connection = Depends(get_conn)):
+        """待背景標註的張數（上傳頁顯示進度用）。"""
+        return {"pending": repo.count_active_unannotated(conn)}
 
     @app.post("/library/memes", status_code=201)
     def library_upload(request: LibraryUploadRequest, http_request: Request,

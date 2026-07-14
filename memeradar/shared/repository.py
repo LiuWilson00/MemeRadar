@@ -115,6 +115,38 @@ def list_memes_missing_annotation(conn: sqlite3.Connection, limit: int | None = 
     return [_row_to_meme(r) for r in conn.execute(sql, params).fetchall()]
 
 
+def list_active_unannotated(conn: sqlite3.Connection, limit: int = 1) -> list[Meme]:
+    """背景標註佇列：active 且尚未標註的梗圖（舊到新）。
+
+    只取 active——標註失敗會轉 pending_review，藉此排除、避免同一張壞圖無限重試；
+    限流耗盡（未寫標註）者維持 active，下輪會再被撿起來。
+    """
+    return [
+        _row_to_meme(r)
+        for r in conn.execute(
+            """
+            SELECT m.* FROM memes m
+            LEFT JOIN meme_annotations a ON a.meme_id = m.meme_id
+            WHERE a.meme_id IS NULL AND m.status = 'active'
+            ORDER BY m.first_seen_at
+            LIMIT %s
+            """,
+            (limit,),
+        ).fetchall()
+    ]
+
+
+def count_active_unannotated(conn: sqlite3.Connection) -> int:
+    """待背景標註的張數（供上傳頁顯示進度）。"""
+    return conn.execute(
+        """
+        SELECT COUNT(*) AS n FROM memes m
+        LEFT JOIN meme_annotations a ON a.meme_id = m.meme_id
+        WHERE a.meme_id IS NULL AND m.status = 'active'
+        """
+    ).fetchone()["n"]
+
+
 def list_recommendation_logs(
     conn: sqlite3.Connection, limit: int = 50, offset: int = 0
 ) -> list[dict]:
