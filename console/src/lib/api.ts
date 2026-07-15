@@ -1,5 +1,6 @@
 import type {
   AnnotationPatch,
+  ChatReply,
   ClientError,
   DedupReviewItem,
   FeedbackReport,
@@ -226,6 +227,16 @@ export async function sendFeedback(body: {
 
 export async function fetchMeta(): Promise<Meta> {
   return unwrap<Meta>(await apiFetch("/meta"));
+}
+
+/** 只會回梗圖的朋友：一則訊息 → 一張梗圖（exclude 帶這輪回過的，避免重複）。 */
+export async function chat(message: string, exclude: string[] = []): Promise<ChatReply> {
+  const response = await apiFetch("/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, client_id: getClientId(), exclude }),
+  });
+  return unwrap<ChatReply>(response);
 }
 
 // ── 前台錯誤回報（best-effort，供後台 debug）────────────────────────────

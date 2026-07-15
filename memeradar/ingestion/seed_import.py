@@ -28,6 +28,7 @@ from memeradar.shared.models import Meme, MemeSource, new_id
 
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 MIN_SHORT_SIDE = 200  # docs/02 §5 規則門檻；seed 僅警告
+MAX_IMAGE_PIXELS = 25_000_000  # ~5000×5000；擋超高解析度圖片避免 PIL 解碼吃爆記憶體
 _FORMAT_EXTENSIONS = {"PNG": ".png", "JPEG": ".jpg", "WEBP": ".webp"}
 
 
@@ -78,6 +79,10 @@ def import_image_bytes(
     extension = _FORMAT_EXTENSIONS.get(image_format or "")
     if extension is None:
         return None, "unsupported"
+
+    # 記憶體保護：超高解析度圖片 PIL 解碼會吃掉數百 MB → 直接擋（img.size 讀 header，尚未解碼）
+    if width * height > MAX_IMAGE_PIXELS:
+        return None, "too_large"
 
     images_dir = data_dir / "images"
     images_dir.mkdir(parents=True, exist_ok=True)

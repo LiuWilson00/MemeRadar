@@ -781,6 +781,42 @@ class TestDecoupledImport:
         assert annotate_one_pending(deps, conn) is False
 
 
+class TestChat:
+    def test_reply_returns_a_meme(self, env):
+        client, _, memes, _ = env
+        r = client.post("/chat", json={"message": "你報告又遲交了", "client_id": "c1"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["meme"]["meme_id"] in {m.meme_id for m in memes}
+        assert body["meme"]["image_url"].endswith("/image")
+        assert "similarity" in body
+
+    def test_exclude_avoids_repeats(self, env):
+        client, _, memes, _ = env
+        keep = memes[0].meme_id
+        excl = [m.meme_id for m in memes if m.meme_id != keep]
+        r = client.post("/chat", json={"message": "hi", "exclude": excl})
+        assert r.status_code == 200
+        assert r.json()["meme"]["meme_id"] == keep
+
+    def test_empty_message_422(self, env):
+        client, *_ = env
+        assert client.post("/chat", json={"message": "  "}).status_code == 422
+
+
+class TestImageSizeGuard:
+    def test_import_rejects_oversized(self, monkeypatch, tmp_path):
+        from memeradar.ingestion import seed_import
+        monkeypatch.setattr(seed_import, "MAX_IMAGE_PIXELS", 100)  # 64×64=4096 > 100 → 拒
+        conn = connect(tmp_path / "x")
+        migrate(conn)
+        buf = io.BytesIO()
+        Image.new("RGB", (64, 64), (10, 20, 30)).save(buf, format="PNG")
+        _, status = seed_import.import_image_bytes(conn, buf.getvalue(), data_dir=tmp_path)
+        assert status == "too_large"
+        conn.close()
+
+
 class TestClientErrors:
     def test_report_and_list(self, env):
         client, *_ = env

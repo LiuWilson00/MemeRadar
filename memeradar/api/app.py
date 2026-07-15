@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import random
 import threading
 import time
 from collections.abc import Iterator
@@ -26,6 +27,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from memeradar.api.pipeline import run_recommendation
 from memeradar.api.ratelimit import RateLimiter
 from memeradar.api.schemas import (
+    ChatRequest,
     ClientErrorRequest,
     CommentRequest,
     CommentUpdateRequest,
@@ -139,7 +141,7 @@ def _default_deps() -> Deps:
 # 註：/recommend（同步、直打 VLM）刻意「不」公開——前台一律走有配額的 /tasks，
 # /recommend 僅供後台除錯（admin Basic）。放公開會讓匿名者繞過每日配額直打 VLM。
 _PUBLIC_EXACT = {
-    "/health", "/feedback", "/meta", "/tasks", "/events", "/leaderboard",
+    "/health", "/feedback", "/meta", "/tasks", "/events", "/leaderboard", "/chat",
     "/auth/google", "/auth/me", "/auth/nickname", "/library/memes", "/gallery",
     "/docs", "/openapi.json",
 }
@@ -237,6 +239,16 @@ def _persist_image(conn: psycopg.Connection, meme_id: str, image_uri: str, conte
 def _public_user(user: dict) -> dict:
     """對外只回這幾個欄位（隱去 google_sub 等內部欄位）。"""
     return {k: user.get(k) for k in ("user_id", "email", "name", "picture", "role", "nickname")}
+
+
+def _pick_chat_meme(hits: list, exclude: set[str]):
+    """從檢索結果挑一張回應：濾掉這輪已回過的，再依相似度加權隨機（偏高相似度但保留多樣）。
+    全被排除就回退到不排除（寧可重複，也要回一張）。回 None 表示完全沒得回。"""
+    if not hits:
+        return None
+    candidates = [h for h in hits if h.meme_id not in exclude] or hits
+    weights = [max(h.similarity, 0.01) ** 2 for h in candidates]
+    return random.choices(candidates, weights=weights, k=1)[0]
 
 
 def _bearer_token(request: Request) -> str | None:
@@ -500,6 +512,35 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             row["image_url"] = f"/memes/{row['meme_id']}/image"
         return rows
 
+    @app.post("/chat")
+    def chat(request: ChatRequest, http_request: Request,
+             conn: psycopg.Connection = Depends(get_conn)):
+        """只會回梗圖的朋友：一則訊息 → 一張梗圖（embedding 檢索、無 LLM/VLM、秒回）。"""
+        _enforce_rate_limit(deps, http_request)
+        message = request.message.strip()
+        if not message:
+            raise HTTPException(status_code=422, detail="訊息不可為空")
+        from memeradar.matching.search import SearchFilters, SqliteBruteForceSearcher
+        from memeradar.understanding.embedding import embedding_signature
+
+        query_vec = deps.embedder.embed([message])[0]
+        searcher = SqliteBruteForceSearcher(conn, signature=embedding_signature(deps.embedder))
+        hits = searcher.search(query_vec, k=15, filters=SearchFilters(exclude_nsfw=True))
+        pick = _pick_chat_meme(hits, set(request.exclude or []))
+        if pick is None:
+            return {"meme": None, "similarity": None, "fallback": True}
+        repo.insert_event(conn, "chat", client_id=request.client_id, meme_id=pick.meme_id)
+        return {
+            "meme": {
+                "meme_id": pick.meme_id,
+                "image_url": f"/memes/{pick.meme_id}/image",
+                "ocr_text": pick.annotation.ocr_text,
+                "franchise": pick.annotation.franchise,
+            },
+            "similarity": pick.similarity,
+            "fallback": pick.similarity < 0.3,
+        }
+
     @app.get("/gallery")
     def gallery(client_id: str = "", seed: str = "", offset: int = 0, limit: int = 24,
                 conn: psycopg.Connection = Depends(get_conn)):
@@ -635,6 +676,8 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         )
         if status == "duplicate":
             raise HTTPException(status_code=409, detail=f"圖片已存在（{meme.meme_id}）")
+        if status == "too_large":
+            raise HTTPException(status_code=413, detail="圖片解析度太高，請用一般尺寸的梗圖")
         if status in ("error", "unsupported"):
             raise HTTPException(
                 status_code=422, detail="無法讀取圖片（僅支援 PNG / JPEG / WebP）"
@@ -700,6 +743,8 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             conn, content, data_dir=deps.data_dir,
             source_title=request.title_hint, platform="user",
         )
+        if status == "too_large":
+            raise HTTPException(status_code=413, detail="圖片解析度太高，請用一般尺寸的梗圖")
         if status in ("error", "unsupported"):
             raise HTTPException(
                 status_code=422, detail="無法讀取圖片（僅支援 PNG / JPEG / WebP）")

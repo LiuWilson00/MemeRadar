@@ -259,6 +259,20 @@ export interface ReportedMeme {
   last_reported: string;
 }
 
+/** 「只會回梗圖的朋友」回應的一張梗圖。 */
+export interface ChatMeme {
+  meme_id: string;
+  image_url: string;
+  ocr_text: string | null;
+  franchise: string | null;
+}
+
+export interface ChatReply {
+  meme: ChatMeme | null;
+  similarity: number | null;
+  fallback: boolean;
+}
+
 /** 熱門梗圖榜一列（綜合熱度 = 讚×3 + 下載）。 */
 export interface LeaderboardEntry {
   meme_id: string;

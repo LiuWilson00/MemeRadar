@@ -13,6 +13,7 @@ import {
   Loader2,
   Lock,
   LogIn,
+  MessageCircle,
   Search,
   SearchX,
   Sparkles,
@@ -57,11 +58,12 @@ import type {
   TaskStatus,
   TaskSummary,
 } from "../types";
+import ChatScreen from "./ChatScreen";
 import Chip, { toggle } from "./Chip";
 import ExploreScreen from "./ExploreScreen";
 import SettingsScreen from "./SettingsScreen";
 
-type Tab = "home" | "explore" | "history" | "settings";
+type Tab = "home" | "chat" | "explore" | "history" | "settings";
 type Mode = "screenshot" | "battle";
 type Input = TaskInput;
 
@@ -380,6 +382,8 @@ export default function MobileApp() {
           <HistoryScreen activeId={activeTaskId} onOpen={openTask} />
         ) : tab === "explore" ? (
           <ExploreScreen />
+        ) : tab === "chat" ? (
+          <ChatScreen />
         ) : (
           home
         )}
@@ -415,6 +419,7 @@ function NavBar({
 }) {
   const items: Array<{ id: Tab; label: string; Icon: typeof Sparkles; busy?: boolean }> = [
     { id: "home", label: "推薦", Icon: Sparkles },
+    { id: "chat", label: "梗友", Icon: MessageCircle },
     { id: "explore", label: "探索", Icon: Compass },
     { id: "history", label: "歷史", Icon: HistoryIcon, busy: running },
     { id: "settings", label: "設定", Icon: SlidersHorizontal },

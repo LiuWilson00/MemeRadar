@@ -173,3 +173,11 @@ class ClientErrorRequest(BaseModel):
     stack: str | None = None
     url: str | None = None
     client_id: str | None = None
+
+
+class ChatRequest(BaseModel):
+    """「只會回梗圖的朋友」：一則訊息 → 一張梗圖回應。"""
+
+    message: str = Field(max_length=500)
+    client_id: str | None = None
+    exclude: list[str] = Field(default_factory=list)  # 這輪已回過的 meme_id，避免重複
