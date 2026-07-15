@@ -5,16 +5,20 @@ import "./index.css";
 import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { reportClientError } from "./lib/api";
+import { logBreadcrumb } from "./lib/breadcrumbs";
 import { GOOGLE_CLIENT_ID } from "./lib/auth";
 
-// 全域捕捉未攔截的錯誤 / promise rejection → 回報後台（best-effort、去重、限量）
+// 全域捕捉未攔截的錯誤 / promise rejection → 回報後台 + 留麵包屑（best-effort、去重、限量）
 if (typeof window !== "undefined") {
   window.addEventListener("error", (e) => {
+    logBreadcrumb("error", (e.message || "window error").slice(0, 120));
     reportClientError(e.message || "window error", { stack: e.error?.stack, url: e.filename });
   });
   window.addEventListener("unhandledrejection", (e) => {
     const r = e.reason as { message?: string; stack?: string } | undefined;
-    reportClientError(r?.message || String(r ?? "unhandledrejection"), { stack: r?.stack });
+    const msg = r?.message || String(r ?? "unhandledrejection");
+    logBreadcrumb("error", msg.slice(0, 120));
+    reportClientError(msg, { stack: r?.stack });
   });
 }
 import { useRoute } from "./lib/router";

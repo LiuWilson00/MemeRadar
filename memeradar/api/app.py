@@ -28,6 +28,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from memeradar.api.pipeline import run_fast_recommendation, run_recommendation
 from memeradar.api.ratelimit import RateLimiter
 from memeradar.api.schemas import (
+    BugReportRequest,
     ChatFeedbackRequest,
     ChatRequest,
     ClientErrorRequest,
@@ -188,6 +189,9 @@ def _is_public(method: str, path: str) -> bool:
         return True
     # 前台錯誤回報：POST 公開（GET 讀取限後台）
     if method == "POST" and path == "/client-errors":
+        return True
+    # 問題回報：POST 公開（GET 讀取限後台）
+    if method == "POST" and path == "/bug-reports":
         return True
     # 梗友回饋：POST 公開（GET 讀取限後台）
     if method == "POST" and path == "/chat/feedback":
@@ -1014,6 +1018,30 @@ def create_app(deps: Deps | None = None) -> FastAPI:
     def list_client_errors(limit: int = 100, conn: psycopg.Connection = Depends(get_conn)):
         """後台：最近的前台錯誤（新到舊）。"""
         return repo.list_client_errors(conn, limit=min(max(1, limit), 500))
+
+    @app.post("/bug-reports", status_code=202)
+    def submit_bug_report(request: BugReportRequest, http_request: Request,
+                          conn: psycopg.Connection = Depends(get_conn)):
+        """使用者主動回報問題（公開、限流）：描述 + 操作麵包屑 + 裝置資訊。"""
+        _enforce_rate_limit(deps, http_request)
+        description = request.description.strip()[:2000]
+        if not description:
+            raise HTTPException(status_code=422, detail="描述不可為空")
+        ua = request.user_agent or http_request.headers.get("user-agent")
+        repo.insert_bug_report(
+            conn, description=description,
+            breadcrumbs=request.breadcrumbs[:120],  # 只留最近 120 筆麵包屑
+            url=(request.url or "")[:500] or None,
+            user_agent=(ua or "")[:300] or None,
+            client_id=request.client_id,
+            meta=request.meta,
+        )
+        return {"ok": True}
+
+    @app.get("/bug-reports")
+    def list_bug_reports(limit: int = 200, conn: psycopg.Connection = Depends(get_conn)):
+        """後台：使用者回報的問題（新到舊）。"""
+        return repo.list_bug_reports(conn, limit=min(max(1, limit), 500))
 
     @app.get("/report/feedback")
     def feedback_report(conn: psycopg.Connection = Depends(get_conn)):

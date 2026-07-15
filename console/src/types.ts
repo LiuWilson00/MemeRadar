@@ -64,6 +64,7 @@ export interface RecommendResponse {
     per_strategy_hits: Record<string, number>;
     rerank_fallback: boolean;
     timings_ms: Record<string, number>;
+    fast?: { source: string; ocr_text?: string; labels?: string[] };
   };
 }
 
@@ -247,6 +248,26 @@ export interface ChatFeedbackRow {
   message: string | null;
   ocr_text: string | null;
   franchise: string | null;
+  created_at: string;
+}
+
+/** 一筆操作麵包屑（bug 回報附帶的最近操作紀錄）。 */
+export interface Breadcrumb {
+  t: number;
+  type: string;
+  msg: string;
+  data?: Record<string, unknown>;
+}
+
+/** 後台：一筆使用者主動回報的問題。 */
+export interface BugReport {
+  report_id: string;
+  description: string;
+  breadcrumbs: Breadcrumb[];
+  url: string | null;
+  user_agent: string | null;
+  client_id: string | null;
+  meta: Record<string, unknown>;
   created_at: string;
 }
 

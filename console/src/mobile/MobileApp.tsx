@@ -41,6 +41,8 @@ import {
   submitTask,
   type TaskInput,
 } from "../lib/api";
+import BugReporter from "../components/BugReporter";
+import { logBreadcrumb } from "../lib/breadcrumbs";
 import { downscaleToBase64 } from "../lib/files";
 import {
   loadSettings,
@@ -195,7 +197,10 @@ export default function MobileApp() {
   }, []);
 
   // 換分頁一律先顯示 header
-  useEffect(() => setHeaderHidden(false), [tab]);
+  useEffect(() => {
+    setHeaderHidden(false);
+    logBreadcrumb("nav", `分頁：${tab}`);
+  }, [tab]);
 
   // 輪詢當前任務進度；任務完成/失敗即停。切到別的分頁也持續在背景輪詢。
   useEffect(() => {
@@ -206,6 +211,15 @@ export default function MobileApp() {
       try {
         const t = await fetchTask(activeTaskId);
         if (!alive) return;
+        // 輪詢在 done/error 後即停，故終態只會被抓到一次 → 在此留一筆麵包屑
+        if (t.status === "done") {
+          logBreadcrumb("result", `完成 ${t.result?.results?.length ?? 0} 張`, {
+            fast: t.result?.debug?.fast?.source,
+            ms: t.result?.debug?.timings_ms?.total,
+          });
+        } else if (t.status === "error") {
+          logBreadcrumb("error", `任務失敗：${t.error ?? ""}`.slice(0, 120));
+        }
         setTask(t);
         if (RUNNING.includes(t.status)) timer = setTimeout(tick, POLL_MS);
       } catch {
@@ -227,6 +241,7 @@ export default function MobileApp() {
   const submit = useCallback(
     async (input: Input, filters: Filters, params: Params, fast: boolean) => {
     lastInput.current = input;
+    logBreadcrumb("action", `搜尋：${input.kind}${fast ? "（快速）" : "（精準）"}`);
     startRef.current = Date.now();
     setHomeError(null);
     setQuota(null);
@@ -432,6 +447,9 @@ export default function MobileApp() {
       {tab !== "explore" && <NavBar tab={tab} onTab={setTab} running={loading} />}
 
       {showBoard && <LeaderboardModal onClose={() => setShowBoard(false)} />}
+
+      {/* 浮動 bug 回報鈕：所有前台畫面都在，貼邊半透明不擋內容 */}
+      <BugReporter />
 
       <input
         ref={fileRef}

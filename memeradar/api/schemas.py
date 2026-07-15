@@ -178,6 +178,17 @@ class ClientErrorRequest(BaseModel):
     client_id: str | None = None
 
 
+class BugReportRequest(BaseModel):
+    """使用者主動回報問題：描述 + 操作麵包屑 + 裝置資訊。"""
+
+    description: str = Field(min_length=1, max_length=2000)
+    breadcrumbs: list[dict] = Field(default_factory=list)  # 端點層再截斷長度
+    url: str | None = None
+    user_agent: str | None = None
+    meta: dict = Field(default_factory=dict)  # 視窗尺寸 / 版本等
+    client_id: str | None = None
+
+
 class ChatRequest(BaseModel):
     """「只會回梗圖的朋友」：一則訊息 → 一張梗圖回應。"""
 

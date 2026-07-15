@@ -1034,6 +1034,49 @@ def list_client_errors(conn: sqlite3.Connection, limit: int = 100) -> list[dict]
     return [dict(r) for r in rows]
 
 
+def insert_bug_report(
+    conn: sqlite3.Connection,
+    *,
+    description: str,
+    breadcrumbs: object | None = None,
+    url: str | None = None,
+    user_agent: str | None = None,
+    client_id: str | None = None,
+    meta: object | None = None,
+) -> None:
+    """使用者主動回報：描述 + 操作麵包屑 + 裝置資訊。"""
+    conn.execute(
+        "INSERT INTO bug_reports "
+        "(report_id, description, breadcrumbs, url, user_agent, client_id, meta, created_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+        (
+            new_id("bug"), description,
+            _dumps(breadcrumbs) if breadcrumbs is not None else None,
+            url, user_agent, client_id,
+            _dumps(meta) if meta is not None else None, _now_iso(),
+        ),
+    )
+    conn.commit()
+
+
+def list_bug_reports(conn: sqlite3.Connection, limit: int = 200) -> list[dict]:
+    """後台：使用者回報的問題（新到舊），breadcrumbs / meta 解回物件。"""
+    rows = conn.execute(
+        "SELECT report_id, description, breadcrumbs, url, user_agent, client_id, meta, created_at "
+        "FROM bug_reports ORDER BY created_at DESC LIMIT %s",
+        (limit,),
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        crumbs = _loads(r["breadcrumbs"]) if r["breadcrumbs"] else []
+        d["breadcrumbs"] = crumbs if isinstance(crumbs, list) else []
+        meta = _loads(r["meta"]) if r["meta"] else {}
+        d["meta"] = meta if isinstance(meta, dict) else {}
+        out.append(d)
+    return out
+
+
 def list_reported_memes(conn: sqlite3.Connection) -> list[dict]:
     """後台檢舉清單：仍未處理（event_type=report）的梗圖，依 distinct 檢舉人數排序。"""
     rows = conn.execute(

@@ -1,5 +1,6 @@
 import type {
   AnnotationPatch,
+  BugReport,
   ChatFeedbackRow,
   ChatReply,
   ClientError,
@@ -28,6 +29,7 @@ import type {
   VlmUsageRow,
 } from "../types";
 import { getUserToken } from "./auth";
+import { getBreadcrumbs, logBreadcrumb } from "./breadcrumbs";
 import { getClientId } from "./clientId";
 import type { UploadOutcome } from "./uploadQueue";
 
@@ -44,12 +46,22 @@ function authHeaders(): Record<string, string> {
   return creds ? { Authorization: `Basic ${creds}` } : {};
 }
 
-/** 統一 fetch：補 API base + admin 認證標頭。所有 API 呼叫都走這個。 */
-export function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  return fetch(API_BASE + path, {
-    ...init,
-    headers: { ...authHeaders(), ...(init.headers ?? {}) },
-  });
+/** 統一 fetch：補 API base + admin 認證標頭 + 失敗自動留麵包屑。所有 API 呼叫都走這個。 */
+export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const method = (init.method ?? "GET").toUpperCase();
+  try {
+    const res = await fetch(API_BASE + path, {
+      ...init,
+      headers: { ...authHeaders(), ...(init.headers ?? {}) },
+    });
+    if (!res.ok && path !== "/bug-reports") {
+      logBreadcrumb("api", `${method} ${path} → ${res.status}`, { status: res.status });
+    }
+    return res;
+  } catch (e) {
+    logBreadcrumb("api", `${method} ${path} → 網路錯誤`, { error: String(e) });
+    throw e;
+  }
 }
 
 /** 圖片等資源的完整 URL（跨源部署時要帶 API base）。只對 / 開頭的相對路徑加，
@@ -290,6 +302,33 @@ export function reportClientError(message: string, opts: { stack?: string; url?:
 /** 後台：最近的前台錯誤。 */
 export async function fetchClientErrors(limit = 100): Promise<ClientError[]> {
   return unwrap<ClientError[]>(await apiFetch(`/client-errors?limit=${limit}`));
+}
+
+/** 送出使用者問題回報：描述 + 操作麵包屑 + 裝置資訊。丟例外供 UI 顯示成敗。 */
+export async function sendBugReport(description: string): Promise<void> {
+  const url =
+    typeof location !== "undefined" ? location.pathname + location.hash : undefined;
+  const meta =
+    typeof window !== "undefined"
+      ? { vw: window.innerWidth, vh: window.innerHeight, lang: navigator.language }
+      : {};
+  const res = await apiFetch("/bug-reports", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      description: description.slice(0, 2000),
+      breadcrumbs: getBreadcrumbs(),
+      url,
+      user_agent: typeof navigator !== "undefined" ? navigator.userAgent : undefined,
+      meta,
+      client_id: getClientId(),
+    }),
+  });
+  if (!res.ok) throw new Error("回報失敗，請稍後再試");
+}
+
+export async function fetchBugReports(limit = 200): Promise<BugReport[]> {
+  return unwrap<BugReport[]>(await apiFetch(`/bug-reports?limit=${limit}`));
 }
 
 /** Google 登入：把 Google 回傳的 credential 換成我方 session token + 使用者資料。 */

@@ -1,6 +1,7 @@
 import { AlertTriangle, LogOut } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import AdminGate, { logout } from "./components/AdminGate";
+import BugReportsView from "./components/BugReportsView";
 import ChatFeedbackView from "./components/ChatFeedbackView";
 import ClientErrorsView from "./components/ClientErrorsView";
 import ConversationEditor from "./components/ConversationEditor";
@@ -30,6 +31,7 @@ type Tab =
   | "reports"
   | "report"
   | "chatfb"
+  | "bugs"
   | "errors"
   | "settings";
 const TABS: Array<{ id: Tab; label: string }> = [
@@ -42,6 +44,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "reports", label: "檢舉" },
   { id: "report", label: "報表" },
   { id: "chatfb", label: "梗友回饋" },
+  { id: "bugs", label: "問題回報" },
   { id: "errors", label: "前台錯誤" },
   { id: "settings", label: "設定" },
 ];
@@ -159,6 +162,7 @@ export default function App() {
       {tab === "reports" && <ReportsView />}
       {tab === "report" && <ReportView />}
       {tab === "chatfb" && <ChatFeedbackView />}
+      {tab === "bugs" && <BugReportsView />}
       {tab === "errors" && <ClientErrorsView />}
       {tab === "settings" && <SettingsView />}
 

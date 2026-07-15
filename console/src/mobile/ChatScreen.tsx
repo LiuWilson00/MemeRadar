@@ -10,6 +10,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import MemeImage from "../components/MemeImage";
 import { chat, fetchGallery, sendChatFeedback } from "../lib/api";
+import { logBreadcrumb } from "../lib/breadcrumbs";
 import { randomBotName } from "../lib/nickname";
 import type { ChatMeme } from "../types";
 
@@ -90,6 +91,7 @@ export default function ChatScreen() {
   const send = async () => {
     const text = input.trim();
     if (!text || sending) return;
+    logBreadcrumb("action", "梗友：送訊息");
     setInput("");
     // 這輪已回過的梗圖 → 避免一直重複（帶最近 30 張）
     const exclude = messages

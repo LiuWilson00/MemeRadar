@@ -1476,6 +1476,53 @@ class TestFastMode:
         assert "screenshot_parse" in detail["result"]["debug"]
 
 
+class TestBugReports:
+    """使用者主動回報：POST 公開存檔（含麵包屑）、GET 限後台。"""
+
+    def test_submit_and_list(self, env):
+        client, conn, _memes, _deps = env
+        crumbs = [
+            {"t": 1, "type": "nav", "msg": "home→settings"},
+            {"t": 2, "type": "api", "msg": "POST /tasks 500"},
+        ]
+        r = client.post("/bug-reports", json={
+            "description": "上傳截圖後一直轉圈",
+            "breadcrumbs": crumbs,
+            "url": "/",
+            "meta": {"vw": 390, "vh": 844, "ver": "abc123"},
+            "client_id": "c_bug",
+        })
+        assert r.status_code == 202, r.text
+        reports = repo.list_bug_reports(conn)
+        assert len(reports) == 1
+        row = reports[0]
+        assert row["description"] == "上傳截圖後一直轉圈"
+        assert row["breadcrumbs"] == crumbs  # 麵包屑原樣存回
+        assert row["meta"]["vw"] == 390
+        assert row["client_id"] == "c_bug"
+
+    def test_empty_description_rejected(self, env):
+        client, *_ = env
+        r = client.post("/bug-reports", json={"description": "   "})
+        assert r.status_code == 422
+
+    def test_list_requires_admin(self, tmp_path):
+        db_path = tmp_path / "db.sqlite3"
+        conn = connect(db_path)
+        migrate(conn)
+        conn.close()
+        deps = Deps(
+            client=DualStubClient(), vlm=StubVlm(), embedder=FakeEmbedder(),
+            db_path=db_path, data_dir=tmp_path,
+            admin_username="boss", admin_password="secret",
+        )
+        client = TestClient(create_app(deps))
+        # POST 公開
+        assert client.post("/bug-reports", json={"description": "x"}).status_code == 202
+        # GET 限後台
+        assert client.get("/bug-reports").status_code == 401
+
+
 class TestAnnotationQueueResilience:
     """壞圖（圖檔到處都讀不到）不能無限重試阻塞佇列 → 轉 pending_review。"""
 
