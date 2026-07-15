@@ -13,7 +13,6 @@ import {
   Loader2,
   Lock,
   LogIn,
-  RotateCcw,
   Search,
   SearchX,
   Sparkles,
@@ -804,7 +803,7 @@ function ResultsScreen({
           <Search className="size-4" /> 換方向搜尋
         </button>
         <button onClick={onReset} className="text-xs text-muted underline underline-offset-4">
-          重新上傳
+          搜尋下一張圖
         </button>
         {refining && (
           <RefineSheet
@@ -903,7 +902,7 @@ function ResultsScreen({
           onClick={onReset}
           className="flex w-full items-center justify-center gap-2 rounded-full border border-line py-2.5 text-xs text-muted active:bg-panel"
         >
-          <RotateCcw className="size-3.5" /> 重新上傳
+          <Camera className="size-3.5" /> 搜尋下一張圖
         </button>
       </div>
 
