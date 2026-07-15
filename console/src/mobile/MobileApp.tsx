@@ -150,6 +150,9 @@ export default function MobileApp() {
   const [settings, setSettings] = useState<UserSettings>(() => loadSettings());
   const [meta, setMeta] = useState<Meta | null>(null);
   const [showBoard, setShowBoard] = useState(false);
+  const [headerHidden, setHeaderHidden] = useState(false);
+  const mainRef = useRef<HTMLElement>(null);
+  const scrollState = useRef<{ y: number; target: EventTarget | null }>({ y: 0, target: null });
 
   // 非同步任務：送出得 task_id，背景執行，前台輪詢 fetchTask 直到 done/error。
   // 初始值自 localStorage 還原 → 重整後續跑上次的搜尋（進行中就繼續等、完成就顯示結果）。
@@ -169,6 +172,29 @@ export default function MobileApp() {
   useEffect(() => {
     fetchMeta().then(setMeta).catch(() => {});
   }, []);
+
+  // header 自動隱藏：往下滑收起（讓內容多一點空間）、往上滑或到頂顯示。
+  // capture 監聽 main → 各分頁自己的捲動容器都收得到，不用逐一接線。
+  useEffect(() => {
+    const el = mainRef.current;
+    if (!el) return;
+    const onScroll = (e: Event) => {
+      const t = e.target as HTMLElement;
+      if (!t || typeof t.scrollTop !== "number") return;
+      const st = scrollState.current;
+      if (t !== st.target) st.target = t; // 換容器 → 重置基準
+      const y = t.scrollTop;
+      if (y < 8) setHeaderHidden(false);
+      else if (y > st.y + 6) setHeaderHidden(true);
+      else if (y < st.y - 6) setHeaderHidden(false);
+      st.y = y;
+    };
+    el.addEventListener("scroll", onScroll, true);
+    return () => el.removeEventListener("scroll", onScroll, true);
+  }, []);
+
+  // 換分頁一律先顯示 header
+  useEffect(() => setHeaderHidden(false), [tab]);
 
   // 輪詢當前任務進度；任務完成/失敗即停。切到別的分頁也持續在背景輪詢。
   useEffect(() => {
@@ -346,7 +372,13 @@ export default function MobileApp() {
 
   return (
     <div className="mx-auto flex min-h-[100dvh] max-w-md flex-col">
-      <header className="relative flex items-center justify-center gap-2 px-4 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))]">
+      <header
+        className={`relative flex items-center justify-center gap-2 overflow-hidden px-4 transition-all duration-300 ${
+          headerHidden && tab !== "explore"
+            ? "max-h-0 py-0 opacity-0"
+            : "max-h-28 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))]"
+        }`}
+      >
         {tab === "explore" && (
           <button
             onClick={() => setTab("home")}
@@ -375,7 +407,7 @@ export default function MobileApp() {
         )}
       </header>
 
-      <main className="flex min-h-0 flex-1 flex-col">
+      <main ref={mainRef} className="flex min-h-0 flex-1 flex-col">
         {tab === "settings" ? (
           <SettingsScreen settings={settings} meta={meta} onChange={updateSettings} />
         ) : tab === "history" ? (

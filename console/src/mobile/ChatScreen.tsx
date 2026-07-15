@@ -1,7 +1,8 @@
-import { Loader2, MessageCircle, Send, Trash2 } from "lucide-react";
+import { Loader2, MessageCircle, RefreshCw, Send, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import MemeImage from "../components/MemeImage";
-import { chat } from "../lib/api";
+import { chat, fetchGallery } from "../lib/api";
+import { randomBotName } from "../lib/nickname";
 import type { ChatMeme } from "../types";
 
 /** 只會回梗圖的朋友：你打字，他每則都丟一張梗圖回你（embedding 檢索、秒回）。 */
@@ -11,6 +12,7 @@ type ChatMsg =
   | { role: "bot"; id: string; meme: ChatMeme | null };
 
 const STORAGE_KEY = "memeradar.chatHistory";
+const BOT_NAME_KEY = "memeradar.chatBotName";
 const MAX_KEEP = 100;
 
 function uid(): string {
@@ -26,11 +28,47 @@ function load(): ChatMsg[] {
   }
 }
 
+// 每個 session 一個隨機搞笑名字（存起來 → 同一場對話跨重整不變；清空/換一個才會變）
+function loadBotName(): string {
+  try {
+    const n = localStorage.getItem(BOT_NAME_KEY);
+    if (n) return n;
+    const fresh = randomBotName();
+    localStorage.setItem(BOT_NAME_KEY, fresh);
+    return fresh;
+  } catch {
+    return randomBotName();
+  }
+}
+
 export default function ChatScreen() {
   const [messages, setMessages] = useState<ChatMsg[]>(load);
+  const [botName, setBotName] = useState(loadBotName);
+  const [avatar, setAvatar] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+
+  // 頭像＝以名字為 seed 從圖庫抓一張梗圖（同名字 → 同頭像；換名字 → 換頭像）
+  useEffect(() => {
+    let alive = true;
+    fetchGallery(botName, 0, 1)
+      .then((items) => alive && setAvatar(items[0]?.image_url ?? null))
+      .catch(() => alive && setAvatar(null));
+    return () => {
+      alive = false;
+    };
+  }, [botName]);
+
+  const newBotName = () => {
+    const fresh = randomBotName();
+    setBotName(fresh);
+    try {
+      localStorage.setItem(BOT_NAME_KEY, fresh);
+    } catch {
+      /* ignore */
+    }
+  };
 
   useEffect(() => {
     try {
@@ -64,6 +102,7 @@ export default function ChatScreen() {
 
   const clear = () => {
     setMessages([]);
+    newBotName(); // 清空 = 新 session → 換個新名字
     try {
       localStorage.removeItem(STORAGE_KEY);
     } catch {
@@ -73,15 +112,42 @@ export default function ChatScreen() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center gap-2.5 border-b border-line px-4 py-2">
+        {avatar ? (
+          <MemeImage src={avatar} alt="" className="size-8 shrink-0 rounded-full object-cover" />
+        ) : (
+          <div className="grid size-8 shrink-0 place-items-center rounded-full bg-amber-soft">
+            <MessageCircle className="size-4 text-amber" strokeWidth={2} />
+          </div>
+        )}
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-semibold">{botName}</p>
+          <p className="text-[11px] text-muted">只會回梗圖的朋友 · 上線中</p>
+        </div>
+        <button
+          onClick={newBotName}
+          className="flex items-center gap-1 rounded-full px-2 py-1 text-[11px] text-muted active:bg-raised"
+          aria-label="換一個名字"
+        >
+          <RefreshCw className="size-3" /> 換一個
+        </button>
+      </div>
+
       <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
         {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-            <div className="grid size-16 place-items-center rounded-full bg-amber-soft">
-              <MessageCircle className="size-8 text-amber" strokeWidth={1.75} />
-            </div>
-            <p className="text-base font-semibold">只會回梗圖的朋友</p>
+            {avatar ? (
+              <MemeImage src={avatar} alt="" className="size-20 rounded-full object-cover" />
+            ) : (
+              <div className="grid size-16 place-items-center rounded-full bg-amber-soft">
+                <MessageCircle className="size-8 text-amber" strokeWidth={1.75} />
+              </div>
+            )}
+            <p className="text-base font-semibold">
+              嗨，我是 <span className="text-amber">{botName}</span>
+            </p>
             <p className="max-w-[16rem] text-sm leading-relaxed text-muted">
-              跟他聊聊，你說什麼他都<span className="text-amber">丟梗圖</span>回你 😌
+              你說什麼我都<span className="text-amber">丟梗圖</span>回你 😌
             </p>
           </div>
         ) : (
