@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from memeradar.api.pipeline import run_recommendation
 from memeradar.api.ratelimit import RateLimiter
 from memeradar.api.schemas import (
+    ChatFeedbackRequest,
     ChatRequest,
     ClientErrorRequest,
     CommentRequest,
@@ -163,6 +164,9 @@ def _is_public(method: str, path: str) -> bool:
         return True
     # 前台錯誤回報：POST 公開（GET 讀取限後台）
     if method == "POST" and path == "/client-errors":
+        return True
+    # 梗友回饋：POST 公開（GET 讀取限後台）
+    if method == "POST" and path == "/chat/feedback":
         return True
     # 探索圖庫：按讚 / 彈幕留言（前台，各種方法）
     if re.match(r"^/memes/[^/]+/(like|comments)$", path) is not None:
@@ -540,6 +544,24 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             "similarity": pick.similarity,
             "fallback": pick.similarity < 0.3,
         }
+
+    @app.post("/chat/feedback", status_code=202)
+    def chat_feedback(request: ChatFeedbackRequest, http_request: Request,
+                      conn: psycopg.Connection = Depends(get_conn)):
+        """對梗友的一則回覆評價（👍/👎）。公開、限流；存進 events 供之後優化選圖。"""
+        _enforce_rate_limit(deps, http_request)
+        if repo.get_meme(conn, request.meme_id) is None:
+            raise HTTPException(status_code=404, detail="梗圖不存在")
+        repo.insert_event(
+            conn, "chat_feedback", client_id=request.client_id, meme_id=request.meme_id,
+            meta={"rating": request.rating, "message": (request.message or "")[:500]},
+        )
+        return {"ok": True}
+
+    @app.get("/chat/feedback")
+    def list_chat_feedback(limit: int = 200, conn: psycopg.Connection = Depends(get_conn)):
+        """後台：梗友回覆評價（新到舊），供優化選圖。"""
+        return repo.list_chat_feedback(conn, limit=min(max(1, limit), 500))
 
     @app.get("/gallery")
     def gallery(client_id: str = "", seed: str = "", offset: int = 0, limit: int = 24,

@@ -1,7 +1,15 @@
-import { Loader2, MessageCircle, RefreshCw, Send, Trash2 } from "lucide-react";
+import {
+  Loader2,
+  MessageCircle,
+  RefreshCw,
+  Send,
+  ThumbsDown,
+  ThumbsUp,
+  Trash2,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import MemeImage from "../components/MemeImage";
-import { chat, fetchGallery } from "../lib/api";
+import { chat, fetchGallery, sendChatFeedback } from "../lib/api";
 import { randomBotName } from "../lib/nickname";
 import type { ChatMeme } from "../types";
 
@@ -9,7 +17,7 @@ import type { ChatMeme } from "../types";
 
 type ChatMsg =
   | { role: "user"; id: string; text: string }
-  | { role: "bot"; id: string; meme: ChatMeme | null };
+  | { role: "bot"; id: string; meme: ChatMeme | null; rating?: "up" | "down" };
 
 const STORAGE_KEY = "memeradar.chatHistory";
 const BOT_NAME_KEY = "memeradar.chatBotName";
@@ -110,6 +118,14 @@ export default function ChatScreen() {
     }
   };
 
+  // 評價一則回覆：更新本地狀態（存起來）+ 回報後端（帶觸發的訊息供優化）
+  const rate = (msgId: string, memeId: string, trigger: string, rating: "up" | "down") => {
+    setMessages((ms) =>
+      ms.map((m) => (m.id === msgId && m.role === "bot" ? { ...m, rating } : m)),
+    );
+    sendChatFeedback(memeId, trigger, rating);
+  };
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-2.5 border-b border-line px-4 py-2">
@@ -151,31 +167,65 @@ export default function ChatScreen() {
             </p>
           </div>
         ) : (
-          messages.map((m) =>
-            m.role === "user" ? (
-              <div key={m.id} className="flex justify-end animate-fade-in-up">
-                <div className="max-w-[75%] rounded-2xl rounded-br-md bg-amber px-3.5 py-2 text-sm text-ink">
-                  {m.text}
-                </div>
-              </div>
-            ) : (
-              <div key={m.id} className="flex justify-start animate-fade-in-up">
-                {m.meme ? (
-                  <div className="max-w-[75%] overflow-hidden rounded-2xl rounded-bl-md border border-line bg-panel">
-                    <MemeImage
-                      src={m.meme.image_url}
-                      alt={m.meme.ocr_text ?? "梗圖"}
-                      className="max-h-[42vh] w-full object-contain"
-                    />
+          messages.map((m, i) => {
+            if (m.role === "user") {
+              return (
+                <div key={m.id} className="flex justify-end animate-fade-in-up">
+                  <div className="max-w-[75%] rounded-2xl rounded-br-md bg-amber px-3.5 py-2 text-sm text-ink">
+                    {m.text}
                   </div>
+                </div>
+              );
+            }
+            // 觸發這則回覆的使用者訊息（供優化）
+            const prev = messages[i - 1];
+            const trigger = prev && prev.role === "user" ? prev.text : "";
+            return (
+              <div key={m.id} className="flex flex-col items-start gap-1 animate-fade-in-up">
+                {m.meme ? (
+                  <>
+                    <div className="max-w-[75%] overflow-hidden rounded-2xl rounded-bl-md border border-line bg-panel">
+                      <MemeImage
+                        src={m.meme.image_url}
+                        alt={m.meme.ocr_text ?? "梗圖"}
+                        className="max-h-[42vh] w-full object-contain"
+                      />
+                    </div>
+                    <div className="flex items-center gap-0.5 pl-1">
+                      <button
+                        onClick={() => rate(m.id, m.meme!.meme_id, trigger, "up")}
+                        aria-label="這張讚"
+                        className={`grid size-7 place-items-center rounded-full active:scale-90 ${
+                          m.rating === "up" ? "text-signal" : "text-muted"
+                        }`}
+                      >
+                        <ThumbsUp
+                          className={`size-4 ${m.rating === "up" ? "animate-pop fill-current" : ""}`}
+                          strokeWidth={m.rating === "up" ? 2.4 : 1.75}
+                        />
+                      </button>
+                      <button
+                        onClick={() => rate(m.id, m.meme!.meme_id, trigger, "down")}
+                        aria-label="這張不行"
+                        className={`grid size-7 place-items-center rounded-full active:scale-90 ${
+                          m.rating === "down" ? "text-danger" : "text-muted"
+                        }`}
+                      >
+                        <ThumbsDown
+                          className={`size-4 ${m.rating === "down" ? "animate-pop fill-current" : ""}`}
+                          strokeWidth={m.rating === "down" ? 2.4 : 1.75}
+                        />
+                      </button>
+                    </div>
+                  </>
                 ) : (
                   <div className="max-w-[75%] rounded-2xl rounded-bl-md border border-line bg-panel px-3.5 py-2 text-sm text-muted">
                     這題我沒梗 🤷（圖庫還不夠多，之後會更好）
                   </div>
                 )}
               </div>
-            ),
-          )
+            );
+          })
         )}
 
         {sending && (

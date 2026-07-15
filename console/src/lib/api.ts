@@ -1,5 +1,6 @@
 import type {
   AnnotationPatch,
+  ChatFeedbackRow,
   ChatReply,
   ClientError,
   DedupReviewItem,
@@ -237,6 +238,20 @@ export async function chat(message: string, exclude: string[] = []): Promise<Cha
     body: JSON.stringify({ message, client_id: getClientId(), exclude }),
   });
   return unwrap<ChatReply>(response);
+}
+
+/** 評價梗友的一則回覆（👍/👎）；best-effort，帶觸發訊息供優化。 */
+export function sendChatFeedback(memeId: string, message: string, rating: "up" | "down"): void {
+  void apiFetch("/chat/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ meme_id: memeId, message, rating, client_id: getClientId() }),
+  }).catch(() => {});
+}
+
+/** 後台：梗友回覆評價清單。 */
+export async function fetchChatFeedback(limit = 200): Promise<ChatFeedbackRow[]> {
+  return unwrap<ChatFeedbackRow[]>(await apiFetch(`/chat/feedback?limit=${limit}`));
 }
 
 // ── 前台錯誤回報（best-effort，供後台 debug）────────────────────────────

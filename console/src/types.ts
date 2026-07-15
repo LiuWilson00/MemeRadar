@@ -238,6 +238,18 @@ export interface MemeComment {
   mine: boolean;
 }
 
+/** 後台：一筆梗友回覆的評價（供優化選圖）。 */
+export interface ChatFeedbackRow {
+  event_id: string;
+  client_id: string | null;
+  meme_id: string;
+  rating: "up" | "down" | null;
+  message: string | null;
+  ocr_text: string | null;
+  franchise: string | null;
+  created_at: string;
+}
+
 /** 後台：一筆前台回報的瀏覽器錯誤。 */
 export interface ClientError {
   error_id: string;

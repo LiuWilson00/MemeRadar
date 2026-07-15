@@ -804,6 +804,43 @@ class TestChat:
         assert client.post("/chat", json={"message": "  "}).status_code == 422
 
 
+class TestChatFeedback:
+    def test_record_and_list(self, env):
+        client, _, memes, _ = env
+        mid = memes[0].meme_id
+        r = client.post("/chat/feedback",
+                        json={"meme_id": mid, "message": "你報告又遲交了",
+                              "rating": "up", "client_id": "c1"})
+        assert r.status_code == 202
+        rows = client.get("/chat/feedback").json()
+        assert len(rows) == 1
+        assert rows[0]["meme_id"] == mid
+        assert rows[0]["rating"] == "up" and rows[0]["message"] == "你報告又遲交了"
+
+    def test_invalid_rating_422(self, env):
+        client, _, memes, _ = env
+        assert client.post("/chat/feedback",
+                           json={"meme_id": memes[0].meme_id, "rating": "meh"}).status_code == 422
+
+    def test_unknown_meme_404(self, env):
+        client, *_ = env
+        assert client.post("/chat/feedback",
+                           json={"meme_id": "m_no", "rating": "up"}).status_code == 404
+
+    def test_list_admin_only_but_submit_public(self, tmp_path):
+        db_path = tmp_path / "db.sqlite3"
+        conn = connect(db_path)
+        migrate(conn)
+        m = seed_meme(conn, tmp_path)
+        deps = Deps(client=DualStubClient(), vlm=StubVlm(), embedder=FakeEmbedder(),
+                    db_path=db_path, data_dir=tmp_path,
+                    admin_username="a", admin_password="b")
+        client = TestClient(create_app(deps))
+        assert client.get("/chat/feedback").status_code == 401  # 讀取限後台
+        assert client.post("/chat/feedback",
+                           json={"meme_id": m.meme_id, "rating": "down"}).status_code == 202
+
+
 class TestImageSizeGuard:
     def test_import_rejects_oversized(self, monkeypatch, tmp_path):
         from memeradar.ingestion import seed_import

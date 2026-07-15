@@ -983,6 +983,32 @@ def insert_client_error(
     conn.commit()
 
 
+def list_chat_feedback(conn: sqlite3.Connection, limit: int = 200) -> list[dict]:
+    """後台：梗友回覆的評價（新到舊），含觸發訊息與梗圖 OCR，供優化選圖。"""
+    rows = conn.execute(
+        """
+        SELECT e.event_id, e.client_id, e.meme_id, e.meta, e.created_at,
+               a.ocr_text, a.franchise
+        FROM events e
+        LEFT JOIN meme_annotations a ON a.meme_id = e.meme_id
+        WHERE e.event_type = 'chat_feedback'
+        ORDER BY e.created_at DESC
+        LIMIT %s
+        """,
+        (limit,),
+    ).fetchall()
+    out = []
+    for r in rows:
+        meta = _loads(r["meta"]) if r["meta"] else {}
+        meta = meta if isinstance(meta, dict) else {}
+        out.append({
+            "event_id": r["event_id"], "client_id": r["client_id"], "meme_id": r["meme_id"],
+            "rating": meta.get("rating"), "message": meta.get("message"),
+            "ocr_text": r["ocr_text"], "franchise": r["franchise"], "created_at": r["created_at"],
+        })
+    return out
+
+
 def list_client_errors(conn: sqlite3.Connection, limit: int = 100) -> list[dict]:
     """後台：最近的前台錯誤（新到舊）。"""
     rows = conn.execute(

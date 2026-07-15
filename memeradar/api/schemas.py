@@ -181,3 +181,12 @@ class ChatRequest(BaseModel):
     message: str = Field(max_length=500)
     client_id: str | None = None
     exclude: list[str] = Field(default_factory=list)  # 這輪已回過的 meme_id，避免重複
+
+
+class ChatFeedbackRequest(BaseModel):
+    """對梗友的一則回覆評價（供之後優化選圖）。"""
+
+    meme_id: str
+    rating: Literal["up", "down"]
+    message: str | None = None  # 觸發這張圖的使用者訊息（優化的關鍵訊號）
+    client_id: str | None = None
