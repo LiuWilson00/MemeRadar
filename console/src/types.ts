@@ -238,6 +238,17 @@ export interface MemeComment {
   mine: boolean;
 }
 
+/** 後台：一筆前台回報的瀏覽器錯誤。 */
+export interface ClientError {
+  error_id: string;
+  message: string;
+  stack: string | null;
+  url: string | null;
+  user_agent: string | null;
+  client_id: string | null;
+  created_at: string;
+}
+
 /** 後台被檢舉的梗圖一列。 */
 export interface ReportedMeme {
   meme_id: string;

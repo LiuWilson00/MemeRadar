@@ -164,3 +164,12 @@ class NicknameRequest(BaseModel):
     """登入使用者設定顯示暱稱。"""
 
     nickname: str = Field(min_length=1, max_length=24)
+
+
+class ClientErrorRequest(BaseModel):
+    """前台回報一筆瀏覽器錯誤（供後台 debug）。"""
+
+    message: str = Field(max_length=1000)
+    stack: str | None = None
+    url: str | None = None
+    client_id: str | None = None

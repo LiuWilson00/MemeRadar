@@ -1,5 +1,6 @@
 import type {
   AnnotationPatch,
+  ClientError,
   DedupReviewItem,
   FeedbackReport,
   Filters,
@@ -225,6 +226,37 @@ export async function sendFeedback(body: {
 
 export async function fetchMeta(): Promise<Meta> {
   return unwrap<Meta>(await apiFetch("/meta"));
+}
+
+// ── 前台錯誤回報（best-effort，供後台 debug）────────────────────────────
+// 同一訊息每 session 只報一次、上限 20 筆，避免壞頁狂灌後端。
+const reportedErrors = new Set<string>();
+let reportCount = 0;
+
+export function reportClientError(message: string, opts: { stack?: string; url?: string } = {}): void {
+  const msg = (message || "").trim();
+  if (!msg) return;
+  const key = msg.slice(0, 200);
+  if (reportedErrors.has(key) || reportCount >= 20) return;
+  reportedErrors.add(key);
+  reportCount += 1;
+  const url =
+    opts.url ?? (typeof location !== "undefined" ? location.pathname + location.search : undefined);
+  void apiFetch("/client-errors", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      message: msg.slice(0, 1000),
+      stack: opts.stack?.slice(0, 4000) ?? null,
+      url: url ?? null,
+      client_id: getClientId(),
+    }),
+  }).catch(() => {});
+}
+
+/** 後台：最近的前台錯誤。 */
+export async function fetchClientErrors(limit = 100): Promise<ClientError[]> {
+  return unwrap<ClientError[]>(await apiFetch(`/client-errors?limit=${limit}`));
 }
 
 /** Google 登入：把 Google 回傳的 credential 換成我方 session token + 使用者資料。 */

@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { reportClientError } from "../lib/api";
 
 interface Props {
   children: ReactNode;
@@ -16,8 +17,10 @@ export default class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
-    // 記到 console 供除錯（尚未接遠端錯誤回報）
     console.error("[MemeRadar] render error:", error, info.componentStack);
+    reportClientError(error.message || String(error), {
+      stack: `${error.stack ?? ""}\n--- component ---${info.componentStack ?? ""}`,
+    });
   }
 
   render(): ReactNode {

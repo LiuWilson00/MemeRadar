@@ -962,6 +962,37 @@ def set_user_nickname(conn: sqlite3.Connection, user_id: str, nickname: str) -> 
     conn.commit()
 
 
+# ── client_errors（前台錯誤回報，供後台 debug）──────────────────────────
+
+
+def insert_client_error(
+    conn: sqlite3.Connection,
+    *,
+    message: str,
+    stack: str | None = None,
+    url: str | None = None,
+    user_agent: str | None = None,
+    client_id: str | None = None,
+) -> None:
+    conn.execute(
+        "INSERT INTO client_errors "
+        "(error_id, message, stack, url, user_agent, client_id, created_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+        (new_id("cerr"), message, stack, url, user_agent, client_id, _now_iso()),
+    )
+    conn.commit()
+
+
+def list_client_errors(conn: sqlite3.Connection, limit: int = 100) -> list[dict]:
+    """後台：最近的前台錯誤（新到舊）。"""
+    rows = conn.execute(
+        "SELECT error_id, message, stack, url, user_agent, client_id, created_at "
+        "FROM client_errors ORDER BY created_at DESC LIMIT %s",
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def list_reported_memes(conn: sqlite3.Connection) -> list[dict]:
     """後台檢舉清單：仍未處理（event_type=report）的梗圖，依 distinct 檢舉人數排序。"""
     rows = conn.execute(

@@ -26,6 +26,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from memeradar.api.pipeline import run_recommendation
 from memeradar.api.ratelimit import RateLimiter
 from memeradar.api.schemas import (
+    ClientErrorRequest,
     CommentRequest,
     CommentUpdateRequest,
     DedupResolutionRequest,
@@ -157,6 +158,9 @@ def _is_public(method: str, path: str) -> bool:
         return True
     # 檢舉：前台任何人都能檢舉一張梗圖（僅 POST）
     if method == "POST" and re.match(r"^/memes/[^/]+/report$", path) is not None:
+        return True
+    # 前台錯誤回報：POST 公開（GET 讀取限後台）
+    if method == "POST" and path == "/client-errors":
         return True
     # 探索圖庫：按讚 / 彈幕留言（前台，各種方法）
     if re.match(r"^/memes/[^/]+/(like|comments)$", path) is not None:
@@ -848,6 +852,29 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             repo.set_status(conn, meme_id, "removed")
         repo.resolve_reports(conn, meme_id)
         return {"meme_id": meme_id, "status": repo.get_meme(conn, meme_id).status}
+
+    @app.post("/client-errors", status_code=202)
+    def report_client_error(request: ClientErrorRequest, http_request: Request,
+                            conn: psycopg.Connection = Depends(get_conn)):
+        """前台回報一筆瀏覽器錯誤（公開、限流、長度上限；best-effort）。"""
+        _enforce_rate_limit(deps, http_request)
+        message = request.message.strip()[:1000]
+        if not message:
+            raise HTTPException(status_code=422, detail="message 不可為空")
+        ua = http_request.headers.get("user-agent")
+        repo.insert_client_error(
+            conn, message=message,
+            stack=(request.stack or "")[:4000] or None,
+            url=(request.url or "")[:500] or None,
+            user_agent=(ua or "")[:300] or None,
+            client_id=request.client_id,
+        )
+        return {"ok": True}
+
+    @app.get("/client-errors")
+    def list_client_errors(limit: int = 100, conn: psycopg.Connection = Depends(get_conn)):
+        """後台：最近的前台錯誤（新到舊）。"""
+        return repo.list_client_errors(conn, limit=min(max(1, limit), 500))
 
     @app.get("/report/feedback")
     def feedback_report(conn: psycopg.Connection = Depends(get_conn)):

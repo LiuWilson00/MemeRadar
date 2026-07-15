@@ -4,7 +4,19 @@ import { createRoot } from "react-dom/client";
 import "./index.css";
 import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { reportClientError } from "./lib/api";
 import { GOOGLE_CLIENT_ID } from "./lib/auth";
+
+// 全域捕捉未攔截的錯誤 / promise rejection → 回報後台（best-effort、去重、限量）
+if (typeof window !== "undefined") {
+  window.addEventListener("error", (e) => {
+    reportClientError(e.message || "window error", { stack: e.error?.stack, url: e.filename });
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    const r = e.reason as { message?: string; stack?: string } | undefined;
+    reportClientError(r?.message || String(r ?? "unhandledrejection"), { stack: r?.stack });
+  });
+}
 import { useRoute } from "./lib/router";
 import MobileApp from "./mobile/MobileApp";
 

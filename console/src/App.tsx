@@ -1,6 +1,7 @@
 import { AlertTriangle, LogOut } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import AdminGate, { logout } from "./components/AdminGate";
+import ClientErrorsView from "./components/ClientErrorsView";
 import ConversationEditor from "./components/ConversationEditor";
 import DashboardView from "./components/DashboardView";
 import DebugPanel from "./components/DebugPanel";
@@ -27,6 +28,7 @@ type Tab =
   | "review"
   | "reports"
   | "report"
+  | "errors"
   | "settings";
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "work", label: "工作台" },
@@ -37,6 +39,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "review", label: "複核" },
   { id: "reports", label: "檢舉" },
   { id: "report", label: "報表" },
+  { id: "errors", label: "前台錯誤" },
   { id: "settings", label: "設定" },
 ];
 const TAB_IDS = TABS.map((t) => t.id) as string[];
@@ -152,6 +155,7 @@ export default function App() {
       {tab === "review" && <ReviewView meta={meta} />}
       {tab === "reports" && <ReportsView />}
       {tab === "report" && <ReportView />}
+      {tab === "errors" && <ClientErrorsView />}
       {tab === "settings" && <SettingsView />}
 
       <main

@@ -781,6 +781,32 @@ class TestDecoupledImport:
         assert annotate_one_pending(deps, conn) is False
 
 
+class TestClientErrors:
+    def test_report_and_list(self, env):
+        client, *_ = env
+        r = client.post("/client-errors",
+                        json={"message": "Boom", "stack": "at foo", "url": "/settings",
+                              "client_id": "c1"},
+                        headers={"User-Agent": "TestUA/1.0"})
+        assert r.status_code == 202
+        errs = client.get("/client-errors").json()
+        assert len(errs) == 1
+        assert errs[0]["message"] == "Boom" and errs[0]["url"] == "/settings"
+        assert errs[0]["user_agent"] == "TestUA/1.0"
+
+    def test_empty_message_422(self, env):
+        client, *_ = env
+        assert client.post("/client-errors", json={"message": "   "}).status_code == 422
+
+    def test_list_is_admin_only_but_report_public(self, tmp_path):
+        deps = Deps(client=DualStubClient(), vlm=StubVlm(), embedder=FakeEmbedder(),
+                    db_path=tmp_path, data_dir=tmp_path,
+                    admin_username="a", admin_password="b")
+        client = TestClient(create_app(deps))
+        assert client.get("/client-errors").status_code == 401  # 讀取限後台
+        assert client.post("/client-errors", json={"message": "x"}).status_code == 202  # 回報公開
+
+
 class TestReports:
     def test_report_logs_and_lists_distinct_clients(self, env):
         client, _, memes, _ = env
