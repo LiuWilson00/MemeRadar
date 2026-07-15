@@ -15,15 +15,22 @@ export function getUserToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
 
+// 快取解析結果：同一份原始字串回「同一個物件參考」。
+// useSyncExternalStore 以參考比對快照，若每次都回新物件 → 判定一直在變 → 無限重繪崩潰。
+let cachedRaw: string | null = null;
+let cachedUser: User | null = null;
+
 function readUser(): User | null {
   if (typeof localStorage === "undefined") return null;
   const raw = localStorage.getItem(USER_KEY);
-  if (!raw) return null;
+  if (raw === cachedRaw) return cachedUser; // 沒變 → 回同一參考，避免無限迴圈
+  cachedRaw = raw;
   try {
-    return JSON.parse(raw) as User;
+    cachedUser = raw ? (JSON.parse(raw) as User) : null;
   } catch {
-    return null;
+    cachedUser = null;
   }
+  return cachedUser;
 }
 
 export function saveSession(token: string, user: User): void {
