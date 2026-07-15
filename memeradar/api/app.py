@@ -117,10 +117,11 @@ def _default_deps() -> Deps:
 
     settings = get_settings()
     api_key = settings.anthropic_api_key
-    ocr, classifier = _build_fast_clients(settings)
+    vlm = build_default_vlm()
+    ocr, classifier = _build_fast_clients(settings, vlm)
     return Deps(
         client=anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic(),
-        vlm=build_default_vlm(),
+        vlm=vlm,
         embedder=get_embedder(settings.embedding_backend),
         db_path=settings.memeradar_data_dir,  # 連線改由 DATABASE_URL；此欄僅為相容保留
         data_dir=settings.memeradar_data_dir,
@@ -147,19 +148,17 @@ def _default_deps() -> Deps:
     )
 
 
-def _build_fast_clients(settings):
-    """快速模式的 NVIDIA client（同一組 key）：OCR + 沒字圖分類器。無 key 則回 (None, None)。"""
+def _build_fast_clients(settings, vlm):
+    """快速模式的 NVIDIA client（同一組 key）：OCR + 沒字圖分類器（小 VLM 取標籤 +
+    llama 影像 embedding 存飛輪訓練集）。無 key 則回 (None, None)。"""
     keys = settings.nvidia_keys()
     if not keys:
         return None, None
-    from memeradar.shared.taxonomy import get_taxonomy
-    from memeradar.understanding.nvclip import NvClip, ZeroShotClassifier
+    from memeradar.understanding.classifier import VlmClassifier
+    from memeradar.understanding.image_embed import NvImageEmbedder
     from memeradar.understanding.ocr import NvidiaOcr
 
-    tax = get_taxonomy()
-    # 零樣本詞彙：情緒為主（NV-CLIP 對表情敏感）+ 已知分類，與梗圖標註語彙對齊
-    vocab = list(dict.fromkeys([*tax.emotions, *tax.known_categories]))
-    return NvidiaOcr(keys), ZeroShotClassifier(NvClip(keys), vocab)
+    return NvidiaOcr(keys), VlmClassifier(vlm, NvImageEmbedder(keys))
 
 
 # 前台（手機 client）需要的公開路徑；其餘一律歸後台（admin）

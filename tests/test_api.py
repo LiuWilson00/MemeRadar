@@ -1406,8 +1406,10 @@ class _FastStubClassifier:
     def __init__(self, labels):
         self.labels = labels
 
-    def classify(self, image_bytes, *, top_k=3, min_score=0.0):
-        return self.labels[:top_k]
+    def classify(self, image_bytes, *, top_k=5):
+        from memeradar.understanding.classifier import Classification
+
+        return Classification(labels=self.labels[:top_k], embedding=None, model_version="qwen/test")
 
 
 class _ExplodingVlm:
@@ -1426,7 +1428,7 @@ _FAST_PNG = base64.standard_b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16).decod
 
 
 class TestFastMode:
-    """fast_mode 路由：截圖走 OCR、沒字圖走 NV-CLIP、全程不碰 VLM；關掉才走精準。"""
+    """fast_mode 路由：截圖走 OCR、沒字圖走小 VLM 分類器；不碰精準流程的 VLM；關掉才走精準。"""
 
     def _run_task(self, client, body):
         r = client.post("/tasks", json=body)
@@ -1449,11 +1451,11 @@ class TestFastMode:
         assert fast["source"] == "ocr" and fast["ocr_text"] == "我就爛"
         assert len(detail["result"]["results"]) >= 1
 
-    def test_fast_textless_image_uses_nvclip(self, env):
+    def test_fast_textless_image_uses_vlm_classifier(self, env):
         client, _conn, _memes, deps = env
         deps.ocr = _FastStubOcr("")  # 沒字
         deps.classifier = _FastStubClassifier(["擺爛", "無奈"])
-        deps.vlm = _ExplodingVlm()
+        deps.vlm = _ExplodingVlm()  # 精準流程的 VLM 不該被碰（分類器是獨立的 stub）
         deps.run_async = lambda fn: fn()
 
         detail = self._run_task(client, {
@@ -1462,7 +1464,7 @@ class TestFastMode:
         })
         assert detail["status"] == "done", detail
         fast = detail["result"]["debug"]["fast"]
-        assert fast["source"] == "nvclip" and fast["labels"] == ["擺爛", "無奈"]
+        assert fast["source"] == "vlm" and fast["labels"] == ["擺爛", "無奈"]
 
     def test_precise_mode_default_still_uses_vlm(self, env):
         client, _conn, _memes, deps = env

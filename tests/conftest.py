@@ -17,7 +17,7 @@ from testcontainers.postgres import PostgresContainer
 _TABLES = (
     "memes, meme_annotations, embeddings, meme_sources, recommendation_logs, "
     "feedback_events, dedup_reviews, vlm_calls, tasks, settings, crawl_state, crawl_health, "
-    "events, users, meme_likes, meme_comments, client_errors, bug_reports"
+    "events, users, meme_likes, meme_comments, client_errors, bug_reports, textless_samples"
 )
 
 

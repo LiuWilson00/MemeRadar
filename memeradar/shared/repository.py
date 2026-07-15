@@ -1059,6 +1059,32 @@ def insert_bug_report(
     conn.commit()
 
 
+def insert_textless_sample(
+    conn: sqlite3.Connection,
+    *,
+    embedding: object | None,
+    labels: object,
+    model_version: str,
+    client_id: str | None = None,
+) -> None:
+    """飛輪訓練集：沒字圖的 (影像 embedding, VLM 標籤)。隱私：只存向量+標籤，不存原圖。"""
+    conn.execute(
+        "INSERT INTO textless_samples "
+        "(sample_id, embedding, labels, model_version, client_id, created_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s)",
+        (
+            new_id("tls"),
+            _dumps(embedding) if embedding is not None else None,
+            _dumps(labels), model_version, client_id, _now_iso(),
+        ),
+    )
+    conn.commit()
+
+
+def count_textless_samples(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT COUNT(*) AS n FROM textless_samples").fetchone()["n"]
+
+
 def list_bug_reports(conn: sqlite3.Connection, limit: int = 200) -> list[dict]:
     """後台：使用者回報的問題（新到舊），breadcrumbs / meta 解回物件。"""
     rows = conn.execute(

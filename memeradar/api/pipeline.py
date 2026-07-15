@@ -29,6 +29,7 @@ from memeradar.matching.screenshot import parse_screenshot
 from memeradar.matching.search import SearchFilters, SqliteBruteForceSearcher
 from memeradar.shared import repository as repo
 from memeradar.shared.models import RecommendationLog, new_id
+from memeradar.understanding.classifier import Classification
 from memeradar.understanding.embedding import Embedder, embedding_signature
 from memeradar.understanding.opponent import analyze_opponent_meme, build_battle_turn
 
@@ -248,14 +249,30 @@ def _assemble_and_log(
     }
 
 
-def _safe_classify(classifier, image_bytes: bytes) -> list[str]:
-    """NV-CLIP 沒字圖分類；未注入或呼叫失敗（如帳號未啟用 → 404）時退回空標籤。"""
+def _safe_classify(classifier, image_bytes: bytes) -> Classification:
+    """沒字圖分類（小 VLM）；未注入或呼叫失敗時退回空 Classification，不讓任務崩潰。"""
     if classifier is None:
-        return []
+        return Classification()
     try:
-        return classifier.classify(image_bytes, top_k=3)
-    except Exception:  # noqa: BLE001 NV-CLIP 未啟用/瞬斷 → 退回無結果，不讓任務崩潰
-        return []
+        return classifier.classify(image_bytes, top_k=5)
+    except Exception:  # noqa: BLE001 VLM 瞬斷/限流 → 退回無結果
+        return Classification()
+
+
+def _persist_textless_sample(conn, classification: Classification, client_id: str | None) -> None:
+    """把沒字圖的 (影像 embedding, 標籤) 存成飛輪訓練集；best-effort、不擋回應。"""
+    if classification.embedding is None and not classification.labels:
+        return
+    try:
+        repo.insert_textless_sample(
+            conn,
+            embedding=classification.embedding,
+            labels=classification.labels,
+            model_version=classification.model_version,
+            client_id=client_id,
+        )
+    except Exception:  # noqa: BLE001 訓練集寫入失敗不影響推薦
+        pass
 
 
 def _fast_intent(query: str, source: str, labels: list[str]) -> IntentResult:
@@ -306,12 +323,14 @@ def run_fast_recommendation(
         if len(ocr_text) >= _FAST_MIN_OCR_CHARS:
             source, query = "ocr", ocr_text
         else:
-            # 沒字圖 → NV-CLIP 零樣本情緒/類別當檢索 query。NV-CLIP 未啟用/瞬斷時
-            # 退回無標籤（→ 空結果），不讓整筆任務崩潰。
+            # 沒字圖 → 小 VLM 取情緒/類別關鍵詞當檢索 query；同時把 (影像 embedding,
+            # 標籤) 存成飛輪訓練集。VLM 瞬斷時退回無標籤（→ 空結果），不讓任務崩潰。
             t0 = time.perf_counter()
-            labels = _safe_classify(classifier, image_bytes)
-            timings["nvclip"] = int((time.perf_counter() - t0) * 1000)
-            source, query = "nvclip", " ".join(labels)
+            classification = _safe_classify(classifier, image_bytes)
+            timings["classify"] = int((time.perf_counter() - t0) * 1000)
+            labels = classification.labels
+            source, query = "vlm", " ".join(labels)
+            _persist_textless_sample(conn, classification, request.client_id)
     else:
         query = " ".join(t.text for t in request.conversation if t.text.strip())
     query = query.strip()

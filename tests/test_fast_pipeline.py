@@ -1,6 +1,7 @@
-"""快速模式管線測試：OCR / NV-CLIP → 向量檢索，全程無 VLM/LLM。
+"""快速模式管線測試：OCR / 小 VLM 沒字圖 → 向量檢索，全程不碰精準流程的 VLM 意圖/重排。
 
 回應形狀須與精準模式一致（query_id / intent / results / debug）。
+沒字圖會存飛輪訓練集（影像 embedding + 標籤）。
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from memeradar.api.schemas import RecommendRequest
 from memeradar.shared import repository as repo
 from memeradar.shared.db import connect, migrate
 from memeradar.shared.models import Embedding, Meme, MemeAnnotation, new_id
+from memeradar.understanding.classifier import Classification
 
 SIGNATURE = "fake-embed@v1|doc-v1"
 
@@ -27,13 +29,16 @@ class StubOcr:
 
 
 class StubClassifier:
-    def __init__(self, labels: list[str]):
+    def __init__(self, labels: list[str], embedding: list[float] | None = None):
         self.labels = labels
+        self.embedding = embedding
         self.calls = 0
 
-    def classify(self, image_bytes: bytes, *, top_k: int = 3, min_score: float = 0.0):
+    def classify(self, image_bytes: bytes, *, top_k: int = 5) -> Classification:
         self.calls += 1
-        return self.labels[:top_k]
+        return Classification(
+            labels=self.labels[:top_k], embedding=self.embedding, model_version="qwen/test"
+        )
 
 
 class RoutedEmbedder:
@@ -81,7 +86,9 @@ def seed(conn, vector, *, franchise="海綿寶寶") -> Meme:
 
 
 def _request(**kw) -> RecommendRequest:
-    return RecommendRequest(input_type=kw.pop("input_type", "screenshot"), client_id="c1", **kw)
+    kw.setdefault("input_type", "screenshot")
+    kw.setdefault("client_id", "c1")
+    return RecommendRequest(**kw)
 
 
 class TestFastPipeline:
@@ -102,20 +109,22 @@ class TestFastPipeline:
         assert out["debug"]["rerank_fallback"] is False
         assert ocr.calls == 1
 
-    def test_textless_image_falls_back_to_nvclip(self, conn):
+    def test_textless_image_falls_back_to_vlm(self, conn):
         target = seed(conn, [1.0, 0.0])
         ocr = StubOcr("")  # 沒字
-        classifier = StubClassifier(["生氣", "無奈"])
+        classifier = StubClassifier(["生氣", "無奈"], embedding=[0.5, 0.5])
         embedder = RoutedEmbedder({"生氣 無奈": [1.0, 0.0]})
 
         out = run_fast_recommendation(
-            conn, ocr, classifier, embedder, _request(), image_bytes=b"\x89PNGxx"
+            conn, ocr, classifier, embedder, _request(client_id="c9"), image_bytes=b"\x89PNGxx"
         )
 
-        assert out["debug"]["fast"]["source"] == "nvclip"
+        assert out["debug"]["fast"]["source"] == "vlm"
         assert out["debug"]["fast"]["labels"] == ["生氣", "無奈"]
         assert out["results"][0]["meme_id"] == target.meme_id
         assert classifier.calls == 1
+        # 飛輪：沒字圖存了一筆訓練樣本（影像 embedding + 標籤）
+        assert repo.count_textless_samples(conn) == 1
 
     def test_ocr_used_when_text_present_classifier_not_called(self, conn):
         seed(conn, [1.0, 0.0])
@@ -124,7 +133,8 @@ class TestFastPipeline:
             conn, StubOcr("有字內容"), classifier,
             RoutedEmbedder({"有字內容": [1.0, 0.0]}), _request(), image_bytes=b"png",
         )
-        assert classifier.calls == 0  # 有字就不走 NV-CLIP
+        assert classifier.calls == 0  # 有字就不走 VLM
+        assert repo.count_textless_samples(conn) == 0  # 有字圖不存訓練樣本
 
     def test_text_input_uses_conversation(self, conn):
         target = seed(conn, [0.0, 1.0])
@@ -139,17 +149,17 @@ class TestFastPipeline:
         assert out["results"][0]["meme_id"] == target.meme_id
 
     def test_textless_image_degrades_when_classifier_unavailable(self, conn):
-        # NV-CLIP 未啟用（classify 拋 404）→ 沒字圖退回空結果，任務不崩潰
+        # VLM 瞬斷（classify 拋例外）→ 沒字圖退回空結果，任務不崩潰
         seed(conn, [1.0, 0.0])
 
         class Broken:
-            def classify(self, image_bytes, *, top_k=3, min_score=0.0):
-                raise RuntimeError("404 Function not found for account")
+            def classify(self, image_bytes, *, top_k=5):
+                raise RuntimeError("VLM 瞬斷")
 
         out = run_fast_recommendation(
             conn, StubOcr(""), Broken(), RoutedEmbedder({}), _request(), image_bytes=b"png"
         )
-        assert out["debug"]["fast"]["source"] == "nvclip"
+        assert out["debug"]["fast"]["source"] == "vlm"
         assert out["debug"]["fast"]["labels"] == []
         assert out["results"] == []
 

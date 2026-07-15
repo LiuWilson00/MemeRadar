@@ -93,7 +93,7 @@ class TestMigration:
     def test_migrate_is_idempotent(self, conn):
         migrate(conn)  # 重跑不應報錯（Alembic 已在 head 時為 no-op）
         version = conn.execute("SELECT version_num FROM alembic_version").fetchone()
-        assert version["version_num"] == "0009_bug_reports"  # 最新 head
+        assert version["version_num"] == "0010_textless_samples"  # 最新 head
 
 
 class TestSeedRoundtrip:
