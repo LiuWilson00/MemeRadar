@@ -39,6 +39,12 @@ def put_image(settings: Settings, key: str, data: bytes) -> None:
     )
 
 
+def get_image(settings: Settings, key: str) -> bytes:
+    """從 R2 下載圖檔位元組（背景標註要讀原圖時用；serving 走公開 URL 不經此）。"""
+    resp = _client(settings).get_object(Bucket=settings.r2_bucket, Key=key)
+    return resp["Body"].read()
+
+
 def public_url(base: str, image_uri: str) -> str:
     """image_uri（如 images/m_xxx.png）→ 公開 URL（base/images/m_xxx.png）。"""
     return f"{base.rstrip('/')}/{image_uri.lstrip('/')}"

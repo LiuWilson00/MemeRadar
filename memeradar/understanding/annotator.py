@@ -170,6 +170,23 @@ def parse_annotation(raw: str) -> AnnotationResult | None:
         return None
 
 
+def load_meme_image_bytes(conn: sqlite3.Connection, meme: Meme, *, data_dir: Path) -> bytes:
+    """讀梗圖原圖位元組，來源優先序與 serving 一致：DB image_data → R2 → 檔案系統。
+
+    修正背景標註卡死：雲端上傳的圖存在 R2/DB、容器本機沒有那個檔，原本只讀檔案系統
+    會永遠 FileNotFoundError → 標註佇列卡死。
+    """
+    data = repo.get_image_data(conn, meme.meme_id)
+    if data is not None:
+        return data
+    settings = get_settings()
+    if settings.r2_upload_enabled():
+        from memeradar.shared import storage
+
+        return storage.get_image(settings, meme.image_uri)
+    return (data_dir / meme.image_uri).read_bytes()
+
+
 def annotate_meme(
     conn: sqlite3.Connection,
     vlm,
@@ -187,7 +204,7 @@ def annotate_meme(
     每次呼叫的用量寫入 vlm_calls 表。
     """
     data_dir = data_dir if data_dir is not None else get_settings().memeradar_data_dir
-    image_bytes = (data_dir / meme.image_uri).read_bytes()
+    image_bytes = load_meme_image_bytes(conn, meme, data_dir=data_dir)
     image_b64 = base64.standard_b64encode(image_bytes).decode("ascii")
     media_type = media_type_for(meme.image_uri)
     system = build_system_prompt()

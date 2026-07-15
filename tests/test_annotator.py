@@ -190,6 +190,29 @@ def seeded_meme(conn, data_dir) -> Meme:
     return meme
 
 
+class TestImageSource:
+    """背景標註要能讀 DB image_data / R2 的圖，不只檔案系統（修雲端佇列卡死）。"""
+
+    def _meme_no_file(self, conn) -> Meme:
+        meme_id = new_id("m")  # 刻意不寫入檔案系統
+        meme = Meme(meme_id=meme_id, image_uri=f"images/{meme_id}.png", sha256="e" * 64)
+        repo.insert_meme(conn, meme)
+        return meme
+
+    def test_annotate_meme_loads_image_from_db_when_not_on_disk(self, conn, data_dir):
+        import io
+
+        meme = self._meme_no_file(conn)
+        buf = io.BytesIO()
+        Image.new("RGB", (300, 300), (10, 180, 60)).save(buf, format="PNG")
+        repo.set_image_data(conn, meme.meme_id, buf.getvalue())  # 圖只在 DB
+
+        result = annotate_meme(conn, vlm_returning(), meme, data_dir=data_dir)
+
+        assert result is not None
+        assert repo.get_annotation(conn, meme.meme_id) is not None
+
+
 class TestAnnotateMeme:
     def test_happy_path_persists_annotation(self, conn, data_dir, seeded_meme):
         vlm = vlm_returning()

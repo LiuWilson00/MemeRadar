@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import binascii
 import random
+import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -58,6 +59,7 @@ from memeradar.shared.models import Embedding, FeedbackEvent, new_id
 from memeradar.shared.taxonomy import get_taxonomy
 from memeradar.understanding.annotator import annotate_meme
 from memeradar.understanding.embedding import Embedder, embed_pending_memes, embedding_signature
+from memeradar.understanding.nvidia_vlm import VlmExhaustedError
 from memeradar.understanding.opponent import OpponentMemeRefusedError
 from memeradar.understanding.retrieval_doc import build_retrieval_document
 
@@ -312,7 +314,19 @@ def annotate_one_pending(deps: Deps, conn: psycopg.Connection) -> bool:
     pending = repo.list_active_unannotated(conn, limit=1)
     if not pending:
         return False
-    annotation = annotate_meme(conn, deps.vlm, pending[0], data_dir=deps.data_dir)
+    meme = pending[0]
+    try:
+        annotation = annotate_meme(conn, deps.vlm, meme, data_dir=deps.data_dir)
+    except VlmExhaustedError:
+        raise  # 限流耗盡＝暫時性：維持 active，交給 worker 等下輪重試
+    except Exception as exc:  # noqa: BLE001 永久性錯誤（圖檔遺失/損毀等）
+        # 轉 pending_review 排除出佇列，避免同一張壞圖無限重試阻塞其他 105 張
+        repo.set_status(conn, meme.meme_id, "pending_review")
+        print(
+            f"[annotate] {meme.meme_id} 標註失敗，轉 pending_review：{exc!r}",
+            file=sys.stderr, flush=True,
+        )
+        return True
     if annotation is not None and annotation.is_meme:
         embed_pending_memes(conn, deps.embedder)
     return True

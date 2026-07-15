@@ -90,6 +90,21 @@ def set_status(conn: sqlite3.Connection, meme_id: str, status: str) -> None:
     conn.commit()
 
 
+def get_image_data(conn: sqlite3.Connection, meme_id: str) -> bytes | None:
+    """取 DB 內的圖片位元組（雲端免 volume 時圖存這）；沒有則 None。"""
+    row = conn.execute(
+        "SELECT image_data FROM memes WHERE meme_id = %s", (meme_id,)
+    ).fetchone()
+    if row and row["image_data"] is not None:
+        return bytes(row["image_data"])
+    return None
+
+
+def set_image_data(conn: sqlite3.Connection, meme_id: str, data: bytes) -> None:
+    conn.execute("UPDATE memes SET image_data = %s WHERE meme_id = %s", (data, meme_id))
+    conn.commit()
+
+
 def count_memes(conn: sqlite3.Connection, status: str | None = None) -> int:
     if status is None:
         row = conn.execute("SELECT COUNT(*) AS n FROM memes").fetchone()

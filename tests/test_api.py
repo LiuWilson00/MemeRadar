@@ -1476,6 +1476,31 @@ class TestFastMode:
         assert "screenshot_parse" in detail["result"]["debug"]
 
 
+class TestAnnotationQueueResilience:
+    """壞圖（圖檔到處都讀不到）不能無限重試阻塞佇列 → 轉 pending_review。"""
+
+    def test_poison_meme_moved_to_pending_review(self, tmp_path):
+        from memeradar.api.app import annotate_one_pending
+
+        db_path = tmp_path / "db.sqlite3"
+        conn = connect(db_path)
+        migrate(conn)
+        meme_id = new_id("m")  # 圖不在 DB、不在 R2、不在檔案系統 → 讀圖必失敗
+        repo.insert_meme(
+            conn, Meme(meme_id=meme_id, image_uri=f"images/{meme_id}.png", sha256="f" * 64)
+        )
+        deps = Deps(
+            client=DualStubClient(), vlm=StubVlm(), embedder=FakeEmbedder(),
+            db_path=db_path, data_dir=tmp_path,
+        )
+        assert repo.count_active_unannotated(conn) == 1
+        did = annotate_one_pending(deps, conn)
+        assert did is True  # 有處理到（排除了壞圖）
+        assert repo.count_active_unannotated(conn) == 0  # 佇列不再卡
+        assert repo.get_meme(conn, meme_id).status == "pending_review"
+        conn.close()
+
+
 class _RaisingOcr:
     def ocr(self, image_bytes):
         raise RuntimeError("boom ocr")
