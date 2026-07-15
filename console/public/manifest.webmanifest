@@ -1,0 +1,16 @@
+{
+  "name": "MemeRadar 梗圖雷達",
+  "short_name": "MemeRadar",
+  "description": "丟一段對話或截圖，AI 幫你秒配最對味的梗圖回應。",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d1321",
+  "theme_color": "#0d1321",
+  "lang": "zh-Hant",
+  "icons": [
+    { "src": "/favicon.svg", "type": "image/svg+xml", "sizes": "any" },
+    { "src": "/icon-192.png", "type": "image/png", "sizes": "192x192" },
+    { "src": "/icon-512.png", "type": "image/png", "sizes": "512x512" },
+    { "src": "/icon-512.png", "type": "image/png", "sizes": "512x512", "purpose": "maskable" }
+  ]
+}
