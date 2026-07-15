@@ -55,17 +55,34 @@ export default function MemeImage({
     );
   }
 
+  const resolvedImgSrc = reload
+    ? `${resolvedSrc}${resolvedSrc.includes("?") ? "&" : "?"}r=${reload}`
+    : resolvedSrc;
+
+  // 有給寬高比：以骨架微光佔位（載入前預留正確空間、載入時淡入蓋掉），最像 Pinterest。
+  if (aspectRatio) {
+    return (
+      <span className="relative block overflow-hidden" style={{ aspectRatio }}>
+        {!loaded && <span className="skeleton absolute inset-0" aria-hidden />}
+        <img
+          ref={imgRef}
+          src={resolvedImgSrc}
+          alt={alt}
+          className={`absolute inset-0 h-full w-full img-fade ${loaded ? "is-loaded" : ""} ${className ?? ""}`}
+          loading="lazy"
+          onLoad={() => setLoaded(true)}
+          onError={() => setFailed(true)}
+        />
+      </span>
+    );
+  }
+
   const img = (
     <img
       ref={imgRef}
-      src={
-        reload
-          ? `${resolvedSrc}${resolvedSrc.includes("?") ? "&" : "?"}r=${reload}`
-          : resolvedSrc
-      }
+      src={resolvedImgSrc}
       alt={alt}
       className={`${className ?? ""} img-fade ${loaded ? "is-loaded" : ""}`}
-      style={aspectRatio ? { aspectRatio } : undefined}
       loading="lazy"
       onLoad={() => setLoaded(true)}
       onError={() => setFailed(true)}

@@ -158,6 +158,26 @@ body {
   animation-delay: calc(var(--i, 0) * 70ms);
 }
 
+/* 骨架佔位：圖片載入前的灰階微光（Pinterest 式） */
+@keyframes skeleton-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+.skeleton {
+  background: linear-gradient(
+    100deg,
+    var(--color-panel) 30%,
+    var(--color-raised) 50%,
+    var(--color-panel) 70%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
 /* 彈幕：留言由右向左飄過圖片 */
 @keyframes danmaku {
   from {
@@ -194,6 +214,10 @@ body {
   .img-fade {
     opacity: 1;
     transition: none;
+  }
+  .skeleton {
+    animation: none;
+    background: var(--color-raised);
   }
   /* 減少動態：關掉飄動彈幕（改看下方留言列表） */
   .danmaku-item {

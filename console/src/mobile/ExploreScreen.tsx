@@ -97,7 +97,7 @@ export default function ExploreScreen() {
                 <MemeImage
                   src={it.image_url}
                   alt={it.ocr_text ?? "梗圖"}
-                  className="w-full bg-ink object-cover"
+                  className="w-full object-cover"
                   aspectRatio={it.width && it.height ? it.width / it.height : undefined}
                 />
                 <span
