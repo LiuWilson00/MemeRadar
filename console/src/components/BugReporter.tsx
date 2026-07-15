@@ -26,33 +26,50 @@ export default function BugReporter() {
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [y, setY] = useState(initialY);
-  const drag = useRef<{ startY: number; origY: number; curY: number; moved: boolean } | null>(null);
+  const drag = useRef<{ startY: number; origY: number; curY: number; pid: number } | null>(null);
+  const movedRef = useRef(false); // 本次互動是否為「拖動」（觸控 tap 會有抖動，用它區分）
 
   const onPointerDown = (e: React.PointerEvent) => {
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    drag.current = { startY: e.clientY, origY: y, curY: y, moved: false };
+    // 先不 capture：純 tap 若 capture 了，某些手機瀏覽器會吞掉 click
+    drag.current = { startY: e.clientY, origY: y, curY: y, pid: e.pointerId };
+    movedRef.current = false;
   };
   const onPointerMove = (e: React.PointerEvent) => {
     const d = drag.current;
     if (!d) return;
     const dy = e.clientY - d.startY;
-    if (Math.abs(dy) > 4) d.moved = true;
-    d.curY = Math.min(window.innerHeight - 72, Math.max(56, d.origY + dy));
-    setY(d.curY);
+    if (!movedRef.current && Math.abs(dy) > 8) {
+      // 超過門檻才算拖動：此時才 capture，好持續追蹤（手指移出鈕也不斷）
+      movedRef.current = true;
+      try {
+        e.currentTarget.setPointerCapture(d.pid);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (movedRef.current) {
+      d.curY = Math.min(window.innerHeight - 72, Math.max(56, d.origY + dy));
+      setY(d.curY);
+    }
   };
   const onPointerUp = () => {
     const d = drag.current;
     drag.current = null;
-    if (!d) return;
-    if (d.moved) {
+    if (d && movedRef.current) {
       try {
         localStorage.setItem(POS_KEY, String(d.curY));
       } catch {
         /* ignore */
       }
-    } else {
-      setOpen(true); // 純點擊 → 開啟回報
     }
+  };
+  // 開啟交給原生 click（觸控/滑鼠都可靠地區分 tap 與拖動/捲動）；剛拖過就不開
+  const onClick = () => {
+    if (movedRef.current) {
+      movedRef.current = false;
+      return;
+    }
+    setOpen(true);
   };
 
   const submit = async () => {
@@ -81,6 +98,7 @@ export default function BugReporter() {
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onClick={onClick}
         style={{ top: y }}
         aria-label="回報問題"
         title="回報問題"
