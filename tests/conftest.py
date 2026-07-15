@@ -29,6 +29,8 @@ def _pg_test_db():
             f"@{pg.get_container_host_ip()}:{pg.get_exposed_port(5432)}/{pg.dbname}"
         )
         os.environ["DATABASE_URL"] = url
+        # 測試用維度不一的小向量 → 跳過「固定 1024 維 + HNSW」遷移（那純為正式效能優化）
+        os.environ["MEMERADAR_SKIP_VECTOR_INDEX"] = "1"
 
         from memeradar.shared.config import get_settings
         from memeradar.shared.db import close_pool, ensure_schema
