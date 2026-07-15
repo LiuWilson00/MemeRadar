@@ -5,12 +5,14 @@ export interface UserSettings {
   excludeNsfw: boolean;
   franchises: string[]; // 偏好梗圖包（空 = 不限）
   categories: string[]; // 偏好分類（空 = 不限）
+  fastMode: boolean; // 快速模式：OCR/CLIP 秒回、跳過 VLM（預設開；關掉走 AI 精讀）
 }
 
 export const DEFAULT_SETTINGS: UserSettings = {
   excludeNsfw: true,
   franchises: [],
   categories: [],
+  fastMode: true,
 };
 
 const KEY = "memeradar.settings.v1";
@@ -29,6 +31,8 @@ export function loadSettings(): UserSettings {
         typeof parsed.excludeNsfw === "boolean" ? parsed.excludeNsfw : DEFAULT_SETTINGS.excludeNsfw,
       franchises: strArray(parsed.franchises),
       categories: strArray(parsed.categories),
+      fastMode:
+        typeof parsed.fastMode === "boolean" ? parsed.fastMode : DEFAULT_SETTINGS.fastMode,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };

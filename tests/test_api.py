@@ -1392,3 +1392,85 @@ class TestAsyncTasksArePublic:
         assert client.get("/tasks", params={"client_id": "c_me"}).status_code == 200
         # 後台路徑仍需登入
         assert client.get("/memes").status_code == 401
+
+
+class _FastStubOcr:
+    def __init__(self, text):
+        self.text = text
+
+    def ocr(self, image_bytes):
+        return self.text
+
+
+class _FastStubClassifier:
+    def __init__(self, labels):
+        self.labels = labels
+
+    def classify(self, image_bytes, *, top_k=3, min_score=0.0):
+        return self.labels[:top_k]
+
+
+class _ExplodingVlm:
+    """任何呼叫都爆炸——證明快速模式完全沒碰 VLM。"""
+
+    model = "explode"
+
+    def annotate(self, *a, **k):
+        raise AssertionError("快速模式不該呼叫 VLM.annotate")
+
+    def chat(self, *a, **k):
+        raise AssertionError("快速模式不該呼叫 VLM.chat")
+
+
+_FAST_PNG = base64.standard_b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16).decode()
+
+
+class TestFastMode:
+    """fast_mode 路由：截圖走 OCR、沒字圖走 NV-CLIP、全程不碰 VLM；關掉才走精準。"""
+
+    def _run_task(self, client, body):
+        r = client.post("/tasks", json=body)
+        assert r.status_code == 202, r.text
+        return client.get(f"/tasks/{r.json()['task_id']}").json()
+
+    def test_fast_screenshot_uses_ocr_and_skips_vlm(self, env):
+        client, _conn, _memes, deps = env
+        deps.ocr = _FastStubOcr("我就爛")  # OCR 文字 → FakeEmbedder → 命中 seed
+        deps.classifier = _FastStubClassifier([])
+        deps.vlm = _ExplodingVlm()  # 若誤走精準路徑會 AssertionError → 任務 error
+        deps.run_async = lambda fn: fn()
+
+        detail = self._run_task(client, {
+            **BASE_REQUEST, "input_type": "screenshot", "conversation": [],
+            "image": _FAST_PNG, "fast_mode": True,
+        })
+        assert detail["status"] == "done", detail
+        fast = detail["result"]["debug"]["fast"]
+        assert fast["source"] == "ocr" and fast["ocr_text"] == "我就爛"
+        assert len(detail["result"]["results"]) >= 1
+
+    def test_fast_textless_image_uses_nvclip(self, env):
+        client, _conn, _memes, deps = env
+        deps.ocr = _FastStubOcr("")  # 沒字
+        deps.classifier = _FastStubClassifier(["擺爛", "無奈"])
+        deps.vlm = _ExplodingVlm()
+        deps.run_async = lambda fn: fn()
+
+        detail = self._run_task(client, {
+            **BASE_REQUEST, "input_type": "screenshot", "conversation": [],
+            "image": _FAST_PNG, "fast_mode": True,
+        })
+        assert detail["status"] == "done", detail
+        fast = detail["result"]["debug"]["fast"]
+        assert fast["source"] == "nvclip" and fast["labels"] == ["擺爛", "無奈"]
+
+    def test_precise_mode_default_still_uses_vlm(self, env):
+        client, _conn, _memes, deps = env
+        deps.run_async = lambda fn: fn()
+        # 省略 fast_mode（預設 False）→ 走 StubVlm → 有 screenshot_parse、無 fast
+        detail = self._run_task(client, {
+            **BASE_REQUEST, "input_type": "screenshot", "conversation": [], "image": _FAST_PNG,
+        })
+        assert detail["status"] == "done", detail
+        assert "fast" not in detail["result"]["debug"]
+        assert "screenshot_parse" in detail["result"]["debug"]

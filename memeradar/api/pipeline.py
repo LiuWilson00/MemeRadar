@@ -12,7 +12,12 @@ import time
 from typing import Any
 
 from memeradar.api.schemas import RecommendRequest, TurnIn
-from memeradar.matching.intent import ConversationTurn, analyze_conversation
+from memeradar.matching.intent import (
+    ConversationTurn,
+    IntentResult,
+    StrategyPlan,
+    analyze_conversation,
+)
 from memeradar.matching.rerank import (
     RankedMeme,
     RankingParams,
@@ -28,9 +33,14 @@ from memeradar.understanding.embedding import Embedder, embedding_signature
 from memeradar.understanding.opponent import analyze_opponent_meme, build_battle_turn
 
 VECTOR_FALLBACK_REASON = "（rerank 暫不可用，依向量相似度排序）"
+FAST_REASON = "（快速模式：依語意相似度排序）"
+# OCR 取出的文字須至少這麼多字元才算「有字」，否則視為無字圖走 NV-CLIP
+_FAST_MIN_OCR_CHARS = 2
 
 
-def _vector_fallback(candidates: list[Candidate], top_n: int) -> list[RankedMeme]:
+def _vector_fallback(
+    candidates: list[Candidate], top_n: int, *, reason: str = VECTOR_FALLBACK_REASON
+) -> list[RankedMeme]:
     return [
         RankedMeme(
             meme_id=c.meme_id,
@@ -38,7 +48,7 @@ def _vector_fallback(candidates: list[Candidate], top_n: int) -> list[RankedMeme
             annotation=c.annotation,
             matched_strategy=c.matched_strategies[0],
             matched_tags=tuple(c.annotation.emotions),
-            reason=VECTOR_FALLBACK_REASON,
+            reason=reason,
             scores={"vector": c.similarity, "rerank": c.similarity, "final": c.similarity},
         )
         for rank, c in enumerate(candidates[:top_n], start=1)
@@ -131,6 +141,48 @@ def run_recommendation(
         ranked = _vector_fallback(retrieval.candidates, request.params.top_n)
     timings["rerank"] = int((time.perf_counter() - t0) * 1000)
 
+    extra_debug: dict[str, Any] = {}
+    if screenshot_debug is not None:
+        extra_debug["screenshot_parse"] = screenshot_debug
+    if opponent_debug is not None:
+        extra_debug["opponent_meme"] = opponent_debug
+
+    return _assemble_and_log(
+        conn,
+        request,
+        conversation,
+        intent,
+        retrieval,
+        ranked,
+        signature=signature,
+        timings=timings,
+        t_start=t_start,
+        # 記錄產生此推薦實際用的模型（後台覆寫 > VLM 預設），供回饋分析模型選擇
+        models_snapshot={
+            "intent": pick("intent") or getattr(vlm, "model", None),
+            "rerank": pick("rerank") or getattr(vlm, "model", None),
+        },
+        rerank_fallback=rerank_fallback,
+        extra_debug=extra_debug or None,
+    )
+
+
+def _assemble_and_log(
+    conn,
+    request: RecommendRequest,
+    conversation,
+    intent: IntentResult,
+    retrieval,
+    ranked,
+    *,
+    signature: str,
+    timings: dict[str, int],
+    t_start: float,
+    models_snapshot: dict,
+    rerank_fallback: bool,
+    extra_debug: dict | None = None,
+) -> dict[str, Any]:
+    """組裝 RecommendResponse + 落庫。精準／快速兩路共用，確保回應形狀一致。"""
     query_id = new_id("q")
     results = [
         {
@@ -167,11 +219,7 @@ def run_recommendation(
                 "filters": request.filters.model_dump(),
                 "params": request.params.model_dump(),
                 "embedding_signature": signature,
-                # 記錄產生此推薦實際用的模型（後台覆寫 > VLM 預設），供回饋分析模型選擇
-                "models": {
-                    "intent": pick("intent") or getattr(vlm, "model", None),
-                    "rerank": pick("rerank") or getattr(vlm, "model", None),
-                },
+                "models": models_snapshot,
             },
             candidates=candidates_debug,
             final_results=results,
@@ -189,10 +237,8 @@ def run_recommendation(
         "rerank_fallback": rerank_fallback,
         "timings_ms": {**timings, "total": latency_ms},
     }
-    if screenshot_debug is not None:
-        debug["screenshot_parse"] = screenshot_debug
-    if opponent_debug is not None:
-        debug["opponent_meme"] = opponent_debug
+    if extra_debug:
+        debug.update(extra_debug)
 
     return {
         "query_id": query_id,
@@ -200,3 +246,112 @@ def run_recommendation(
         "results": results,
         "debug": debug,
     }
+
+
+def _safe_classify(classifier, image_bytes: bytes) -> list[str]:
+    """NV-CLIP 沒字圖分類；未注入或呼叫失敗（如帳號未啟用 → 404）時退回空標籤。"""
+    if classifier is None:
+        return []
+    try:
+        return classifier.classify(image_bytes, top_k=3)
+    except Exception:  # noqa: BLE001 NV-CLIP 未啟用/瞬斷 → 退回無結果，不讓任務崩潰
+        return []
+
+
+def _fast_intent(query: str, source: str, labels: list[str]) -> IntentResult:
+    """快速模式的極簡意圖：單一策略（query 為 OCR 文字或 CLIP 標籤）；無 query 則無策略。"""
+    strategies: list[StrategyPlan] = []
+    if query:
+        if source == "nvclip":
+            name, rationale = "快速情緒", "NV-CLIP 圖片情緒／類別：" + "、".join(labels)
+        else:
+            name, rationale = "快速檢索", "OCR 文字直接語意檢索"
+        strategies = [StrategyPlan(name=name, rationale=rationale, query=query)]
+    return IntentResult(
+        summary=(query or "（未解析到內容）")[:120],
+        punchline="",
+        other_party_emotion=[],
+        conversation_type="快速模式",
+        sensitive=False,
+        low_context=not query,
+        language="zh-TW",
+        strategies=strategies,
+    )
+
+
+def run_fast_recommendation(
+    conn,
+    ocr,  # NvidiaOcr：影像 → 文字（PaddleOCR，非 LLM）
+    classifier,  # ZeroShotClassifier：沒字圖 → 情緒/類別標籤（NV-CLIP）
+    embedder: Embedder,
+    request: RecommendRequest,
+    *,
+    image_bytes: bytes | None = None,
+) -> dict[str, Any]:
+    """快速模式：OCR（有字）或 NV-CLIP 零樣本（沒字）→ 向量檢索，全程無 VLM/LLM。
+
+    回應形狀與 ``run_recommendation`` 完全一致（前端結果頁不需區分），差別在
+    ``debug.fast`` 標示走 ocr / nvclip / text 哪條，且無 rerank（依向量排序）。
+    """
+    timings: dict[str, int] = {}
+    t_start = time.perf_counter()
+
+    ocr_text = ""
+    labels: list[str] = []
+    source = "text"
+    if image_bytes:
+        t0 = time.perf_counter()
+        ocr_text = (ocr.ocr(image_bytes) or "").strip()
+        timings["ocr"] = int((time.perf_counter() - t0) * 1000)
+        if len(ocr_text) >= _FAST_MIN_OCR_CHARS:
+            source, query = "ocr", ocr_text
+        else:
+            # 沒字圖 → NV-CLIP 零樣本情緒/類別當檢索 query。NV-CLIP 未啟用/瞬斷時
+            # 退回無標籤（→ 空結果），不讓整筆任務崩潰。
+            t0 = time.perf_counter()
+            labels = _safe_classify(classifier, image_bytes)
+            timings["nvclip"] = int((time.perf_counter() - t0) * 1000)
+            source, query = "nvclip", " ".join(labels)
+    else:
+        query = " ".join(t.text for t in request.conversation if t.text.strip())
+    query = query.strip()
+
+    conversation = [TurnIn(speaker="other", text=(ocr_text or query or "（圖片）"))]
+    intent = _fast_intent(query, source, labels)
+
+    filters = SearchFilters(
+        franchises=tuple(request.filters.franchises),
+        categories=tuple(request.filters.categories),
+        exclude_nsfw=request.filters.exclude_nsfw,
+    )
+    signature = embedding_signature(embedder)
+    searcher = SqliteBruteForceSearcher(conn, signature=signature)
+    t0 = time.perf_counter()
+    retrieval = retrieve_candidates(
+        searcher,
+        embedder,
+        intent.strategies,
+        filters=filters,
+        params=RetrievalParams(
+            candidate_k=request.params.candidate_k,
+            min_similarity=request.params.min_similarity,
+        ),
+    )
+    timings["retrieval"] = int((time.perf_counter() - t0) * 1000)
+
+    ranked = _vector_fallback(retrieval.candidates, request.params.top_n, reason=FAST_REASON)
+
+    return _assemble_and_log(
+        conn,
+        request,
+        conversation,
+        intent,
+        retrieval,
+        ranked,
+        signature=signature,
+        timings=timings,
+        t_start=t_start,
+        models_snapshot={"intent": f"fast-{source}", "rerank": "vector"},
+        rerank_fallback=False,
+        extra_debug={"fast": {"source": source, "ocr_text": ocr_text, "labels": labels}},
+    )

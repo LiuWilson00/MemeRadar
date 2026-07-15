@@ -23,6 +23,7 @@ import {
   ThumbsUp,
   Trophy,
   XCircle,
+  Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import MemeImage from "../components/MemeImage";
@@ -223,7 +224,8 @@ export default function MobileApp() {
     saveSettings(next);
   };
 
-  const submit = useCallback(async (input: Input, filters: Filters, params: Params) => {
+  const submit = useCallback(
+    async (input: Input, filters: Filters, params: Params, fast: boolean) => {
     lastInput.current = input;
     startRef.current = Date.now();
     setHomeError(null);
@@ -233,7 +235,7 @@ export default function MobileApp() {
     setTab("home");
     setSubmitting(true);
     try {
-      const { task_id } = await submitTask(input, filters, params);
+      const { task_id } = await submitTask(input, filters, params, fast);
       setActiveTaskId(task_id); // 觸發輪詢
       saveActiveSearch(task_id, startRef.current); // 存起來 → 重整可續跑
     } catch (e) {
@@ -271,11 +273,12 @@ export default function MobileApp() {
       const b64 = await fileToBase64(file);
       const filters = settingsToFilters(settings);
       if (modeRef.current === "battle") {
+        // 梗圖大戰＝理解對方的梗圖（多半沒字），本質是視覺任務 → 一律走 VLM 精準
         setBattleImage(`data:${file.type};base64,${b64}`);
-        void submit({ kind: "battle", image: b64 }, filters, DEFAULT_PARAMS);
+        void submit({ kind: "battle", image: b64 }, filters, DEFAULT_PARAMS, false);
       } else {
         setBattleImage(null);
-        void submit({ kind: "screenshot", image: b64 }, filters, DEFAULT_PARAMS);
+        void submit({ kind: "screenshot", image: b64 }, filters, DEFAULT_PARAMS, settings.fastMode);
       }
     },
     [submit, settings],
@@ -285,7 +288,7 @@ export default function MobileApp() {
     const t = text.trim();
     if (!t) return;
     setBattleImage(null);
-    void submit({ kind: "text", text: t }, settingsToFilters(settings), DEFAULT_PARAMS);
+    void submit({ kind: "text", text: t }, settingsToFilters(settings), DEFAULT_PARAMS, settings.fastMode);
   }, [text, submit, settings]);
 
   // 搜尋更多：用選定的標籤 + 更高多樣性，重送上一個輸入（成為一筆新任務）
@@ -295,6 +298,7 @@ export default function MobileApp() {
       lastInput.current,
       { franchises, categories, exclude_nsfw: settings.excludeNsfw },
       REFINE_PARAMS,
+      lastInput.current.kind === "battle" ? false : settings.fastMode,
     );
   };
 
@@ -366,6 +370,8 @@ export default function MobileApp() {
         onToggleTyping={() => setTyping((v) => !v)}
         onSubmitText={onText}
         onPick={pick}
+        fastMode={settings.fastMode}
+        onToggleFast={() => updateSettings({ ...settings, fastMode: !settings.fastMode })}
       />
     );
   }
@@ -488,6 +494,8 @@ function IdleScreen({
   onToggleTyping,
   onSubmitText,
   onPick,
+  fastMode,
+  onToggleFast,
 }: {
   typing: boolean;
   text: string;
@@ -495,6 +503,8 @@ function IdleScreen({
   onToggleTyping: () => void;
   onSubmitText: () => void;
   onPick: (mode: Mode) => void;
+  fastMode: boolean;
+  onToggleFast: () => void;
 }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-6 px-6 pb-4">
@@ -535,9 +545,44 @@ function IdleScreen({
         </span>
       </button>
 
+      <button
+        role="switch"
+        aria-checked={fastMode}
+        aria-label="快速模式"
+        onClick={onToggleFast}
+        style={{ "--i": 3 } as React.CSSProperties}
+        className="flex w-full items-center gap-3 rounded-2xl border border-line bg-panel/60 px-5
+                   py-3.5 text-left transition-transform animate-fade-in-up stagger active:scale-[0.99]"
+      >
+        <Zap
+          className={`size-5 shrink-0 ${fastMode ? "text-amber" : "text-muted"}`}
+          strokeWidth={2}
+          fill={fastMode ? "currentColor" : "none"}
+        />
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-semibold">
+            快速模式{fastMode ? "" : "（已關）"}
+          </span>
+          <span className="block text-xs text-muted">
+            {fastMode ? "秒回，直接讀截圖文字（較粗略）" : "AI 精讀對話，較慢但更懂梗"}
+          </span>
+        </span>
+        <span
+          className={`relative h-6 w-10 shrink-0 rounded-full transition-colors ${
+            fastMode ? "bg-amber" : "bg-line"
+          }`}
+        >
+          <span
+            className={`absolute top-0.5 size-5 rounded-full bg-white shadow transition-all ${
+              fastMode ? "left-[1.125rem]" : "left-0.5"
+            }`}
+          />
+        </span>
+      </button>
+
       <div
         className="w-full animate-fade-in-up stagger"
-        style={{ "--i": 3 } as React.CSSProperties}
+        style={{ "--i": 4 } as React.CSSProperties}
       >
         <button
           onClick={onToggleTyping}

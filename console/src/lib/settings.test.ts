@@ -28,11 +28,17 @@ describe("settings persistence", () => {
   });
 
   it("存檔後讀回一致", () => {
-    saveSettings({ excludeNsfw: false, franchises: ["海綿寶寶"], categories: ["卡通動畫"] });
+    saveSettings({
+      excludeNsfw: false,
+      franchises: ["海綿寶寶"],
+      categories: ["卡通動畫"],
+      fastMode: false,
+    });
     expect(loadSettings()).toEqual({
       excludeNsfw: false,
       franchises: ["海綿寶寶"],
       categories: ["卡通動畫"],
+      fastMode: false,
     });
   });
 
@@ -50,11 +56,17 @@ describe("settings persistence", () => {
     expect(s.franchises).toEqual(["甄嬛傳"]); // 非字串被濾掉
     expect(s.excludeNsfw).toBe(true); // 型別不符 → 預設
     expect(s.categories).toEqual([]);
+    expect(s.fastMode).toBe(true); // 缺 fastMode → 預設開
   });
 
   it("settingsToFilters 對齊推薦 API 的 filters 契約", () => {
     expect(
-      settingsToFilters({ excludeNsfw: true, franchises: ["海綿寶寶"], categories: [] }),
+      settingsToFilters({
+        excludeNsfw: true,
+        franchises: ["海綿寶寶"],
+        categories: [],
+        fastMode: true,
+      }),
     ).toEqual({ franchises: ["海綿寶寶"], categories: [], exclude_nsfw: true });
   });
 });

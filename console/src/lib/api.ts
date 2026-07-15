@@ -159,7 +159,12 @@ export type TaskInput =
 const INPUT_TYPE = { text: "text", screenshot: "screenshot", battle: "meme_battle" } as const;
 
 /** 把手機端三種輸入統一組成 /tasks 的請求體（對齊 /recommend 契約）。 */
-export function buildTaskRequest(input: TaskInput, filters: Filters, params: Params) {
+export function buildTaskRequest(
+  input: TaskInput,
+  filters: Filters,
+  params: Params,
+  fastMode = false,
+) {
   return {
     input_type: INPUT_TYPE[input.kind],
     conversation: input.kind === "text" ? [{ speaker: "other", text: input.text }] : [],
@@ -167,6 +172,7 @@ export function buildTaskRequest(input: TaskInput, filters: Filters, params: Par
     filters,
     params,
     client_id: getClientId(),
+    fast_mode: fastMode,
   };
 }
 
@@ -185,11 +191,12 @@ export async function submitTask(
   input: TaskInput,
   filters: Filters,
   params: Params,
+  fastMode = false,
 ): Promise<{ task_id: string; status: TaskStatus }> {
   const response = await apiFetch("/tasks", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(buildTaskRequest(input, filters, params)),
+    body: JSON.stringify(buildTaskRequest(input, filters, params, fastMode)),
   });
   if (response.status === 429) {
     const detail = await response.json().then((b) => b?.detail).catch(() => null);

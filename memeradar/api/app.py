@@ -24,7 +24,7 @@ import psycopg.errors
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
-from memeradar.api.pipeline import run_recommendation
+from memeradar.api.pipeline import run_fast_recommendation, run_recommendation
 from memeradar.api.ratelimit import RateLimiter
 from memeradar.api.schemas import (
     ChatFeedbackRequest,
@@ -98,6 +98,10 @@ class Deps:
     user_upload_daily_quota: int = 10
     # 是否啟動背景標註 worker（大量匯入時先入庫、標註丟背景）；測試預設關。
     enable_annotation_worker: bool = False
+    # 快速模式用（跳過 VLM）：ocr=NvidiaOcr（Nemotron OCR v2）、classifier=ZeroShotClassifier
+    # （NV-CLIP 沒字圖分類）。無 NVIDIA key 時為 None（fast_mode 請求會落背景任務 error）。
+    ocr: Any = None
+    classifier: Any = None
 
 
 def _default_deps() -> Deps:
@@ -110,6 +114,7 @@ def _default_deps() -> Deps:
 
     settings = get_settings()
     api_key = settings.anthropic_api_key
+    ocr, classifier = _build_fast_clients(settings)
     return Deps(
         client=anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic(),
         vlm=build_default_vlm(),
@@ -134,7 +139,24 @@ def _default_deps() -> Deps:
         anon_daily_quota=settings.anon_daily_quota,
         user_upload_daily_quota=settings.user_upload_daily_quota,
         enable_annotation_worker=True,
+        ocr=ocr,
+        classifier=classifier,
     )
+
+
+def _build_fast_clients(settings):
+    """快速模式的 NVIDIA client（同一組 key）：OCR + 沒字圖分類器。無 key 則回 (None, None)。"""
+    keys = settings.nvidia_keys()
+    if not keys:
+        return None, None
+    from memeradar.shared.taxonomy import get_taxonomy
+    from memeradar.understanding.nvclip import NvClip, ZeroShotClassifier
+    from memeradar.understanding.ocr import NvidiaOcr
+
+    tax = get_taxonomy()
+    # 零樣本詞彙：情緒為主（NV-CLIP 對表情敏感）+ 已知分類，與梗圖標註語彙對齊
+    vocab = list(dict.fromkeys([*tax.emotions, *tax.known_categories]))
+    return NvidiaOcr(keys), ZeroShotClassifier(NvClip(keys), vocab)
 
 
 # 前台（手機 client）需要的公開路徑；其餘一律歸後台（admin）
@@ -209,10 +231,16 @@ def _run_task(deps: Deps, task_id: str, request: RecommendRequest,
     conn = connect(deps.db_path)
     try:
         repo.set_task_status(conn, task_id, "running")
-        result = run_recommendation(
-            conn, deps.vlm, deps.embedder, request,
-            image_bytes=image_bytes, models=repo.get_task_models(conn),
-        )
+        if request.fast_mode:
+            result = run_fast_recommendation(
+                conn, deps.ocr, deps.classifier, deps.embedder, request,
+                image_bytes=image_bytes,
+            )
+        else:
+            result = run_recommendation(
+                conn, deps.vlm, deps.embedder, request,
+                image_bytes=image_bytes, models=repo.get_task_models(conn),
+            )
         repo.set_task_status(conn, task_id, "done", result=result)
     except IntentRefusedError:
         repo.set_task_status(conn, task_id, "error", error="模型基於安全政策拒絕分析此對話")
@@ -406,6 +434,11 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             image_bytes = _decode_image(request.image)
         elif not request.conversation:
             raise HTTPException(status_code=422, detail="conversation 不可為空")
+        if request.fast_mode:
+            return run_fast_recommendation(
+                conn, deps.ocr, deps.classifier, deps.embedder, request,
+                image_bytes=image_bytes,
+            )
         try:
             return run_recommendation(
                 conn, deps.vlm, deps.embedder, request, image_bytes=image_bytes

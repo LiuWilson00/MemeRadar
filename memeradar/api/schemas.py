@@ -36,6 +36,9 @@ class RecommendRequest(BaseModel):
     filters: FiltersIn = Field(default_factory=FiltersIn)
     params: ParamsIn = Field(default_factory=ParamsIn)
     client_id: str | None = None  # localStorage 匿名碼（無個資），供回饋分群分析
+    # 快速模式：OCR（有字）/ NV-CLIP（沒字）→ 向量檢索，跳過 VLM/LLM（秒回，較粗）。
+    # 後端預設 False（精準）；手機端預設打勾送 True，取消勾選才走 VLM 精準模式。
+    fast_mode: bool = False
 
 
 class ParseScreenshotRequest(BaseModel):
