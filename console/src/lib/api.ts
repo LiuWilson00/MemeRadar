@@ -383,6 +383,34 @@ export async function toggleLike(memeId: string): Promise<{ likes: number; liked
   return unwrap(response);
 }
 
+/** 單張梗圖詳情（分享冷載入 / deep-link 用）。 */
+export async function fetchMeme(memeId: string): Promise<GalleryItem> {
+  return unwrap<GalleryItem>(
+    await apiFetch(`/memes/${memeId}?client_id=${encodeURIComponent(getClientId())}`),
+  );
+}
+
+/** 分享網址：分享頁在 API 端（帶 OG 預覽），點進去自動導向 app 的 /m/{id} detail。 */
+export function shareUrl(memeId: string): string {
+  const base = API_BASE || (typeof location !== "undefined" ? location.origin : "");
+  return `${base}/m/${memeId}`;
+}
+
+/** 分享或複製：手機優先叫原生分享面板（可直接送 Line），否則複製到剪貼簿。 */
+export async function shareOrCopy(memeId: string): Promise<"shared" | "copied"> {
+  const url = shareUrl(memeId);
+  if (typeof navigator !== "undefined" && navigator.share) {
+    try {
+      await navigator.share({ title: "MemeRadar 梗圖", url });
+      return "shared";
+    } catch (e) {
+      if ((e as { name?: string })?.name === "AbortError") return "shared"; // 使用者取消
+    }
+  }
+  await navigator.clipboard.writeText(url);
+  return "copied";
+}
+
 export async function fetchComments(memeId: string): Promise<MemeComment[]> {
   const query = new URLSearchParams({ client_id: getClientId() });
   return unwrap<MemeComment[]>(await apiFetch(`/memes/${memeId}/comments?${query}`));

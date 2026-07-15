@@ -915,6 +915,28 @@ def list_gallery(
     return [dict(r) for r in rows]
 
 
+def get_gallery_item(conn: sqlite3.Connection, meme_id: str, *, client_id: str = "") -> dict | None:
+    """單張梗圖的探索卡資料（給 detail 頁 / 分享用）；非 active 或非梗圖回 None。"""
+    row = conn.execute(
+        """
+        SELECT m.meme_id, m.width, m.height, a.ocr_text, a.franchise, a.description,
+               COALESCE(lk.n, 0) AS likes,
+               COALESCE(cm.n, 0) AS comments,
+               (myl.client_id IS NOT NULL) AS liked
+        FROM memes m
+        JOIN meme_annotations a ON a.meme_id = m.meme_id
+        LEFT JOIN (SELECT meme_id, COUNT(*) AS n FROM meme_likes
+                   GROUP BY meme_id) lk ON lk.meme_id = m.meme_id
+        LEFT JOIN (SELECT meme_id, COUNT(*) AS n FROM meme_comments
+                   GROUP BY meme_id) cm ON cm.meme_id = m.meme_id
+        LEFT JOIN meme_likes myl ON myl.meme_id = m.meme_id AND myl.client_id = %s
+        WHERE m.meme_id = %s AND m.status = 'active' AND a.is_meme = 1
+        """,
+        (client_id or "", meme_id),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def add_comment(
     conn: sqlite3.Connection, meme_id: str, client_id: str, author_name: str, text: str
 ) -> dict:

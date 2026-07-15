@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import MemeImage from "../components/MemeImage";
+import ShareButton from "../components/ShareButton";
 import { chat, fetchGallery, sendChatFeedback } from "../lib/api";
 import { logBreadcrumb } from "../lib/breadcrumbs";
 import { randomBotName } from "../lib/nickname";
@@ -218,6 +219,10 @@ export default function ChatScreen() {
                           strokeWidth={m.rating === "down" ? 2.4 : 1.75}
                         />
                       </button>
+                      <ShareButton
+                        memeId={m.meme.meme_id}
+                        className="grid size-7 place-items-center rounded-full text-muted active:scale-90"
+                      />
                     </div>
                   </>
                 ) : (

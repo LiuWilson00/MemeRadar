@@ -30,6 +30,7 @@ import MemeImage from "../components/MemeImage";
 import {
   DEFAULT_PARAMS,
   fetchLeaderboard,
+  fetchMeme,
   fetchMeta,
   fetchTask,
   fetchTaskHistory,
@@ -42,8 +43,10 @@ import {
   type TaskInput,
 } from "../lib/api";
 import BugReporter from "../components/BugReporter";
+import ShareButton from "../components/ShareButton";
 import { logBreadcrumb } from "../lib/breadcrumbs";
 import { downscaleToBase64 } from "../lib/files";
+import { navigate } from "../lib/router";
 import {
   loadSettings,
   saveSettings,
@@ -52,6 +55,7 @@ import {
 } from "../lib/settings";
 import type {
   Filters,
+  GalleryItem,
   LeaderboardEntry,
   Meta,
   Params,
@@ -64,6 +68,7 @@ import type {
 import ChatScreen from "./ChatScreen";
 import Chip, { toggle } from "./Chip";
 import ExploreScreen from "./ExploreScreen";
+import GalleryDetail from "./GalleryDetail";
 import SettingsScreen from "./SettingsScreen";
 
 type Tab = "home" | "chat" | "explore" | "history" | "settings";
@@ -148,13 +153,26 @@ async function saveImage(url: string, name: string) {
   URL.revokeObjectURL(objectUrl);
 }
 
-export default function MobileApp() {
+export default function MobileApp({ initialMemeId }: { initialMemeId?: string | null } = {}) {
   const [tab, setTab] = useState<Tab>("home");
   const [settings, setSettings] = useState<UserSettings>(() => loadSettings());
   const [meta, setMeta] = useState<Meta | null>(null);
   const [showBoard, setShowBoard] = useState(false);
   const [headerHidden, setHeaderHidden] = useState(false);
+  const [deepMeme, setDeepMeme] = useState<GalleryItem | null>(null); // 分享 deep-link 開的圖
   const mainRef = useRef<HTMLElement>(null);
+
+  // 分享連結 /m/{id} 進來 → 抓該圖、開 GalleryDetail
+  useEffect(() => {
+    if (!initialMemeId) return;
+    let alive = true;
+    fetchMeme(initialMemeId)
+      .then((m) => alive && setDeepMeme(m))
+      .catch(() => alive && navigate("/"));
+    return () => {
+      alive = false;
+    };
+  }, [initialMemeId]);
   const scrollState = useRef<{ y: number; target: EventTarget | null }>({ y: 0, target: null });
 
   // 非同步任務：送出得 task_id，背景執行，前台輪詢 fetchTask 直到 done/error。
@@ -447,6 +465,17 @@ export default function MobileApp() {
       {tab !== "explore" && <NavBar tab={tab} onTab={setTab} running={loading} />}
 
       {showBoard && <LeaderboardModal onClose={() => setShowBoard(false)} />}
+
+      {/* 分享 deep-link 開的梗圖 detail（覆蓋在最上層） */}
+      {deepMeme && (
+        <GalleryDetail
+          item={deepMeme}
+          onClose={() => {
+            setDeepMeme(null);
+            navigate("/");
+          }}
+        />
+      )}
 
       {/* 浮動 bug 回報鈕：所有前台畫面都在，貼邊半透明不擋內容 */}
       <BugReporter />
@@ -1138,6 +1167,11 @@ function Slide({
         >
           <Download className="size-4" strokeWidth={1.75} /> 存圖
         </button>
+        <ShareButton
+          memeId={item.meme_id}
+          label
+          className="absolute bottom-3 left-3 flex items-center gap-1.5 rounded-full bg-ink/80 px-3 py-1.5 text-xs text-fg active:bg-ink"
+        />
       </div>
 
       <div className="mt-3 flex items-center gap-2">

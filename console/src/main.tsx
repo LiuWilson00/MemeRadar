@@ -29,17 +29,17 @@ import MobileApp from "./mobile/MobileApp";
 function Root() {
   const path = useRoute();
   const isAdmin = path.startsWith("/admin");
+  const shareMatch = path.match(/^\/m\/([^/]+)$/); // 分享 deep-link /m/{id}
   useEffect(() => {
     document.title = isAdmin ? "MemeRadar 後台" : "MemeRadar";
   }, [isAdmin]);
   if (isAdmin) return <App />;
   // 設了 Client ID 才掛 Google 登入 provider；沒設（本地未設定）也能正常跑，只是不顯示登入。
+  const app = <MobileApp initialMemeId={shareMatch?.[1] ?? null} />;
   return GOOGLE_CLIENT_ID ? (
-    <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
-      <MobileApp />
-    </GoogleOAuthProvider>
+    <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>{app}</GoogleOAuthProvider>
   ) : (
-    <MobileApp />
+    app
   );
 }
 

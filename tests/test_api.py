@@ -1478,6 +1478,54 @@ class TestFastMode:
         assert "screenshot_parse" in detail["result"]["debug"]
 
 
+class TestShare:
+    """單張梗圖詳情 + 分享頁（OG 預覽 + 導向 app detail）；皆公開。"""
+
+    def test_meme_detail_public(self, env):
+        client, _conn, memes, _deps = env
+        mid = memes[0].meme_id
+        r = client.get(f"/memes/{mid}")
+        assert r.status_code == 200, r.text
+        item = r.json()
+        assert item["meme_id"] == mid
+        assert item["image_url"] == f"/memes/{mid}/image"
+        assert {"likes", "comments", "liked", "ocr_text", "franchise"} <= set(item)
+
+    def test_meme_detail_404(self, env):
+        client, *_ = env
+        assert client.get("/memes/m_nope").status_code == 404
+
+    def test_share_page_has_og_tags(self, env):
+        client, _conn, memes, _deps = env
+        mid = memes[0].meme_id
+        html = client.get(f"/m/{mid}").text
+        assert 'property="og:image"' in html
+        assert f"/memes/{mid}/image" in html  # og:image 指向該圖
+        assert f"https://memeradar.zeabur.app/m/{mid}" in html  # 導向 app detail
+        assert 'name="twitter:card"' in html
+
+    def test_share_page_unknown_redirects(self, env):
+        client, *_ = env
+        r = client.get("/m/m_nope", follow_redirects=False)
+        assert r.status_code == 302
+        assert "memeradar.zeabur.app" in r.headers["location"]
+
+    def test_share_routes_public_under_admin(self, tmp_path):
+        db_path = tmp_path / "db.sqlite3"
+        conn = connect(db_path)
+        migrate(conn)
+        meme = seed_meme(conn, tmp_path)
+        conn.close()
+        deps = Deps(
+            client=DualStubClient(), vlm=StubVlm(), embedder=FakeEmbedder(),
+            db_path=db_path, data_dir=tmp_path,
+            admin_username="boss", admin_password="secret",
+        )
+        client = TestClient(create_app(deps))
+        assert client.get(f"/memes/{meme.meme_id}").status_code == 200
+        assert client.get(f"/m/{meme.meme_id}", follow_redirects=False).status_code == 200
+
+
 class TestBugReports:
     """使用者主動回報：POST 公開存檔（含麵包屑）、GET 限後台。"""
 

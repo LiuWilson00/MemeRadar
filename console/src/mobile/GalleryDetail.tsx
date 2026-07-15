@@ -1,6 +1,7 @@
 import { ChevronLeft, Heart, Loader2, MessageCircle, Pencil, Send, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import MemeImage from "../components/MemeImage";
+import ShareButton from "../components/ShareButton";
 import { addComment, deleteComment, editComment, fetchComments, toggleLike } from "../lib/api";
 import { useCurrentUser } from "../lib/auth";
 import { displayName } from "../lib/nickname";
@@ -133,6 +134,11 @@ export default function GalleryDetail({
             <span className="flex items-center gap-1.5 text-sm text-muted">
               <MessageCircle className="size-4" /> {danmaku.length}
             </span>
+            <ShareButton
+              memeId={item.meme_id}
+              label
+              className="flex items-center gap-1.5 rounded-full border border-line px-4 py-2 text-sm text-fg active:scale-95"
+            />
             {item.franchise && <span className="ml-auto text-xs text-muted">{item.franchise}</span>}
           </div>
 

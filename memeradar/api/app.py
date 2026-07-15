@@ -23,7 +23,13 @@ from typing import Any
 import psycopg
 import psycopg.errors
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
 
 from memeradar.api.pipeline import run_fast_recommendation, run_recommendation
 from memeradar.api.ratelimit import RateLimiter
@@ -86,6 +92,7 @@ class Deps:
     admin_password: str = ""
     cors_origins: tuple[str, ...] = ()  # 允許跨源的前端網域（本地留空＝走 vite proxy）
     r2_public_base_url: str = ""  # 有值 = 圖片改由 R2 CDN 服務（302 導向）
+    frontend_base_url: str = "https://memeradar.zeabur.app"  # 分享頁 /m/{id} 導向的 SPA
     rate_limiter: Any = None  # RateLimiter | None；None = 不限流（測試預設）
     # 背景任務排程器：接一個 no-arg callable。None = 用內建 thread pool；
     # 測試注入 ``lambda fn: fn()`` 讓非同步任務同步跑完。每請求讀取，故可事後覆寫。
@@ -129,6 +136,7 @@ def _default_deps() -> Deps:
         admin_password=settings.admin_password,
         cors_origins=tuple(settings.cors_origin_list()),
         r2_public_base_url=settings.r2_public_base_url,
+        frontend_base_url=settings.frontend_base_url,
         rate_limiter=(
             RateLimiter(settings.rate_limit_per_min, 60.0)
             if settings.rate_limit_per_min > 0
@@ -182,6 +190,12 @@ def _is_public(method: str, path: str) -> bool:
         return True
     # 梗圖圖片：手機端要顯示，公開（僅 GET）
     if method == "GET" and re.match(r"^/memes/[^/]+/image$", path) is not None:
+        return True
+    # 單張梗圖詳情（detail 頁 / 分享冷載入）：公開（僅 GET）
+    if method == "GET" and re.match(r"^/memes/[^/]+$", path) is not None:
+        return True
+    # 分享頁 /m/{id}（OG 預覽 + 導向）：公開（僅 GET）
+    if method == "GET" and re.match(r"^/m/[^/]+$", path) is not None:
         return True
     # 檢舉：前台任何人都能檢舉一張梗圖（僅 POST）
     if method == "POST" and re.match(r"^/memes/[^/]+/report$", path) is not None:
@@ -276,6 +290,38 @@ def _persist_image(conn: psycopg.Connection, meme_id: str, image_uri: str, conte
 def _public_user(user: dict) -> dict:
     """對外只回這幾個欄位（隱去 google_sub 等內部欄位）。"""
     return {k: user.get(k) for k in ("user_id", "email", "name", "picture", "role", "nickname")}
+
+
+def _share_html(*, image: str, description: str, app_url: str) -> str:
+    """分享頁 HTML：帶該圖 OG 標籤（爬蟲讀得到縮圖預覽）+ 真人自動導向 app detail。"""
+    import html as _html
+    import json as _json
+
+    img = _html.escape(image, quote=True)
+    desc = _html.escape(description or "在 MemeRadar 看這張梗圖", quote=True)
+    url = _html.escape(app_url, quote=True)
+    js_url = _json.dumps(app_url)
+    return (
+        '<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        "<title>MemeRadar 梗圖</title>"
+        '<meta property="og:type" content="website">'
+        '<meta property="og:site_name" content="MemeRadar">'
+        '<meta property="og:title" content="MemeRadar 梗圖">'
+        f'<meta property="og:description" content="{desc}">'
+        f'<meta property="og:image" content="{img}">'
+        f'<meta property="og:url" content="{url}">'
+        '<meta name="twitter:card" content="summary_large_image">'
+        f'<meta name="twitter:image" content="{img}">'
+        f'<meta http-equiv="refresh" content="0; url={url}">'
+        f"<script>location.replace({js_url})</script>"
+        "<style>body{margin:0;background:#0e1116;color:#e6e6e6;font-family:system-ui,"
+        "sans-serif;display:flex;flex-direction:column;align-items:center;gap:16px;"
+        "padding:24px}img{max-width:min(92vw,420px);border-radius:12px}"
+        "a{color:#f5b301;text-decoration:none;font-weight:600}</style></head><body>"
+        f'<img src="{img}" alt="梗圖">'
+        f'<a href="{url}">在 MemeRadar 開啟 →</a></body></html>'
+    )
 
 
 def _pick_chat_meme(hits: list, exclude: set[str]):
@@ -1090,6 +1136,36 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         mapping = {k: v for k, v in request.models.items() if k in repo.TASK_MODEL_KEYS}
         repo.set_task_models(conn, mapping)
         return {"models": repo.get_task_models(conn)}
+
+    @app.get("/memes/{meme_id}")
+    def get_meme_detail(meme_id: str, client_id: str = "",
+                        conn: psycopg.Connection = Depends(get_conn)):
+        """單張梗圖詳情（給 app detail 頁 / 分享冷載入用）；公開。"""
+        item = repo.get_gallery_item(conn, meme_id, client_id=client_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="梗圖不存在")
+        item["image_url"] = f"/memes/{meme_id}/image"
+        return item
+
+    @app.get("/m/{meme_id}", response_class=HTMLResponse)
+    def share_page(meme_id: str, http_request: Request,
+                   conn: psycopg.Connection = Depends(get_conn)):
+        """分享頁：帶該圖 OG 標籤（Line/FB 直接看到縮圖）+ 真人自動導向 app detail。"""
+        front = (deps.frontend_base_url or "https://memeradar.zeabur.app").rstrip("/")
+        meme = repo.get_meme(conn, meme_id)
+        annotation = repo.get_annotation(conn, meme_id)
+        if meme is None or annotation is None or not annotation.is_meme or meme.status != "active":
+            return RedirectResponse(front, status_code=302)
+        if deps.r2_public_base_url:
+            from memeradar.shared.storage import public_url
+
+            image = public_url(deps.r2_public_base_url, meme.image_uri)
+        else:
+            image = str(http_request.base_url).rstrip("/") + f"/memes/{meme_id}/image"
+        description = (annotation.ocr_text or annotation.description or "").strip()[:100]
+        return HTMLResponse(
+            _share_html(image=image, description=description, app_url=f"{front}/m/{meme_id}")
+        )
 
     @app.get("/memes/{meme_id}/image")
     def meme_image(meme_id: str, conn: psycopg.Connection = Depends(get_conn)):

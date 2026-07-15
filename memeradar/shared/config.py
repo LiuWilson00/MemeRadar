@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     r2_access_key_id: str = ""
     r2_secret_access_key: str = ""
     r2_public_base_url: str = ""  # 如 https://pub-xxx.r2.dev 或 custom domain
+    # 前端 SPA 網址（分享頁 /m/{id} 導向這裡的 app detail）。
+    frontend_base_url: str = "https://memeradar.zeabur.app"
 
     def r2_serving_enabled(self) -> bool:
         return bool(self.r2_public_base_url)
