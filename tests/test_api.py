@@ -1474,3 +1474,37 @@ class TestFastMode:
         assert detail["status"] == "done", detail
         assert "fast" not in detail["result"]["debug"]
         assert "screenshot_parse" in detail["result"]["debug"]
+
+
+class _RaisingOcr:
+    def ocr(self, image_bytes):
+        raise RuntimeError("boom ocr")
+
+
+class TestServerErrorCapture:
+    """未攔截的 500 應寫進 client_errors（後台可見），供 debug。"""
+
+    def test_unhandled_500_logged_to_client_errors(self, tmp_path):
+        db_path = tmp_path / "db.sqlite3"
+        conn = connect(db_path)
+        migrate(conn)
+        deps = Deps(
+            client=DualStubClient(), vlm=StubVlm(), embedder=FakeEmbedder(),
+            db_path=db_path, data_dir=tmp_path,
+            ocr=_RaisingOcr(), classifier=_FastStubClassifier([]),
+        )
+        # raise_server_exceptions=False → 讓 handler 的 500 回應被回傳（而非 re-raise）
+        client = TestClient(create_app(deps), raise_server_exceptions=False)
+        r = client.post("/recommend", json={
+            **BASE_REQUEST, "input_type": "screenshot", "conversation": [],
+            "image": _FAST_PNG, "fast_mode": True,
+        })
+        assert r.status_code == 500
+        errors = repo.list_client_errors(conn)
+        assert any(
+            "RuntimeError" in e["message"]
+            and e["client_id"] == "__server__"
+            and "/recommend" in (e["url"] or "")
+            for e in errors
+        ), errors
+        conn.close()

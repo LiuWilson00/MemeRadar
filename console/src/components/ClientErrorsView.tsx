@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { fetchClientErrors } from "../lib/api";
 import type { ClientError } from "../types";
 
-/** 前台錯誤（類 CloudWatch）：收集瀏覽器端拋出的錯誤，方便 debug。 */
+/** 前台 + 伺服器錯誤（類 CloudWatch）：瀏覽器端錯誤與後端未攔截的 500，方便 debug。 */
 export default function ClientErrorsView() {
   const [items, setItems] = useState<ClientError[] | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -30,7 +30,9 @@ export default function ClientErrorsView() {
     <div className="space-y-3 animate-fade-in">
       <div className="flex items-center justify-between">
         <p className="text-xs text-muted">
-          前台瀏覽器回報的錯誤（新到舊；同一訊息每 session 去重、每 session 上限 20 筆）。
+          瀏覽器端錯誤 +{" "}
+          <span className="text-amber">伺服器 500</span>
+          （新到舊；後端 500 帶完整 traceback）。
         </p>
         <button
           onClick={load}
@@ -46,15 +48,29 @@ export default function ClientErrorsView() {
           <p className="text-sm">目前沒有前台錯誤 🎉</p>
         </div>
       ) : (
-        items.map((e) => (
-          <article key={e.error_id} className="rounded-lg border border-line bg-panel p-3">
+        items.map((e) => {
+          const isServer = e.client_id === "__server__";
+          return (
+          <article
+            key={e.error_id}
+            className={`rounded-lg border bg-panel p-3 ${
+              isServer ? "border-amber/60" : "border-line"
+            }`}
+          >
             <div className="flex items-start gap-2">
-              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-danger" />
+              <AlertTriangle
+                className={`mt-0.5 size-4 shrink-0 ${isServer ? "text-amber" : "text-danger"}`}
+              />
+              {isServer && (
+                <span className="mt-0.5 shrink-0 rounded bg-amber/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber">
+                  伺服器
+                </span>
+              )}
               <span className="break-all font-mono text-sm text-fg">{e.message}</span>
             </div>
             <p className="mt-1 font-mono text-xs text-muted">
               {e.created_at} · <span className="text-fg">{e.url || "（無 URL）"}</span> ·{" "}
-              {e.client_id || "匿名"}
+              {isServer ? "後端" : e.client_id || "匿名"}
             </p>
             {e.user_agent && (
               <p className="mt-0.5 truncate text-[11px] text-muted" title={e.user_agent}>
@@ -77,7 +93,8 @@ export default function ClientErrorsView() {
               </div>
             )}
           </article>
-        ))
+          );
+        })
       )}
     </div>
   );

@@ -375,6 +375,31 @@ def create_app(deps: Deps | None = None) -> FastAPI:
 
     app = FastAPI(title="MemeRadar API", version="0.1.0")
 
+    @app.exception_handler(Exception)
+    async def _capture_server_error(request: Request, exc: Exception):
+        """未攔截的 500：traceback 寫進 client_errors（後台可見）+ stderr（Zeabur log）。
+
+        HTTPException / 422 由 FastAPI 自己處理，不會進來。純 OOM 攔不到（process 被殺）。
+        """
+        import sys
+        import traceback
+
+        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        print(f"[500] {request.method} {request.url.path}\n{tb}", file=sys.stderr, flush=True)
+        try:
+            with get_pool().connection() as conn:
+                repo.insert_client_error(
+                    conn,
+                    message=f"{type(exc).__name__}: {exc}"[:2000],
+                    stack=tb[:8000],
+                    url=f"{request.method} {request.url.path}",
+                    user_agent=request.headers.get("user-agent"),
+                    client_id="__server__",  # 標記為伺服器端錯誤（有別於前台回報）
+                )
+        except Exception:  # noqa: BLE001 記錄失敗不能再拋，否則遮蔽原始錯誤
+            pass
+        return JSONResponse(status_code=500, content={"detail": "內部錯誤"})
+
     from concurrent.futures import ThreadPoolExecutor
 
     # 免費端點延遲高（冷啟動可達數十秒），故推薦走背景任務；小池即可，

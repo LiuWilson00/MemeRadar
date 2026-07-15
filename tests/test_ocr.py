@@ -96,3 +96,40 @@ def test_ocr_fallback_collects_text_when_shape_differs():
 def test_ocr_requires_keys():
     with pytest.raises(RuntimeError):
         NvidiaOcr([])
+
+
+def _png(w: int, h: int) -> bytes:
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (w, h), (120, 90, 200)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_downscale_shrinks_large_image():
+    import io
+
+    from PIL import Image
+
+    from memeradar.understanding.ocr import _downscale_if_large
+
+    big = _png(4000, 4000)  # 16MP
+    out = _downscale_if_large(big, max_pixels=6_000_000)
+    w, h = Image.open(io.BytesIO(out)).size
+    assert w * h <= 6_000_000  # 縮到門檻內
+    assert w < 4000 and h < 4000  # 尺寸確實變小
+
+
+def test_downscale_leaves_small_image_untouched():
+    from memeradar.understanding.ocr import _downscale_if_large
+
+    small = _png(200, 200)
+    assert _downscale_if_large(small, max_pixels=6_000_000) is small
+
+
+def test_downscale_returns_original_on_non_image():
+    from memeradar.understanding.ocr import _downscale_if_large
+
+    assert _downscale_if_large(b"not an image") == b"not an image"

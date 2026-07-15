@@ -41,7 +41,7 @@ import {
   submitTask,
   type TaskInput,
 } from "../lib/api";
-import { fileToBase64 } from "../lib/files";
+import { downscaleToBase64 } from "../lib/files";
 import {
   loadSettings,
   saveSettings,
@@ -270,11 +270,12 @@ export default function MobileApp() {
   const onFile = useCallback(
     async (file: File | undefined) => {
       if (!file) return;
-      const b64 = await fileToBase64(file);
+      // 上傳前先縮圖（原始像素高解析截圖會撐爆 gateway → 502）；縮完一律 JPEG
+      const b64 = await downscaleToBase64(file);
       const filters = settingsToFilters(settings);
       if (modeRef.current === "battle") {
         // 梗圖大戰＝理解對方的梗圖（多半沒字），本質是視覺任務 → 一律走 VLM 精準
-        setBattleImage(`data:${file.type};base64,${b64}`);
+        setBattleImage(`data:image/jpeg;base64,${b64}`);
         void submit({ kind: "battle", image: b64 }, filters, DEFAULT_PARAMS, false);
       } else {
         setBattleImage(null);
