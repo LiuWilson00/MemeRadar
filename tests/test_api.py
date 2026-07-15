@@ -883,8 +883,10 @@ class TestLibrary:
         deps.admin_username, deps.admin_password = "boss", "pw"
         assert client.get("/health").status_code == 200
         assert client.get("/meta").status_code == 200
-        assert client.post("/recommend", json=BASE_REQUEST).status_code == 200
+        assert client.get("/leaderboard").status_code == 200  # 前台公開端點
         assert client.get(f"/memes/{memes[0].meme_id}/image").status_code == 200  # 圖片公開
+        # /recommend 已改後台限定（同步直打 VLM，不讓匿名繞配額）
+        assert client.post("/recommend", json=BASE_REQUEST).status_code == 401
 
     def test_admin_route_requires_credentials(self, env):
         client, _c, _m, deps = env
@@ -1203,10 +1205,29 @@ class TestProdHardening:
     def test_cors_headers_when_configured(self, tmp_path):
         deps = Deps(client=DualStubClient(), vlm=StubVlm(), embedder=FakeEmbedder(),
                     db_path=tmp_path, data_dir=tmp_path,
-                    cors_origins=("https://app.example.com",))
+                    cors_origins=("https://app.example.com",),
+                    admin_username="a", admin_password="b")  # 跨源部署需設後台帳密
         client = TestClient(create_app(deps))
         r = client.get("/health", headers={"Origin": "https://app.example.com"})
         assert r.headers.get("access-control-allow-origin") == "https://app.example.com"
+
+    def test_refuses_start_when_deployed_without_admin(self, tmp_path):
+        deps = Deps(client=DualStubClient(), vlm=StubVlm(), embedder=FakeEmbedder(),
+                    db_path=tmp_path, data_dir=tmp_path,
+                    cors_origins=("https://app.example.com",))  # 有 CORS 卻無 admin 帳密
+        with pytest.raises(RuntimeError):
+            create_app(deps)
+
+    def test_recommend_is_admin_only(self, tmp_path):
+        deps = Deps(client=DualStubClient(), vlm=StubVlm(), embedder=FakeEmbedder(),
+                    db_path=tmp_path, data_dir=tmp_path,
+                    admin_username="a", admin_password="b")
+        client = TestClient(create_app(deps))
+        assert client.post("/recommend", json=BASE_REQUEST).status_code == 401  # 不再公開
+        cred = base64.b64encode(b"a:b").decode()
+        ok = client.post("/recommend", json=BASE_REQUEST,
+                         headers={"Authorization": f"Basic {cred}"})
+        assert ok.status_code != 401  # 帶 admin Basic 放行
 
     def test_no_cors_headers_when_unconfigured(self, env):
         client, *_ = env  # cors_origins 預設空

@@ -3,6 +3,7 @@ import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
 import App from "./App";
+import ErrorBoundary from "./components/ErrorBoundary";
 import { GOOGLE_CLIENT_ID } from "./lib/auth";
 import { useRoute } from "./lib/router";
 import MobileApp from "./mobile/MobileApp";
@@ -28,6 +29,8 @@ function Root() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <Root />
+    <ErrorBoundary>
+      <Root />
+    </ErrorBoundary>
   </StrictMode>,
 );

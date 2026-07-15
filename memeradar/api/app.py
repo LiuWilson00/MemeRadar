@@ -135,8 +135,10 @@ def _default_deps() -> Deps:
 
 # 前台（手機 client）需要的公開路徑；其餘一律歸後台（admin）
 # 註：/auth/* 為前台使用者登入，非後台 admin，故列公開（其自身以 Bearer 把關）。
+# 註：/recommend（同步、直打 VLM）刻意「不」公開——前台一律走有配額的 /tasks，
+# /recommend 僅供後台除錯（admin Basic）。放公開會讓匿名者繞過每日配額直打 VLM。
 _PUBLIC_EXACT = {
-    "/health", "/recommend", "/feedback", "/meta", "/tasks", "/events", "/leaderboard",
+    "/health", "/feedback", "/meta", "/tasks", "/events", "/leaderboard",
     "/auth/google", "/auth/me", "/auth/nickname", "/library/memes", "/gallery",
     "/docs", "/openapi.json",
 }
@@ -305,6 +307,13 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             deps.embedder.embed(["暖機"])
         except Exception:  # noqa: BLE001
             pass
+
+    # 跨源部署（有設 CORS_ORIGINS）卻沒設後台帳密 → 後台端點全裸；直接拒啟（fail closed）。
+    if deps.cors_origins and not (deps.admin_username and deps.admin_password):
+        raise RuntimeError(
+            "偵測到跨源部署（CORS_ORIGINS 已設）但未設 ADMIN_USERNAME/ADMIN_PASSWORD——"
+            "後台端點（上傳/複核/設定/報表/檢舉/儀表板）將完全不設防。請設好後台帳密再啟動。"
+        )
 
     startup_conn = connect(deps.db_path)
     migrate(startup_conn)

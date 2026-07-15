@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable
 from typing import Any
@@ -76,6 +77,7 @@ class NvidiaVlm:
         self._temperature = temperature
         self._cool = [0.0] * len(clients)  # 每把 key 冷卻到期的時間戳
         self._rr = 0  # round-robin 指標
+        self._lock = threading.Lock()  # 背景標註 worker + 請求緒會並發存取 _cool/_rr
 
     @property
     def model(self) -> str:
@@ -85,11 +87,12 @@ class NvidiaVlm:
         """回傳下一把可用 key 的索引（round-robin，跳過冷卻中）；全冷卻回 None。"""
         n = len(self._clients)
         now = self._now()
-        for offset in range(n):
-            i = (self._rr + offset) % n
-            if self._cool[i] <= now:
-                self._rr = (i + 1) % n
-                return i
+        with self._lock:
+            for offset in range(n):
+                i = (self._rr + offset) % n
+                if self._cool[i] <= now:
+                    self._rr = (i + 1) % n
+                    return i
         return None
 
     def annotate(
@@ -160,7 +163,8 @@ class NvidiaVlm:
             except Exception as exc:  # noqa: BLE001 — 依 status_code 分流
                 status = getattr(exc, "status_code", None)
                 if status == 429:
-                    self._cool[i] = self._now() + self._cooldown_s
+                    with self._lock:
+                        self._cool[i] = self._now() + self._cooldown_s
                     self._emit(sink, i, task, meme_id, use_model, "rate_limited", t0)
                 else:
                     self._emit(sink, i, task, meme_id, use_model, "error", t0, error=str(exc)[:200])
