@@ -532,6 +532,42 @@ class TestGoogleAuth:
         client, _ = _auth_client(tmp_path)
         assert client.post("/auth/google", json={"credential": "nope"}).status_code == 401
 
+
+class TestFavorites:
+    """梗圖收藏：登入使用者專屬（綁 user_id、跨裝置）。"""
+
+    def _login(self, client):
+        return client.post("/auth/google", json={"credential": "good-cred"}).json()["token"]
+
+    def test_favorite_flow(self, tmp_path):
+        client, conn = _auth_client(tmp_path)
+        meme = seed_meme(conn, tmp_path)
+        h = {"Authorization": f"Bearer {self._login(client)}"}
+
+        r = client.post(f"/memes/{meme.meme_id}/favorite", headers=h)
+        assert r.status_code == 201 and r.json()["favorited"] is True
+        # 詳情帶 favorited=True（給收藏鈕初始狀態）
+        assert client.get(f"/memes/{meme.meme_id}", headers=h).json()["favorited"] is True
+        # 收藏列表
+        favs = client.get("/favorites", headers=h).json()
+        assert [f["meme_id"] for f in favs] == [meme.meme_id]
+        assert favs[0]["image_url"] == f"/memes/{meme.meme_id}/image"
+        # 取消收藏
+        rm = client.delete(f"/memes/{meme.meme_id}/favorite", headers=h)
+        assert rm.json()["favorited"] is False
+        assert client.get("/favorites", headers=h).json() == []
+
+    def test_favorite_requires_login(self, tmp_path):
+        client, conn = _auth_client(tmp_path)
+        meme = seed_meme(conn, tmp_path)
+        assert client.post(f"/memes/{meme.meme_id}/favorite").status_code == 401
+        assert client.get("/favorites").status_code == 401
+
+    def test_detail_favorited_false_when_anonymous(self, tmp_path):
+        client, conn = _auth_client(tmp_path)
+        meme = seed_meme(conn, tmp_path)
+        assert client.get(f"/memes/{meme.meme_id}").json()["favorited"] is False
+
     def test_me_requires_valid_bearer(self, tmp_path):
         client, _ = _auth_client(tmp_path)
         assert client.get("/auth/me").status_code == 401

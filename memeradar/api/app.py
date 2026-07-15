@@ -176,7 +176,7 @@ def _build_fast_clients(settings, vlm):
 _PUBLIC_EXACT = {
     "/health", "/feedback", "/meta", "/tasks", "/events", "/leaderboard", "/chat",
     "/auth/google", "/auth/me", "/auth/nickname", "/library/memes", "/gallery",
-    "/docs", "/openapi.json",
+    "/favorites", "/docs", "/openapi.json",
 }
 
 # /events 接受的事件類型（白名單，防亂塞）
@@ -211,6 +211,9 @@ def _is_public(method: str, path: str) -> bool:
         return True
     # 探索圖庫：按讚 / 彈幕留言（前台，各種方法）
     if re.match(r"^/memes/[^/]+/(like|comments)$", path) is not None:
+        return True
+    # 收藏：登入使用者（端點自身以 Bearer 把關，故列公開繞過 admin gate）
+    if re.match(r"^/memes/[^/]+/favorite$", path) is not None:
         return True
     if re.match(r"^/memes/[^/]+/comments/[^/]+$", path) is not None:
         return True
@@ -1138,14 +1141,48 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         return {"models": repo.get_task_models(conn)}
 
     @app.get("/memes/{meme_id}")
-    def get_meme_detail(meme_id: str, client_id: str = "",
+    def get_meme_detail(meme_id: str, http_request: Request, client_id: str = "",
                         conn: psycopg.Connection = Depends(get_conn)):
-        """單張梗圖詳情（給 app detail 頁 / 分享冷載入用）；公開。"""
+        """單張梗圖詳情（給 app detail 頁 / 分享冷載入用）；公開。登入者帶 favorited。"""
         item = repo.get_gallery_item(conn, meme_id, client_id=client_id)
         if item is None:
             raise HTTPException(status_code=404, detail="梗圖不存在")
         item["image_url"] = f"/memes/{meme_id}/image"
+        user = _resolve_user(deps, http_request, conn)
+        item["favorited"] = bool(user and repo.is_favorited(conn, user["user_id"], meme_id))
         return item
+
+    def _require_user(http_request: Request, conn):
+        user = _resolve_user(deps, http_request, conn)
+        if user is None:
+            raise HTTPException(status_code=401, detail="請先登入")
+        return user
+
+    @app.post("/memes/{meme_id}/favorite", status_code=201)
+    def add_favorite(meme_id: str, http_request: Request,
+                     conn: psycopg.Connection = Depends(get_conn)):
+        """收藏一張梗圖（登入使用者，跨裝置保留）。"""
+        user = _require_user(http_request, conn)
+        if repo.get_meme(conn, meme_id) is None:
+            raise HTTPException(status_code=404, detail="梗圖不存在")
+        repo.add_favorite(conn, user["user_id"], meme_id)
+        return {"favorited": True}
+
+    @app.delete("/memes/{meme_id}/favorite")
+    def remove_favorite(meme_id: str, http_request: Request,
+                        conn: psycopg.Connection = Depends(get_conn)):
+        user = _require_user(http_request, conn)
+        repo.remove_favorite(conn, user["user_id"], meme_id)
+        return {"favorited": False}
+
+    @app.get("/favorites")
+    def list_favorites(http_request: Request, conn: psycopg.Connection = Depends(get_conn)):
+        """登入使用者的收藏（新到舊）。"""
+        user = _require_user(http_request, conn)
+        items = repo.list_favorites(conn, user["user_id"])
+        for it in items:
+            it["image_url"] = f"/memes/{it['meme_id']}/image"
+        return items
 
     @app.get("/m/{meme_id}", response_class=HTMLResponse)
     def share_page(meme_id: str, http_request: Request,

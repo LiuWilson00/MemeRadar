@@ -227,6 +227,7 @@ export interface GalleryItem {
   likes: number;
   comments: number;
   liked: boolean;
+  favorited?: boolean; // 登入使用者是否已收藏（僅單張詳情 / 收藏列表帶）
 }
 
 /** 一則彈幕留言。 */

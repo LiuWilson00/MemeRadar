@@ -915,6 +915,51 @@ def list_gallery(
     return [dict(r) for r in rows]
 
 
+def add_favorite(conn: sqlite3.Connection, user_id: str, meme_id: str) -> None:
+    conn.execute(
+        "INSERT INTO meme_favorites (user_id, meme_id, created_at) VALUES (%s, %s, %s) "
+        "ON CONFLICT (user_id, meme_id) DO NOTHING",
+        (user_id, meme_id, _now_iso()),
+    )
+    conn.commit()
+
+
+def remove_favorite(conn: sqlite3.Connection, user_id: str, meme_id: str) -> None:
+    conn.execute(
+        "DELETE FROM meme_favorites WHERE user_id = %s AND meme_id = %s", (user_id, meme_id)
+    )
+    conn.commit()
+
+
+def is_favorited(conn: sqlite3.Connection, user_id: str, meme_id: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM meme_favorites WHERE user_id = %s AND meme_id = %s", (user_id, meme_id)
+    ).fetchone()
+    return row is not None
+
+
+def list_favorites(conn: sqlite3.Connection, user_id: str) -> list[dict]:
+    """使用者收藏的梗圖（新到舊），GalleryItem 形狀（image_url 由端點層補）。"""
+    rows = conn.execute(
+        """
+        SELECT m.meme_id, m.width, m.height, a.ocr_text, a.franchise,
+               COALESCE(lk.n, 0) AS likes, COALESCE(cm.n, 0) AS comments,
+               FALSE AS liked, TRUE AS favorited
+        FROM meme_favorites f
+        JOIN memes m ON m.meme_id = f.meme_id
+        JOIN meme_annotations a ON a.meme_id = m.meme_id
+        LEFT JOIN (SELECT meme_id, COUNT(*) AS n FROM meme_likes
+                   GROUP BY meme_id) lk ON lk.meme_id = m.meme_id
+        LEFT JOIN (SELECT meme_id, COUNT(*) AS n FROM meme_comments
+                   GROUP BY meme_id) cm ON cm.meme_id = m.meme_id
+        WHERE f.user_id = %s AND m.status = 'active'
+        ORDER BY f.created_at DESC
+        """,
+        (user_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_gallery_item(conn: sqlite3.Connection, meme_id: str, *, client_id: str = "") -> dict | None:
     """單張梗圖的探索卡資料（給 detail 頁 / 分享用）；非 active 或非梗圖回 None。"""
     row = conn.execute(

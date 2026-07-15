@@ -390,6 +390,17 @@ export async function fetchMeme(memeId: string): Promise<GalleryItem> {
   );
 }
 
+/** 收藏 / 取消收藏（需登入；Bearer 由 authHeaders 自動帶）。 */
+export async function toggleFavorite(memeId: string, on: boolean): Promise<void> {
+  const res = await apiFetch(`/memes/${memeId}/favorite`, { method: on ? "POST" : "DELETE" });
+  if (!res.ok) throw new Error("收藏失敗，請確認已登入");
+}
+
+/** 登入使用者的收藏清單（新到舊）。 */
+export async function fetchFavorites(): Promise<GalleryItem[]> {
+  return unwrap<GalleryItem[]>(await apiFetch("/favorites"));
+}
+
 /** 分享網址：分享頁在 API 端（帶 OG 預覽），點進去自動導向 app 的 /m/{id} detail。 */
 export function shareUrl(memeId: string): string {
   const base = API_BASE || (typeof location !== "undefined" ? location.origin : "");

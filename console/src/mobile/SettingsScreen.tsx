@@ -1,5 +1,5 @@
 import { GoogleLogin } from "@react-oauth/google";
-import { Check, ImagePlus, LogOut, User as UserIcon } from "lucide-react";
+import { Bookmark, Check, ChevronRight, ImagePlus, LogOut, User as UserIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { googleLogin, setNickname } from "../lib/api";
 import {
@@ -20,15 +20,29 @@ export default function SettingsScreen({
   settings,
   meta,
   onChange,
+  onOpenFavorites,
 }: {
   settings: UserSettings;
   meta: Meta | null;
   onChange: (next: UserSettings) => void;
+  onOpenFavorites?: () => void;
 }) {
   const [cleared, setCleared] = useState(false);
+  const user = useCurrentUser();
   return (
     <div className="flex-1 space-y-6 overflow-y-auto px-5 py-4">
       <AccountSection />
+
+      {user && onOpenFavorites && (
+        <button
+          onClick={onOpenFavorites}
+          className="flex w-full items-center gap-3 rounded-2xl border border-line bg-panel px-4 py-3 text-left active:bg-raised"
+        >
+          <Bookmark className="size-5 shrink-0 text-amber" strokeWidth={1.9} />
+          <span className="text-sm font-semibold">我的收藏</span>
+          <ChevronRight className="ml-auto size-4 text-muted" />
+        </button>
+      )}
 
       <section>
         <h2 className="mb-2 text-sm font-semibold">內容過濾</h2>

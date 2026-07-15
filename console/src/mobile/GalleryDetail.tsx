@@ -1,5 +1,6 @@
 import { ChevronLeft, Heart, Loader2, MessageCircle, Pencil, Send, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import FavoriteButton from "../components/FavoriteButton";
 import MemeImage from "../components/MemeImage";
 import ShareButton from "../components/ShareButton";
 import { addComment, deleteComment, editComment, fetchComments, toggleLike } from "../lib/api";
@@ -136,6 +137,12 @@ export default function GalleryDetail({
             </span>
             <ShareButton
               memeId={item.meme_id}
+              label
+              className="flex items-center gap-1.5 rounded-full border border-line px-4 py-2 text-sm text-fg active:scale-95"
+            />
+            <FavoriteButton
+              memeId={item.meme_id}
+              initial={item.favorited ?? false}
               label
               className="flex items-center gap-1.5 rounded-full border border-line px-4 py-2 text-sm text-fg active:scale-95"
             />

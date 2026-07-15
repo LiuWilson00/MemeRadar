@@ -68,6 +68,7 @@ import type {
 import ChatScreen from "./ChatScreen";
 import Chip, { toggle } from "./Chip";
 import ExploreScreen from "./ExploreScreen";
+import FavoritesScreen from "./FavoritesScreen";
 import GalleryDetail from "./GalleryDetail";
 import SettingsScreen from "./SettingsScreen";
 
@@ -160,6 +161,7 @@ export default function MobileApp({ initialMemeId }: { initialMemeId?: string | 
   const [showBoard, setShowBoard] = useState(false);
   const [headerHidden, setHeaderHidden] = useState(false);
   const [deepMeme, setDeepMeme] = useState<GalleryItem | null>(null); // 分享 deep-link 開的圖
+  const [favoritesOpen, setFavoritesOpen] = useState(false); // 我的收藏覆蓋層
   const mainRef = useRef<HTMLElement>(null);
 
   // 分享連結 /m/{id} 進來 → 抓該圖、開 GalleryDetail
@@ -449,7 +451,12 @@ export default function MobileApp({ initialMemeId }: { initialMemeId?: string | 
 
       <main ref={mainRef} className="flex min-h-0 flex-1 flex-col">
         {tab === "settings" ? (
-          <SettingsScreen settings={settings} meta={meta} onChange={updateSettings} />
+          <SettingsScreen
+          settings={settings}
+          meta={meta}
+          onChange={updateSettings}
+          onOpenFavorites={() => setFavoritesOpen(true)}
+        />
         ) : tab === "history" ? (
           <HistoryScreen activeId={activeTaskId} onOpen={openTask} />
         ) : tab === "explore" ? (
@@ -476,6 +483,9 @@ export default function MobileApp({ initialMemeId }: { initialMemeId?: string | 
           }}
         />
       )}
+
+      {/* 我的收藏（登入使用者），全螢幕覆蓋 */}
+      {favoritesOpen && <FavoritesScreen onClose={() => setFavoritesOpen(false)} />}
 
       {/* 浮動 bug 回報鈕：所有前台畫面都在，貼邊半透明不擋內容 */}
       <BugReporter />
