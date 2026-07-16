@@ -596,6 +596,19 @@ def list_sources(conn: sqlite3.Connection, meme_id: str) -> list[MemeSource]:
     ]
 
 
+def imported_source_urls(conn: sqlite3.Connection, platform: str) -> set[str]:
+    """某來源平台已入庫的 post_url 集合。
+
+    爬蟲回填「下載前」預先去重用：跳過已入庫的 URL、免得白下載一堆再靠 sha256 擋掉
+    （重跑時最省頻寬/時間的關鍵）。sha256/phash 去重仍是最終正確性保證。
+    """
+    rows = conn.execute(
+        "SELECT post_url FROM meme_sources WHERE platform = %s AND post_url IS NOT NULL",
+        (platform,),
+    ).fetchall()
+    return {r["post_url"] for r in rows}
+
+
 # ── embeddings ───────────────────────────────────────────────────────
 
 

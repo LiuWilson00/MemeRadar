@@ -137,6 +137,9 @@ def main(argv: list[str] | None = None) -> int:
     conn = connect()
     migrate(conn)
     totals = {"imported": 0, "duplicate": 0, "filtered": 0, "failed": 0}
+    # 下載前預先去重：已入庫的 post_url 先跳過、不白下載（重跑/回填時最省時間的關鍵；
+    # sha256/phash 仍是最終去重保證）。所有 memes_tw 候選都以 platform=memes_tw 入庫。
+    imported_urls = repo.imported_source_urls(conn, "memes_tw")
     try:
         for adapter in adapters:
             before = None if args.ignore_watermark else repo.get_watermark(conn, adapter.name)
@@ -144,25 +147,30 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\n[{adapter.name}] 抓到 {len(cands)} 張（水位 {before} → {after}），匯入中…")
             imp = dup = filt = fail = 0
             for i, cand in enumerate(cands, 1):
-                try:
-                    content = _download(cand.images[0]["url"])
-                    result = _import_one(
-                        conn, cand, content, settings.memeradar_data_dir,
-                        vlm=vlm, embedder=embedder,
-                    )
-                except Exception as exc:  # noqa: BLE001 單張失敗不中斷整批
-                    fail += 1
-                    if fail <= 5:
-                        print(f"  ✗ {cand.post_id}：{exc!r}")
+                if cand.post_url and cand.post_url in imported_urls:
+                    dup += 1  # 下載前就跳過已入庫的
                 else:
-                    imp += result == "imported"
-                    dup += result == "duplicate"
-                    filt += result == "filtered"
-                    fail += result not in ("imported", "duplicate", "filtered")
+                    try:
+                        content = _download(cand.images[0]["url"])
+                        result = _import_one(
+                            conn, cand, content, settings.memeradar_data_dir,
+                            vlm=vlm, embedder=embedder,
+                        )
+                    except Exception as exc:  # noqa: BLE001 單張失敗不中斷整批
+                        fail += 1
+                        if fail <= 5:
+                            print(f"  ✗ {cand.post_id}：{exc!r}")
+                    else:
+                        imp += result == "imported"
+                        dup += result == "duplicate"
+                        filt += result == "filtered"
+                        fail += result not in ("imported", "duplicate", "filtered")
+                        if result != "duplicate" and cand.post_url:
+                            imported_urls.add(cand.post_url)  # 記住這輪新入庫的
+                    time.sleep(args.img_delay)
                 if i % 25 == 0:
                     print(f"  …{i}/{len(cands)}（入庫 {imp}/重複 {dup}/濾除 {filt}/失敗 {fail}）",
                           flush=True)
-                time.sleep(args.img_delay)
             if after:
                 repo.set_watermark(conn, adapter.name, after)
             print(f"[{adapter.name}] 完成：入庫 {imp} / 重複 {dup} / 濾除 {filt} / 失敗 {fail}")

@@ -177,6 +177,24 @@ class TestImportImageBytes:
         assert meme is None
 
 
+def test_imported_source_urls_filters_by_platform(conn, data_dir, tmp_path):
+    """爬蟲下載前預先去重用：回某來源平台已入庫的 post_url 集合。"""
+    make_image(tmp_path / "a.png")
+    import_image_bytes(
+        conn, (tmp_path / "a.png").read_bytes(), data_dir=data_dir,
+        platform="memes_tw", post_url="https://memes.tw/wtf/123",
+    )
+    make_image(tmp_path / "b.png", color=(0, 0, 250))
+    import_image_bytes(
+        conn, (tmp_path / "b.png").read_bytes(), data_dir=data_dir,
+        platform="other", post_url="https://other/9",
+    )
+
+    urls = repo.imported_source_urls(conn, "memes_tw")
+
+    assert urls == {"https://memes.tw/wtf/123"}
+
+
 def _sha256_of(path: Path) -> str:
     import hashlib
 
