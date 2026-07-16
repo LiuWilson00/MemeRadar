@@ -19,6 +19,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import psycopg
 from PIL import Image, UnidentifiedImageError
 
 from memeradar.shared import repository as repo
@@ -96,7 +97,16 @@ def import_image_bytes(
         width=width,
         height=height,
     )
-    repo.insert_meme(conn, meme)
+    try:
+        repo.insert_meme(conn, meme)
+    except psycopg.errors.UniqueViolation:
+        # 並發匯入同一張圖（相同 sha256）：另一請求先插入了 → 當作 duplicate 回既有那張，
+        # 別讓約束層的 UniqueViolation 冒成 500。交易已中止，先 rollback 再查。
+        conn.rollback()
+        existing = repo.find_meme_by_sha256(conn, sha256)
+        if existing is not None:
+            return existing, "duplicate"
+        raise
     repo.add_source(
         conn,
         MemeSource(

@@ -1,11 +1,10 @@
 """P1-1 標註器：單一 VLM pass 完成 OCR / 描述 / 標籤 / 使用情境（docs/03 §2）。
 
 設計要點：
-- Claude vision + structured outputs（``client.messages.parse`` + pydantic），
-  情緒以 taxonomy 動態 enum 進 JSON schema（封閉集，API 端保證合法）；
-  分類為開放集（franchise 式）：自由文字 + ``normalize_category`` 正規化收斂同義詞。
+- VLM 單次 pass（線上走 NVIDIA VLM，見 nvidia_vlm）→ JSON，pydantic 驗證（AnnotationResult）；
+  情緒為封閉集（事後濾到 taxonomy）、分類為開放集（``normalize_category`` 收斂同義詞）。
 - 貼文上下文（標題 / 熱門留言）注入 user turn，prompt 明示其為旁證。
-- system prompt 為穩定字串（由 taxonomy 決定性生成），掛 cache_control 吃 prompt caching。
+- system prompt 為穩定字串（由 taxonomy 決定性生成），@lru_cache 快取、免每次重建。
 - 版本化：``model_version = {ANNOTATION_PROMPT_VERSION}@{model}`` 寫入標註列。
 - pending_review 規則（docs/03 §4、§6）：模型拒答、is_meme=false、
   confidence < 0.7 皆轉人工複核；拒答不落標註列。
@@ -18,6 +17,7 @@ import base64
 import json
 import sqlite3
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -86,8 +86,9 @@ class AnnotationResult(BaseModel):
         return list(seen)
 
 
+@lru_cache(maxsize=1)
 def build_system_prompt() -> str:
-    """由 taxonomy 決定性生成標註指引（穩定字串，供 prompt caching）。"""
+    """由 taxonomy 決定性生成標註指引（穩定字串；taxonomy 為程序級單例，故 lru_cache 免重建）。"""
     tax = get_taxonomy()
     emotions = "、".join(tax.emotions)
     categories = "、".join(tax.known_categories)

@@ -923,19 +923,18 @@ def list_gallery(
     回傳每張圖的尺寸（供瀑布流）、讚數/留言數、以及此 client 是否已讚。
     """
     nsfw = "AND a.nsfw = 0" if exclude_nsfw else ""
+    # 讚數/留言數/是否已讚都用相關子查詢：目標清單在 ORDER BY+LIMIT 之後才投影，故只對這一頁的
+    # 24 列各查一次（走 idx_meme_likes_meme / idx_meme_comments_meme 的單圖索引）。原本兩個
+    # LEFT JOIN(GROUP BY) 會把整張 meme_likes / meme_comments 全表聚合，隨互動量成長越來越貴。
     rows = conn.execute(
         f"""
         SELECT m.meme_id, m.width, m.height, a.ocr_text, a.franchise,
-               COALESCE(lk.n, 0) AS likes,
-               COALESCE(cm.n, 0) AS comments,
-               (myl.client_id IS NOT NULL) AS liked
+               (SELECT COUNT(*) FROM meme_likes l WHERE l.meme_id = m.meme_id) AS likes,
+               (SELECT COUNT(*) FROM meme_comments c WHERE c.meme_id = m.meme_id) AS comments,
+               EXISTS (SELECT 1 FROM meme_likes l2
+                       WHERE l2.meme_id = m.meme_id AND l2.client_id = %s) AS liked
         FROM memes m
         JOIN meme_annotations a ON a.meme_id = m.meme_id
-        LEFT JOIN (SELECT meme_id, COUNT(*) AS n FROM meme_likes
-                   GROUP BY meme_id) lk ON lk.meme_id = m.meme_id
-        LEFT JOIN (SELECT meme_id, COUNT(*) AS n FROM meme_comments
-                   GROUP BY meme_id) cm ON cm.meme_id = m.meme_id
-        LEFT JOIN meme_likes myl ON myl.meme_id = m.meme_id AND myl.client_id = %s
         WHERE m.status = 'active' AND a.is_meme = 1 {nsfw}
         ORDER BY md5(m.meme_id || %s)
         LIMIT %s OFFSET %s
@@ -995,16 +994,12 @@ def get_gallery_item(conn: sqlite3.Connection, meme_id: str, *, client_id: str =
     row = conn.execute(
         """
         SELECT m.meme_id, m.width, m.height, a.ocr_text, a.franchise, a.description,
-               COALESCE(lk.n, 0) AS likes,
-               COALESCE(cm.n, 0) AS comments,
-               (myl.client_id IS NOT NULL) AS liked
+               (SELECT COUNT(*) FROM meme_likes l WHERE l.meme_id = m.meme_id) AS likes,
+               (SELECT COUNT(*) FROM meme_comments c WHERE c.meme_id = m.meme_id) AS comments,
+               EXISTS (SELECT 1 FROM meme_likes l2
+                       WHERE l2.meme_id = m.meme_id AND l2.client_id = %s) AS liked
         FROM memes m
         JOIN meme_annotations a ON a.meme_id = m.meme_id
-        LEFT JOIN (SELECT meme_id, COUNT(*) AS n FROM meme_likes
-                   GROUP BY meme_id) lk ON lk.meme_id = m.meme_id
-        LEFT JOIN (SELECT meme_id, COUNT(*) AS n FROM meme_comments
-                   GROUP BY meme_id) cm ON cm.meme_id = m.meme_id
-        LEFT JOIN meme_likes myl ON myl.meme_id = m.meme_id AND myl.client_id = %s
         WHERE m.meme_id = %s AND m.status = 'active' AND a.is_meme = 1
         """,
         (client_id or "", meme_id),

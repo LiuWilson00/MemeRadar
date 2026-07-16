@@ -161,6 +161,29 @@ class TestImportImageBytes:
         assert dup.meme_id == first.meme_id
         assert repo.count_memes(conn) == 1
 
+    def test_concurrent_same_image_returns_duplicate_not_error(
+        self, conn, data_dir, tmp_path, monkeypatch
+    ):
+        """並發匯入同圖競態：pre-check 過了但 insert 撞 sha256 UNIQUE → 當 duplicate 回既有，
+        而非讓 UniqueViolation 冒成 500。模擬法：讓第一次 find（pre-check）裝作沒有。"""
+        make_image(tmp_path / "a.png")
+        content = (tmp_path / "a.png").read_bytes()
+        first, _ = import_image_bytes(conn, content, data_dir=data_dir)  # 並發的另一請求先成功
+
+        real = repo.find_meme_by_sha256
+        calls = {"n": 0}
+
+        def fake(c, sha):
+            calls["n"] += 1
+            return None if calls["n"] == 1 else real(c, sha)  # 第一次(pre-check)裝作查不到
+
+        monkeypatch.setattr(repo, "find_meme_by_sha256", fake)
+        dup, status = import_image_bytes(conn, content, data_dir=data_dir)
+
+        assert status == "duplicate"
+        assert dup.meme_id == first.meme_id
+        assert repo.count_memes(conn) == 1
+
     def test_corrupt_bytes_return_error(self, conn, data_dir):
         meme, status = import_image_bytes(conn, b"not an image", data_dir=data_dir)
         assert status == "error"

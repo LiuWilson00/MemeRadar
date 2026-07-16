@@ -84,7 +84,7 @@ _TASK_LABELS = {
 
 @dataclass
 class Deps:
-    client: Any  # anthropic client（意圖 / rerank / 截圖 / 對方梗圖）
+    client: Any  # 歷史遺留：曾為 Anthropic client；線上意圖/rerank 已改走 NVIDIA VLM，未使用
     vlm: Any  # NvidiaVlm（標註）
     embedder: Embedder
     db_path: Path
@@ -120,17 +120,6 @@ class Deps:
 
 logger = logging.getLogger("memeradar.api")
 
-# 意圖分析 / rerank 的 Claude 呼叫逾時（秒）。SDK 預設 ~600s，卡住的呼叫會把 API worker
-# 一直占住（曾因此全 worker 卡死、/health 都假死）。設短逾時 + 少重試 → 卡住就快速失敗放人。
-_ANTHROPIC_TIMEOUT_S = 30.0
-
-
-def _anthropic_client(api_key: str | None):
-    kw = {"timeout": _ANTHROPIC_TIMEOUT_S, "max_retries": 1}
-    import anthropic
-
-    return anthropic.Anthropic(api_key=api_key, **kw) if api_key else anthropic.Anthropic(**kw)
-
 
 def _default_deps() -> Deps:
     from memeradar.api.google_auth import build_google_verifier
@@ -139,12 +128,11 @@ def _default_deps() -> Deps:
     from memeradar.understanding.embedding import get_embedder
 
     settings = get_settings()
-    api_key = settings.anthropic_api_key
     vlm = build_default_vlm()
     online_vlm = build_default_vlm(fast_fail=True)  # 線上推薦：卡住快速失敗退 fallback
     ocr, classifier = _build_fast_clients(settings, vlm)
     return Deps(
-        client=_anthropic_client(api_key),
+        client=None,  # 歷史遺留欄位：線上意圖/rerank 已改走 NVIDIA VLM，Anthropic client 不再建
         vlm=vlm,
         online_vlm=online_vlm,
         embedder=get_embedder(settings.embedding_backend),

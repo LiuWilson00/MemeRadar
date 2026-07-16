@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
+from functools import lru_cache
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -88,8 +89,9 @@ class IntentResult(BaseModel):
     )
 
 
+@lru_cache(maxsize=1)
 def build_system_prompt() -> str:
-    """由 taxonomy 決定性生成（穩定字串，供 prompt caching）。"""
+    """由 taxonomy 決定性生成（穩定字串；taxonomy 為程序級單例，故 lru_cache 免重建）。"""
     tax = get_taxonomy()
     strategy_lines = "\n".join(f"- {s.label}：{s.description}" for s in tax.strategies)
     emotions = "、".join(tax.emotions)
