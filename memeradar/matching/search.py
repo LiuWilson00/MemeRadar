@@ -87,9 +87,14 @@ class SqliteBruteForceSearcher:
         min_similarity: float = DEFAULT_MIN_SIMILARITY,
     ) -> list[SearchHit]:
         qvec = json.dumps(query_vector)  # pgvector 可解析 '[..]' 文字
-        sql = """
+        # 內層只以「純距離」排序取 Top-K → pgvector HNSW 索引才吃得到（0007_vector_index）。
+        # 相似度門檻與同分序（meme_id）挪到外層：內層若帶 min_similarity 於 WHERE、或在
+        # ORDER BY 加 meme_id 次鍵，都會讓 HNSW 失效、退化成全表精確掃描。行為等價——
+        # 內層取的就是最相似的 K 張，外層再濾掉低於門檻者（門檻只會砍掉最不相似的尾巴）。
+        # 規模變大後可調 hnsw.ef_search（預設 40）以確保過濾後仍湊得滿 K 張。
+        inner = """
             SELECT a.*, m.hotness AS meme_hotness,
-                   1 - (e.vector <=> %s::vector) AS similarity
+                   e.vector <=> %s::vector AS distance
             FROM memes m
             JOIN meme_annotations a ON a.meme_id = m.meme_id
             JOIN embeddings e
@@ -101,27 +106,32 @@ class SqliteBruteForceSearcher:
         params: list = [qvec, self._signature]
 
         if filters.exclude_nsfw:
-            sql += " AND a.nsfw = 0"
+            inner += " AND a.nsfw = 0"
 
         if filters.franchises:
             taxonomy = get_taxonomy()
             normalized = [taxonomy.normalize_franchise(f) for f in filters.franchises]
-            sql += f" AND a.franchise IN ({','.join(['%s'] * len(normalized))})"
+            inner += f" AND a.franchise IN ({','.join(['%s'] * len(normalized))})"
             params.extend(normalized)
 
         if filters.categories:
             placeholders = ",".join(["%s"] * len(filters.categories))
-            sql += (
+            inner += (
                 " AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(a.categories::jsonb)"
                 f" AS cv WHERE cv IN ({placeholders}))"
             )
             params.extend(filters.categories)
 
-        # min_similarity 過濾 + 依距離排序（同分以 meme_id）
-        sql += " AND 1 - (e.vector <=> %s::vector) >= %s"
-        params.extend([qvec, min_similarity])
-        sql += " ORDER BY e.vector <=> %s::vector, a.meme_id LIMIT %s"
+        inner += " ORDER BY e.vector <=> %s::vector LIMIT %s"
         params.extend([qvec, k])
+
+        sql = f"""
+            SELECT t.*, 1 - t.distance AS similarity
+            FROM ({inner}) t
+            WHERE 1 - t.distance >= %s
+            ORDER BY t.distance, t.meme_id
+        """
+        params.append(min_similarity)
 
         try:
             rows = self._conn.execute(sql, params).fetchall()

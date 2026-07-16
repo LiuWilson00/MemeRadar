@@ -954,8 +954,11 @@ def create_app(deps: Deps | None = None) -> FastAPI:
                 "message": f"今天的上傳上限（{cap} 張）到了，明天再來。",
             })
         content = _decode_image(request.image)
-        # 去重先於標註：完全相同（sha256）或高度相似（phash）都擋，省一次 VLM 呼叫
-        if Deduplicator(conn).check(content).layer in ("duplicate", "review"):
+        # 去重先於標註：完全相同（sha256）或高度相似（phash）都擋，省一次 VLM 呼叫。
+        # 用同一個 Deduplicator 實例貫穿 check→register：check 已把整張 pHash 表載進實例快取，
+        # register 直接複用，不必再全表載入一次（原本兩個實例＝兩次全表 pHash 掃描）。
+        dedup = Deduplicator(conn)
+        if dedup.check(content).layer in ("duplicate", "review"):
             raise HTTPException(status_code=409, detail="圖庫已有相同或非常相似的梗圖了")
         meme, status = import_image_bytes(
             conn, content, data_dir=deps.data_dir,
@@ -986,7 +989,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         # 乾淨 → 自動上架（覆蓋低信心的 pending_review）+ 向量化 + 登記 phash（供之後去重）
         repo.set_status(conn, meme.meme_id, "active")
         embed_pending_memes(conn, deps.embedder)
-        Deduplicator(conn).register(meme, content)
+        dedup.register(meme, content)  # 複用上面的實例，pHash 快取免再全表載入
         return {
             "meme_id": meme.meme_id,
             "status": "published",
