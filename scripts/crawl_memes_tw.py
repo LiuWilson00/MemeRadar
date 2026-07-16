@@ -78,6 +78,107 @@ def _import_one(conn, cand, content: bytes, data_dir, *, vlm=None, embedder=None
     return "imported"
 
 
+def _split_new(cands, imported_urls) -> tuple[list, int]:
+    """依「下載前預先去重」把候選分成待處理與已入庫（後者計 duplicate）。
+
+    待處理者先把 post_url 記進 imported_urls，避免同批跨 adapter 重複送。
+    """
+    new = []
+    dup = 0
+    for cand in cands:
+        if cand.post_url and cand.post_url in imported_urls:
+            dup += 1
+        else:
+            new.append(cand)
+            if cand.post_url:
+                imported_urls.add(cand.post_url)
+    return new, dup
+
+
+def _tally(result: str, counts: dict) -> None:
+    counts["imported"] += result == "imported"
+    counts["duplicate"] += result == "duplicate"
+    counts["filtered"] += result == "filtered"
+    counts["failed"] += result not in ("imported", "duplicate", "filtered")
+
+
+def _import_worker(cand, vlm, data_dir):
+    """並行工作單元：自開 conn、下載、匯入+標註。
+
+    embedder=None → 不在工作緒 embed（embed_pending_memes 會掃全庫，多緒並呼易衝突）；
+    向量化改由主緒批次做（見 _process_parallel）。repo 每寫即 commit，故各緒獨立持久化。
+    """
+    from memeradar.shared.db import connect
+
+    conn_t = connect()
+    try:
+        content = _download(cand.images[0]["url"])
+        return _import_one(conn_t, cand, content, data_dir, vlm=vlm, embedder=None)
+    finally:
+        conn_t.close()
+
+
+def _process_serial(cands, imported_urls, *, conn, data_dir, vlm, embedder, img_delay) -> dict:
+    counts = {"imported": 0, "duplicate": 0, "filtered": 0, "failed": 0}
+    for i, cand in enumerate(cands, 1):
+        if cand.post_url and cand.post_url in imported_urls:
+            counts["duplicate"] += 1
+        else:
+            try:
+                content = _download(cand.images[0]["url"])
+                result = _import_one(conn, cand, content, data_dir, vlm=vlm, embedder=embedder)
+            except Exception as exc:  # noqa: BLE001 單張失敗不中斷整批
+                counts["failed"] += 1
+                if counts["failed"] <= 5:
+                    print(f"  ✗ {cand.post_id}：{exc!r}")
+            else:
+                _tally(result, counts)
+                if result != "duplicate" and cand.post_url:
+                    imported_urls.add(cand.post_url)
+            time.sleep(img_delay)
+        if i % 25 == 0:
+            _print_progress(i, len(cands), counts)
+    return counts
+
+
+def _process_parallel(cands, imported_urls, *, conn, data_dir, vlm, embedder, workers) -> dict:
+    """並行下載+標註（慢在 VLM），DB 寫入由各工作緒自有 conn 完成；向量化主緒批次補。"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from memeradar.understanding.embedding import embed_pending_memes
+
+    new, dup = _split_new(cands, imported_urls)
+    counts = {"imported": 0, "duplicate": dup, "filtered": 0, "failed": 0}
+    total = len(cands)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futs = {pool.submit(_import_worker, c, vlm, data_dir): c for c in new}
+        for j, fut in enumerate(as_completed(futs), 1):
+            cand = futs[fut]
+            try:
+                result = fut.result()
+            except Exception as exc:  # noqa: BLE001 單張失敗不中斷整批
+                counts["failed"] += 1
+                if counts["failed"] <= 5:
+                    print(f"  ✗ {cand.post_id}：{exc!r}")
+                continue
+            _tally(result, counts)
+            if j % 25 == 0:
+                if embedder is not None:
+                    embed_pending_memes(conn, embedder)
+                _print_progress(sum(counts.values()), total, counts)
+    if embedder is not None:
+        embed_pending_memes(conn, embedder)  # 收尾：把工作緒設 active 卻還沒向量化的補上
+    return counts
+
+
+def _print_progress(done: int, total: int, c: dict) -> None:
+    print(
+        f"  …{done}/{total}（入庫 {c['imported']}/重複 {c['duplicate']}/"
+        f"濾除 {c['filtered']}/失敗 {c['failed']}）",
+        flush=True,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="從 memes.tw 批次爬梗圖進庫（解耦匯入）")
     parser.add_argument("--count", type=int, default=2000, help="每個來源最多抓幾張")
@@ -90,6 +191,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", default="claude-haiku-4-5", help="local-annotate 的 Claude 模型")
     parser.add_argument("--ignore-watermark", action="store_true",
                         help="忽略水位、從最新往回爬（回填舊圖用；去重擋掉已入庫的）")
+    parser.add_argument("--workers", type=int, default=1,
+                        help="並行標註緒數（local-annotate 時 VLM 為瓶頸，>1 大幅加速）")
     args = parser.parse_args(argv)
 
     if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
@@ -144,37 +247,24 @@ def main(argv: list[str] | None = None) -> int:
         for adapter in adapters:
             before = None if args.ignore_watermark else repo.get_watermark(conn, adapter.name)
             cands, after = adapter.fetch(before)
-            print(f"\n[{adapter.name}] 抓到 {len(cands)} 張（水位 {before} → {after}），匯入中…")
-            imp = dup = filt = fail = 0
-            for i, cand in enumerate(cands, 1):
-                if cand.post_url and cand.post_url in imported_urls:
-                    dup += 1  # 下載前就跳過已入庫的
-                else:
-                    try:
-                        content = _download(cand.images[0]["url"])
-                        result = _import_one(
-                            conn, cand, content, settings.memeradar_data_dir,
-                            vlm=vlm, embedder=embedder,
-                        )
-                    except Exception as exc:  # noqa: BLE001 單張失敗不中斷整批
-                        fail += 1
-                        if fail <= 5:
-                            print(f"  ✗ {cand.post_id}：{exc!r}")
-                    else:
-                        imp += result == "imported"
-                        dup += result == "duplicate"
-                        filt += result == "filtered"
-                        fail += result not in ("imported", "duplicate", "filtered")
-                        if result != "duplicate" and cand.post_url:
-                            imported_urls.add(cand.post_url)  # 記住這輪新入庫的
-                    time.sleep(args.img_delay)
-                if i % 25 == 0:
-                    print(f"  …{i}/{len(cands)}（入庫 {imp}/重複 {dup}/濾除 {filt}/失敗 {fail}）",
-                          flush=True)
+            mode = f"（{args.workers} 緒並行）" if args.workers > 1 and vlm else ""
+            print(f"\n[{adapter.name}] 抓到 {len(cands)} 張"
+                  f"（水位 {before} → {after}）{mode}，匯入中…")
+            if args.workers > 1 and vlm is not None:
+                counts = _process_parallel(
+                    cands, imported_urls, conn=conn, data_dir=settings.memeradar_data_dir,
+                    vlm=vlm, embedder=embedder, workers=args.workers,
+                )
+            else:
+                counts = _process_serial(
+                    cands, imported_urls, conn=conn, data_dir=settings.memeradar_data_dir,
+                    vlm=vlm, embedder=embedder, img_delay=args.img_delay,
+                )
             if after:
                 repo.set_watermark(conn, adapter.name, after)
-            print(f"[{adapter.name}] 完成：入庫 {imp} / 重複 {dup} / 濾除 {filt} / 失敗 {fail}")
-            counts = {"imported": imp, "duplicate": dup, "filtered": filt, "failed": fail}
+            print(f"[{adapter.name}] 完成：入庫 {counts['imported']} / "
+                  f"重複 {counts['duplicate']} / 濾除 {counts['filtered']} / "
+                  f"失敗 {counts['failed']}")
             for k, v in counts.items():
                 totals[k] += v
     finally:
