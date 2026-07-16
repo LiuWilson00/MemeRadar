@@ -62,6 +62,7 @@ from memeradar.matching.intent import IntentRefusedError
 from memeradar.matching.screenshot import ScreenshotParseError, parse_screenshot
 from memeradar.shared import repository as repo
 from memeradar.shared.auth import issue_session, verify_session
+from memeradar.shared.cache import LruCache, TTLCache
 from memeradar.shared.db import connect, get_pool, migrate
 from memeradar.shared.models import Embedding, FeedbackEvent, new_id
 from memeradar.shared.taxonomy import get_taxonomy
@@ -528,6 +529,11 @@ def create_app(deps: Deps | None = None) -> FastAPI:
     # 免得多任務併發把 BGE / VLM 打爆（前台一次也只送一筆）。
     task_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="task")
 
+    # 進程內快取（per-app，測試隔離）：昂貴全表聚合的短 TTL 快取 + 重複 chat query 的 embedding LRU
+    _leaderboard_cache = TTLCache(30.0)
+    _dashboard_cache = TTLCache(60.0)
+    _chat_embed_cache = LruCache(512)
+
     @app.middleware("http")
     async def admin_gate(request, call_next):
         """後台（admin）路徑需 env 帳密登入；前台公開路徑放行。帳密未設 = 不設防。"""
@@ -710,11 +716,18 @@ def create_app(deps: Deps | None = None) -> FastAPI:
 
     @app.get("/leaderboard")
     def leaderboard(limit: int = 20, conn: psycopg.Connection = Depends(get_conn)):
-        """熱門梗圖榜（讚×3 + 下載）；公開，供前台 Modal。資料少時自然回短/空清單。"""
-        rows = repo.leaderboard(conn, limit=min(max(1, limit), 50))
-        for row in rows:
-            row["image_url"] = f"/memes/{row['meme_id']}/image"
-        return rows
+        """熱門梗圖榜（讚×3 + 下載）；公開，供前台 Modal。資料少時自然回短/空清單。
+
+        30s TTL 快取：原查詢對 feedback_events / meme_likes / events 三張全表聚合，隨用量變貴；
+        榜單容忍短暫過期。快取最大 50 名，各請求再切到要的 limit。
+        """
+        def _compute() -> list[dict]:
+            rows = repo.leaderboard(conn, limit=50)
+            for row in rows:
+                row["image_url"] = f"/memes/{row['meme_id']}/image"
+            return rows
+
+        return _leaderboard_cache.get_or_compute(_compute)[: min(max(1, limit), 50)]
 
     @app.post("/chat")
     def chat(request: ChatRequest, http_request: Request,
@@ -727,7 +740,10 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         from memeradar.matching.search import SearchFilters, SqliteBruteForceSearcher
         from memeradar.understanding.embedding import embedding_signature
 
-        query_vec = deps.embedder.embed([message])[0]
+        # 重複的 chat 訊息（「回覆一張梗圖」情境常聚集）免重打 hosted embed；LRU 有界快取
+        query_vec = _chat_embed_cache.get_or_compute(
+            message, lambda: deps.embedder.embed([message])[0]
+        )
         searcher = SqliteBruteForceSearcher(conn, signature=embedding_signature(deps.embedder))
         hits = searcher.search(query_vec, k=15, filters=SearchFilters(exclude_nsfw=True))
         pick = _pick_chat_meme(hits, set(request.exclude or []))
@@ -1178,9 +1194,11 @@ def create_app(deps: Deps | None = None) -> FastAPI:
 
     @app.get("/report/dashboard")
     def dashboard(conn: psycopg.Connection = Depends(get_conn)):
+        # 60s TTL 快取：build_dashboard 是 ~15 個全表掃描 + JSON 百分位，隨資料成長越來越貴；
+        # 後台儀表板容忍分鐘級過期。
         from memeradar.shared.reporting import build_dashboard
 
-        return build_dashboard(conn)
+        return _dashboard_cache.get_or_compute(lambda: build_dashboard(conn))
 
     @app.get("/vlm/models")
     def vlm_models() -> dict:
