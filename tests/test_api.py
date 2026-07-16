@@ -1531,6 +1531,13 @@ class TestShare:
         client, *_ = env
         assert client.get("/memes/m_nope").status_code == 404
 
+    def test_image_download_variant_serves_bytes_with_attachment(self, env):
+        client, _conn, memes, _deps = env
+        r = client.get(f"/memes/{memes[0].meme_id}/image", params={"dl": "1"})
+        assert r.status_code == 200
+        assert "attachment" in r.headers.get("content-disposition", "")
+        assert len(r.content) > 0
+
     def test_share_page_has_og_tags(self, env):
         client, _conn, memes, _deps = env
         mid = memes[0].meme_id

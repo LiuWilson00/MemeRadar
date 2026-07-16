@@ -124,12 +124,15 @@ const EXT: Record<string, string> = {
 async function saveImage(url: string, name: string) {
   let blob: Blob;
   let file: File;
+  // 走下載變體：位元組經 API 直送（帶 CORS），才能 fetch 成 blob 存進相簿；
+  // 直接抓 R2 公開網址會因無 CORS 而失敗、退回開新分頁。
+  const dlUrl = url + (url.includes("?") ? "&" : "?") + "dl=1";
   try {
-    const res = await fetch(url);
+    const res = await fetch(dlUrl);
     blob = await res.blob();
     file = new File([blob], `${name}.${EXT[blob.type] ?? "png"}`, { type: blob.type });
   } catch {
-    window.open(url, "_blank");
+    window.open(dlUrl, "_blank"); // 退路：dl=1 帶 attachment，開了也會下載
     return;
   }
 

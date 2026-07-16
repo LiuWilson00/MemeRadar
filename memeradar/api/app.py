@@ -64,7 +64,7 @@ from memeradar.shared.auth import issue_session, verify_session
 from memeradar.shared.db import connect, get_pool, migrate
 from memeradar.shared.models import Embedding, FeedbackEvent, new_id
 from memeradar.shared.taxonomy import get_taxonomy
-from memeradar.understanding.annotator import annotate_meme
+from memeradar.understanding.annotator import annotate_meme, load_meme_image_bytes
 from memeradar.understanding.embedding import Embedder, embed_pending_memes, embedding_signature
 from memeradar.understanding.nvidia_vlm import VlmExhaustedError
 from memeradar.understanding.opponent import OpponentMemeRefusedError
@@ -1218,10 +1218,25 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         )
 
     @app.get("/memes/{meme_id}/image")
-    def meme_image(meme_id: str, conn: psycopg.Connection = Depends(get_conn)):
+    def meme_image(meme_id: str, dl: bool = False,
+                   conn: psycopg.Connection = Depends(get_conn)):
         meme = repo.get_meme(conn, meme_id)
         if meme is None:
             raise HTTPException(status_code=404, detail="梗圖不存在")
+        suffix = Path(meme.image_uri).suffix.lower()
+        media_type = _MEDIA_TYPES.get(suffix, "application/octet-stream")
+        # 下載模式：位元組經 API 直送（帶 CORS + attachment），前端 fetch 得到 blob 才能
+        # 存進相簿。不走 R2 302——R2 公開網址沒 CORS 標頭，跨源 fetch 會失敗退回開新分頁。
+        if dl:
+            try:
+                data = load_meme_image_bytes(conn, meme, data_dir=deps.data_dir)
+            except Exception:  # noqa: BLE001
+                raise HTTPException(status_code=404, detail="圖檔遺失") from None
+            filename = f"meme-{meme_id[2:10]}{suffix}"
+            return Response(
+                content=data, media_type=media_type,
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
         # 有設 R2 → 導向 CDN 公開網址（圖片位元組不再經過 API/DB）；快取此導向
         if deps.r2_public_base_url:
             from memeradar.shared.storage import public_url
@@ -1231,8 +1246,6 @@ def create_app(deps: Deps | None = None) -> FastAPI:
                 status_code=302,
                 headers={"Cache-Control": "public, max-age=86400"},
             )
-        suffix = Path(meme.image_uri).suffix.lower()
-        media_type = _MEDIA_TYPES.get(suffix, "application/octet-stream")
         # 否則優先服務 DB 內的 image_data（雲端免 volume）；再回退檔案系統（本地開發）
         row = conn.execute(
             "SELECT image_data FROM memes WHERE meme_id = %s", (meme_id,)
