@@ -9,8 +9,10 @@ memes.tw robots.txt 允許全站爬取；本腳本用其公開 JSON API（/wtf/a
     python scripts/crawl_memes_tw.py --count 2000              # 全站最新 2000 張
     python scripts/crawl_memes_tw.py --count 500 --contests 11,8,53   # 加指定主題
     python scripts/crawl_memes_tw.py --count 20 --dry-run      # 只抓+對映、不下載不入庫
+    python scripts/crawl_memes_tw.py --count 2000 --ignore-watermark --local-annotate  # 回填舊圖
 
-水位（各來源獨立）記在 crawl_state，重跑只抓更新的（增量）。
+水位（各來源獨立）記在 crawl_state，重跑只抓更新的（增量）；
+回填舊圖用 --ignore-watermark（從最新往回爬，去重擋掉已入庫的）。
 """
 
 from __future__ import annotations
@@ -63,6 +65,9 @@ def _import_one(conn, cand, content: bytes, data_dir, *, vlm=None, embedder=None
         from memeradar.understanding.annotator import annotate_meme
         from memeradar.understanding.embedding import embed_pending_memes
 
+        # 若 annotate_meme 拋錯（如退避後仍 529）：例外往上拋、該張計入失敗，但梗圖已是
+        # active 只是沒標註 → 正式站背景 worker（list_active_unannotated）會用 qwen 補標註+
+        # 向量自癒，不會遺失；故此處不刻意降級狀態。
         annotation = annotate_meme(conn, vlm, meme, data_dir=data_dir)
         if annotation is None or not annotation.is_meme or annotation.nsfw:
             repo.set_status(conn, meme.meme_id, "removed")
@@ -83,6 +88,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--local-annotate", action="store_true",
                         help="本地用 Claude 標註+向量後再入庫（需 ANTHROPIC_API_KEY）")
     parser.add_argument("--model", default="claude-haiku-4-5", help="local-annotate 的 Claude 模型")
+    parser.add_argument("--ignore-watermark", action="store_true",
+                        help="忽略水位、從最新往回爬（回填舊圖用；去重擋掉已入庫的）")
     args = parser.parse_args(argv)
 
     if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
@@ -120,7 +127,10 @@ def main(argv: list[str] | None = None) -> int:
         from memeradar.understanding.claude_vlm import ClaudeVlm
         from memeradar.understanding.embedding import get_embedder
 
-        vlm = ClaudeVlm(anthropic.Anthropic(api_key=settings.anthropic_api_key), model=args.model)
+        # max_retries：Anthropic 偶發 529 overloaded，靠 SDK 內建指數退避撐過瞬間過載，
+        # 免得標註失敗把梗圖留在 active 卻沒標註/沒向量（見 _import_one 註解）。
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key, max_retries=8)
+        vlm = ClaudeVlm(client, model=args.model)
         embedder = get_embedder(settings.embedding_backend)
         print(f"🧠 本地完整處理：Claude（{args.model}）標註 + {embedder.model_id} 向量。")
 
@@ -129,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
     totals = {"imported": 0, "duplicate": 0, "filtered": 0, "failed": 0}
     try:
         for adapter in adapters:
-            before = repo.get_watermark(conn, adapter.name)
+            before = None if args.ignore_watermark else repo.get_watermark(conn, adapter.name)
             cands, after = adapter.fetch(before)
             print(f"\n[{adapter.name}] 抓到 {len(cands)} 張（水位 {before} → {after}），匯入中…")
             imp = dup = filt = fail = 0
