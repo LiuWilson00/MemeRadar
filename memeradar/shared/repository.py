@@ -59,6 +59,16 @@ def insert_meme(conn: sqlite3.Connection, meme: Meme) -> None:
     conn.commit()
 
 
+# memes 的純量欄位清單（明確列出、排除 image_data BYTEA）。熱路徑（get_meme、佇列列舉等）
+# 只需這些欄位；用 SELECT * 會白拉幾百 KB 圖檔位元組（_row_to_meme 也根本沒讀 image_data）。
+_MEME_COL_NAMES = (
+    "meme_id", "image_uri", "sha256", "phash", "width", "height",
+    "hotness", "status", "first_seen_at", "engagement", "last_seen_at",
+)
+_MEME_COLS = ", ".join(_MEME_COL_NAMES)
+_MEME_COLS_M = ", ".join(f"m.{c}" for c in _MEME_COL_NAMES)
+
+
 def _row_to_meme(row: sqlite3.Row) -> Meme:
     return Meme(
         meme_id=row["meme_id"],
@@ -76,12 +86,16 @@ def _row_to_meme(row: sqlite3.Row) -> Meme:
 
 
 def get_meme(conn: sqlite3.Connection, meme_id: str) -> Meme | None:
-    row = conn.execute("SELECT * FROM memes WHERE meme_id = %s", (meme_id,)).fetchone()
+    row = conn.execute(
+        f"SELECT {_MEME_COLS} FROM memes WHERE meme_id = %s", (meme_id,)
+    ).fetchone()
     return _row_to_meme(row) if row else None
 
 
 def find_meme_by_sha256(conn: sqlite3.Connection, sha256: str) -> Meme | None:
-    row = conn.execute("SELECT * FROM memes WHERE sha256 = %s", (sha256,)).fetchone()
+    row = conn.execute(
+        f"SELECT {_MEME_COLS} FROM memes WHERE sha256 = %s", (sha256,)
+    ).fetchone()
     return _row_to_meme(row) if row else None
 
 
@@ -117,8 +131,8 @@ def count_memes(conn: sqlite3.Connection, status: str | None = None) -> int:
 
 def list_memes_missing_annotation(conn: sqlite3.Connection, limit: int | None = None) -> list[Meme]:
     """列出尚未標註且未下架的梗圖（標註管線的工作佇列）。"""
-    sql = """
-        SELECT m.* FROM memes m
+    sql = f"""
+        SELECT {_MEME_COLS_M} FROM memes m
         LEFT JOIN meme_annotations a ON a.meme_id = m.meme_id
         WHERE a.meme_id IS NULL AND m.status != 'removed'
         ORDER BY m.first_seen_at
@@ -139,8 +153,8 @@ def list_active_unannotated(conn: sqlite3.Connection, limit: int = 1) -> list[Me
     return [
         _row_to_meme(r)
         for r in conn.execute(
-            """
-            SELECT m.* FROM memes m
+            f"""
+            SELECT {_MEME_COLS_M} FROM memes m
             LEFT JOIN meme_annotations a ON a.meme_id = m.meme_id
             WHERE a.meme_id IS NULL AND m.status = 'active'
             ORDER BY m.first_seen_at
@@ -306,8 +320,8 @@ def list_memes_missing_embedding(
     conn: sqlite3.Connection, kind: str, model: str, limit: int | None = None
 ) -> list[Meme]:
     """列出已標註為梗圖、狀態 active、但缺少指定簽名向量的梗圖（向量化工作佇列）。"""
-    sql = """
-        SELECT m.* FROM memes m
+    sql = f"""
+        SELECT {_MEME_COLS_M} FROM memes m
         JOIN meme_annotations a ON a.meme_id = m.meme_id
         LEFT JOIN embeddings e
             ON e.meme_id = m.meme_id AND e.kind = %s AND e.model = %s
@@ -878,17 +892,20 @@ def leaderboard(conn: sqlite3.Connection, limit: int = 20) -> list[dict]:
 
 
 def toggle_like(conn: sqlite3.Connection, meme_id: str, client_id: str) -> dict:
-    """對一張圖按讚 / 取消讚（同一 client 對同一圖最多一讚）。回傳新的讚數與狀態。"""
-    exists = conn.execute(
-        "SELECT 1 FROM meme_likes WHERE meme_id = %s AND client_id = %s", (meme_id, client_id)
-    ).fetchone()
-    if exists:
-        conn.execute(
-            "DELETE FROM meme_likes WHERE meme_id = %s AND client_id = %s", (meme_id, client_id))
+    """對一張圖按讚 / 取消讚（同一 client 對同一圖最多一讚）。回傳新的讚數與狀態。
+
+    原子切換：先試刪（刪到＝原本有讚→取消），沒刪到就插入。INSERT 帶 ON CONFLICT DO NOTHING，
+    擋掉並發雙擊時「兩個請求都判定沒讚過→都插入」撞 UNIQUE(meme_id,client_id) 拋 500 的競態。
+    """
+    deleted = conn.execute(
+        "DELETE FROM meme_likes WHERE meme_id = %s AND client_id = %s", (meme_id, client_id)
+    ).rowcount
+    if deleted:
         liked = False
     else:
         conn.execute(
-            "INSERT INTO meme_likes (meme_id, client_id, created_at) VALUES (%s, %s, %s)",
+            "INSERT INTO meme_likes (meme_id, client_id, created_at) VALUES (%s, %s, %s) "
+            "ON CONFLICT DO NOTHING",
             (meme_id, client_id, _now_iso()))
         liked = True
     conn.commit()

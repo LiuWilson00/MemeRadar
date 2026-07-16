@@ -41,6 +41,23 @@ class TestLikes:
         repo.toggle_like(conn, m.meme_id, "c1")  # c1 取消
         assert repo.toggle_like(conn, m.meme_id, "c3")["likes"] == 2  # c2, c3
 
+    def test_concurrent_double_like_does_not_error(self, conn):
+        """並發雙擊競態：兩個請求都判定「沒讚過」→ 都插入同一 (meme, client)。
+        toggle_like 的 INSERT 帶 ON CONFLICT，第二次不炸（原本 UniqueViolation→500）。
+        連下兩次插入模擬競態，驗證約束被吸收、最終只有一筆。"""
+        m = _meme(conn)
+        sql = (
+            "INSERT INTO meme_likes (meme_id, client_id, created_at) VALUES (%s, %s, %s) "
+            "ON CONFLICT DO NOTHING"
+        )
+        conn.execute(sql, (m.meme_id, "c1", "2026-01-01T00:00:00Z"))
+        conn.execute(sql, (m.meme_id, "c1", "2026-01-01T00:00:00Z"))  # 不應拋
+        conn.commit()
+        n = conn.execute(
+            "SELECT COUNT(*) AS n FROM meme_likes WHERE meme_id = %s", (m.meme_id,)
+        ).fetchone()["n"]
+        assert n == 1
+
 
 class TestGalleryList:
     def test_only_active_non_nsfw_real_memes(self, conn):

@@ -41,6 +41,9 @@ class RecommendRequest(BaseModel):
     fast_mode: bool = False
     # 情境快選用：從候選池加權隨機抽，讓同一情境每次結果有變化（僅快速模式）。
     variety: bool = False
+    # 後台調適用：True 才在回應帶完整 debug.candidates（候選池明細，量大，可達數百張）；
+    # 一般 client（手機）不需要，預設省略以免每次搜尋都白傳一大包。候選明細仍照常落庫供分析。
+    debug: bool = False
 
 
 class ParseScreenshotRequest(BaseModel):

@@ -141,22 +141,25 @@ def run_recommendation(
 
     rerank_fallback = False
     t0 = time.perf_counter()
+    ranking_params = RankingParams(
+        top_n=request.params.top_n,
+        diversity=request.params.diversity,
+        hotness_weight=request.params.hotness_weight,
+    )
+    # 只撈 rerank 真正會用到的前 rerank_pool 張候選向量（MMR 也只在這池內配對）——
+    # 原本撈全部候選（可達 50-150 個 1024 維向量）多屬白拉 + 白解析。
     vectors = repo.get_vectors(
         conn,
         kind="text_retrieval",
         model=signature,
-        meme_ids=[c.meme_id for c in retrieval.candidates],
+        meme_ids=[c.meme_id for c in retrieval.candidates[: ranking_params.rerank_pool]],
     )
     try:
         ranked = rank_candidates(
             vlm,
             intent,
             retrieval.candidates,
-            params=RankingParams(
-                top_n=request.params.top_n,
-                diversity=request.params.diversity,
-                hotness_weight=request.params.hotness_weight,
-            ),
+            params=ranking_params,
             vectors_by_id=vectors,
             model=pick("rerank"),
             log=sink,
@@ -263,7 +266,8 @@ def _assemble_and_log(
 
     debug: dict[str, Any] = {
         "queries": [s.query for s in intent.strategies],
-        "candidates": candidates_debug,
+        # 候選明細量大，只有後台（request.debug=True）才回傳；候選仍已落庫供分析
+        "candidates": candidates_debug if request.debug else [],
         "per_strategy_hits": retrieval.per_strategy_hits,
         "rerank_fallback": rerank_fallback,
         "timings_ms": {**timings, "total": latency_ms},

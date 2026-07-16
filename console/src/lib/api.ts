@@ -92,6 +92,7 @@ export function buildRecommendRequest(turns: Turn[], filters: Filters, params: P
     filters,
     params,
     client_id: getClientId(),
+    debug: true, // 後台工作台的 DebugPanel 需要候選池明細（一般 client 不送、省流量）
   };
 }
 
