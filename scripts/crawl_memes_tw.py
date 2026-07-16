@@ -35,8 +35,12 @@ def _download(url: str, *, timeout: float = 20.0) -> bytes:
     return resp.content
 
 
-def _import_one(conn, cand, content: bytes, data_dir) -> str:
-    """單張解耦匯入：去重 → import_image_bytes（帶 attribution）→ 落 R2/DB → 登記 phash。"""
+def _import_one(conn, cand, content: bytes, data_dir, *, vlm=None, embedder=None) -> str:
+    """單張匯入：去重 → import_image_bytes（帶 attribution）→ 落 R2/DB → 登記 phash。
+
+    給了 vlm+embedder（--local-annotate）就順便本地標註 + 向量，濾掉非梗圖/NSFW、自動上架
+    → 進庫直接可用；否則解耦匯入（標註交正式站背景 worker）。
+    """
     from memeradar.api.app import _persist_image
     from memeradar.ingestion.dedup import Deduplicator
     from memeradar.ingestion.seed_import import import_image_bytes
@@ -53,6 +57,19 @@ def _import_one(conn, cand, content: bytes, data_dir) -> str:
         return status
     _persist_image(conn, meme.meme_id, meme.image_uri, content)
     Deduplicator(conn).register(meme, content)
+
+    if vlm is not None:  # 本地完整處理：標註 + 濾 + 向量 + 上架（同上傳端邏輯）
+        from memeradar.shared import repository as repo
+        from memeradar.understanding.annotator import annotate_meme
+        from memeradar.understanding.embedding import embed_pending_memes
+
+        annotation = annotate_meme(conn, vlm, meme, data_dir=data_dir)
+        if annotation is None or not annotation.is_meme or annotation.nsfw:
+            repo.set_status(conn, meme.meme_id, "removed")
+            return "filtered"
+        repo.set_status(conn, meme.meme_id, "active")
+        if embedder is not None:
+            embed_pending_memes(conn, embedder)
     return "imported"
 
 
@@ -63,6 +80,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--delay", type=float, default=1.0, help="每頁 API 間隔秒（禮貌節流）")
     parser.add_argument("--img-delay", type=float, default=0.15, help="每張圖下載間隔秒")
     parser.add_argument("--dry-run", action="store_true", help="只抓+對映、不下載不入庫")
+    parser.add_argument("--local-annotate", action="store_true",
+                        help="本地用 Claude 標註+向量後再入庫（需 ANTHROPIC_API_KEY）")
+    parser.add_argument("--model", default="claude-haiku-4-5", help="local-annotate 的 Claude 模型")
     args = parser.parse_args(argv)
 
     if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
@@ -89,19 +109,37 @@ def main(argv: list[str] | None = None) -> int:
     settings = get_settings()
     if not settings.r2_upload_enabled():
         print("⚠️ 未設定 R2 憑證；圖片會存進 DB image_data（確認這是你要的）。")
+
+    vlm = embedder = None
+    if args.local_annotate:
+        if not settings.anthropic_api_key:
+            print("✗ --local-annotate 需要 .env 的 ANTHROPIC_API_KEY", file=sys.stderr)
+            return 1
+        import anthropic
+
+        from memeradar.understanding.claude_vlm import ClaudeVlm
+        from memeradar.understanding.embedding import get_embedder
+
+        vlm = ClaudeVlm(anthropic.Anthropic(api_key=settings.anthropic_api_key), model=args.model)
+        embedder = get_embedder(settings.embedding_backend)
+        print(f"🧠 本地完整處理：Claude（{args.model}）標註 + {embedder.model_id} 向量。")
+
     conn = connect()
     migrate(conn)
-    totals = {"imported": 0, "duplicate": 0, "failed": 0}
+    totals = {"imported": 0, "duplicate": 0, "filtered": 0, "failed": 0}
     try:
         for adapter in adapters:
             before = repo.get_watermark(conn, adapter.name)
             cands, after = adapter.fetch(before)
             print(f"\n[{adapter.name}] 抓到 {len(cands)} 張（水位 {before} → {after}），匯入中…")
-            imp = dup = fail = 0
+            imp = dup = filt = fail = 0
             for i, cand in enumerate(cands, 1):
                 try:
                     content = _download(cand.images[0]["url"])
-                    result = _import_one(conn, cand, content, settings.memeradar_data_dir)
+                    result = _import_one(
+                        conn, cand, content, settings.memeradar_data_dir,
+                        vlm=vlm, embedder=embedder,
+                    )
                 except Exception as exc:  # noqa: BLE001 單張失敗不中斷整批
                     fail += 1
                     if fail <= 5:
@@ -109,21 +147,27 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     imp += result == "imported"
                     dup += result == "duplicate"
-                    fail += result not in ("imported", "duplicate")
-                if i % 50 == 0:
-                    print(f"  …{i}/{len(cands)}（入庫 {imp}/重複 {dup}/失敗 {fail}）", flush=True)
+                    filt += result == "filtered"
+                    fail += result not in ("imported", "duplicate", "filtered")
+                if i % 25 == 0:
+                    print(f"  …{i}/{len(cands)}（入庫 {imp}/重複 {dup}/濾除 {filt}/失敗 {fail}）",
+                          flush=True)
                 time.sleep(args.img_delay)
             if after:
                 repo.set_watermark(conn, adapter.name, after)
-            print(f"[{adapter.name}] 完成：入庫 {imp} / 重複 {dup} / 失敗 {fail}")
-            for k, v in (("imported", imp), ("duplicate", dup), ("failed", fail)):
+            print(f"[{adapter.name}] 完成：入庫 {imp} / 重複 {dup} / 濾除 {filt} / 失敗 {fail}")
+            counts = {"imported": imp, "duplicate": dup, "filtered": filt, "failed": fail}
+            for k, v in counts.items():
                 totals[k] += v
     finally:
         conn.close()
 
     print(f"\n✅ 全部完成：入庫 {totals['imported']} / 重複 {totals['duplicate']} / "
-          f"失敗 {totals['failed']}")
-    print("標註由正式站背景 worker 慢慢處理（免費 VLM 限流）；標註完才會出現在探索/推薦。")
+          f"濾除 {totals['filtered']} / 失敗 {totals['failed']}")
+    if not args.local_annotate:
+        print("標註由正式站背景 worker 慢慢處理；標註完才會出現在探索/推薦。")
+    else:
+        print("已本地標註+向量完成，入庫即可用（active 者已進探索/推薦池）。")
     return 0
 
 
