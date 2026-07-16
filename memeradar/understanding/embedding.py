@@ -83,7 +83,11 @@ class NvidiaBgeM3Embedder:
             )
         from openai import OpenAI
 
-        self._clients = [OpenAI(base_url=NVIDIA_BASE_URL, api_key=k) for k in keys]
+        # timeout=30：卡住的 embedding 呼叫快速失敗，不讓 SDK 預設 ~600s 拖住呼叫端
+        self._clients = [
+            OpenAI(base_url=NVIDIA_BASE_URL, api_key=k, timeout=30.0, max_retries=2)
+            for k in keys
+        ]
         self._batch = batch_size
         self._rr = 0
 

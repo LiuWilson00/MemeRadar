@@ -44,7 +44,10 @@ class NvImageEmbedder:
         else:
             from openai import OpenAI
 
-            self._clients = [OpenAI(base_url=base_url, api_key=k) for k in keys]
+            # timeout=30：卡住的呼叫快速失敗，不讓 SDK 預設 ~600s 拖住呼叫端
+            self._clients = [
+                OpenAI(base_url=base_url, api_key=k, timeout=30.0, max_retries=2) for k in keys
+            ]
         self._rr = 0
 
     def _embed(self, inputs: list[str], input_type: str) -> list[list[float]]:

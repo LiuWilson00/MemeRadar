@@ -7,6 +7,7 @@ rerank 拒答時退回純向量排序（``debug.rerank_fallback = true``），
 
 from __future__ import annotations
 
+import logging
 import random
 import sqlite3
 import time
@@ -33,6 +34,8 @@ from memeradar.shared.models import RecommendationLog, new_id
 from memeradar.understanding.classifier import Classification
 from memeradar.understanding.embedding import Embedder, embedding_signature
 from memeradar.understanding.opponent import analyze_opponent_meme, build_battle_turn
+
+logger = logging.getLogger("memeradar.pipeline")
 
 VECTOR_FALLBACK_REASON = "（rerank 暫不可用，依向量相似度排序）"
 FAST_REASON = "（快速模式：依語意相似度排序）"
@@ -229,6 +232,11 @@ def _assemble_and_log(
         for c in retrieval.candidates
     ]
     latency_ms = int((time.perf_counter() - t_start) * 1000)
+    # 各階段耗時進 log（Zeabur 可見）：哪一步慢一眼看出（intent / retrieval / rerank …）
+    log_at = logger.warning if latency_ms > 5000 else logger.info
+    log_at("[推薦] %s fast=%s -> %d 結果 | %dms 各階段=%s",
+           request.input_type, request.fast_mode, len(results), latency_ms,
+           {**timings, "total": latency_ms})
 
     repo.insert_recommendation_log(
         conn,

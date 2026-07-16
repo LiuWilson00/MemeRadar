@@ -64,7 +64,12 @@ def connect(dsn: str | Path | None = None) -> psycopg.Connection:
         dsn if isinstance(dsn, str) and dsn.startswith("postgres")
         else get_settings().database_url
     )
-    return psycopg.connect(url, row_factory=dict_row, autocommit=False)
+    # 後盾：交易閒置逾 60s（例如請求卡在外部 LLM 呼叫時仍握著連線）由 DB 端自動中止，
+    # 釋放連線並讓該請求報錯收場——單一慢/掛住的請求就不會把連線與 worker 無限占住。
+    return psycopg.connect(
+        url, row_factory=dict_row, autocommit=False,
+        options="-c idle_in_transaction_session_timeout=60000",
+    )
 
 
 def ensure_schema() -> None:

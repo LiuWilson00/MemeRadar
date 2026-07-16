@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import logging
 import random
 import sys
 import threading
@@ -114,9 +115,21 @@ class Deps:
     classifier: Any = None
 
 
-def _default_deps() -> Deps:
+logger = logging.getLogger("memeradar.api")
+
+# 意圖分析 / rerank 的 Claude 呼叫逾時（秒）。SDK 預設 ~600s，卡住的呼叫會把 API worker
+# 一直占住（曾因此全 worker 卡死、/health 都假死）。設短逾時 + 少重試 → 卡住就快速失敗放人。
+_ANTHROPIC_TIMEOUT_S = 30.0
+
+
+def _anthropic_client(api_key: str | None):
+    kw = {"timeout": _ANTHROPIC_TIMEOUT_S, "max_retries": 1}
     import anthropic
 
+    return anthropic.Anthropic(api_key=api_key, **kw) if api_key else anthropic.Anthropic(**kw)
+
+
+def _default_deps() -> Deps:
     from memeradar.api.google_auth import build_google_verifier
     from memeradar.shared.config import get_settings
     from memeradar.understanding.annotator import build_default_vlm
@@ -127,7 +140,7 @@ def _default_deps() -> Deps:
     vlm = build_default_vlm()
     ocr, classifier = _build_fast_clients(settings, vlm)
     return Deps(
-        client=anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic(),
+        client=_anthropic_client(api_key),
         vlm=vlm,
         embedder=get_embedder(settings.embedding_backend),
         db_path=settings.memeradar_data_dir,  # 連線改由 DATABASE_URL；此欄僅為相容保留
@@ -372,20 +385,20 @@ def annotate_one_pending(deps: Deps, conn: psycopg.Connection) -> bool:
     if not pending:
         return False
     meme = pending[0]
+    t0 = time.monotonic()
     try:
         annotation = annotate_meme(conn, deps.vlm, meme, data_dir=deps.data_dir)
     except VlmExhaustedError:
         raise  # 限流耗盡＝暫時性：維持 active，交給 worker 等下輪重試
     except Exception as exc:  # noqa: BLE001 永久性錯誤（圖檔遺失/損毀等）
-        # 轉 pending_review 排除出佇列，避免同一張壞圖無限重試阻塞其他 105 張
+        # 轉 pending_review 排除出佇列，避免同一張壞圖無限重試阻塞其他張
         repo.set_status(conn, meme.meme_id, "pending_review")
-        print(
-            f"[annotate] {meme.meme_id} 標註失敗，轉 pending_review：{exc!r}",
-            file=sys.stderr, flush=True,
-        )
+        logger.warning("[annotate] %s 標註失敗，轉 pending_review：%r", meme.meme_id, exc)
         return True
     if annotation is not None and annotation.is_meme:
         embed_pending_memes(conn, deps.embedder)
+    logger.info("[annotate] %s 完成 %.0fms (is_meme=%s)", meme.meme_id,
+                (time.monotonic() - t0) * 1000, annotation.is_meme if annotation else None)
     return True
 
 
@@ -445,6 +458,35 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         threading.Thread(target=_annotation_worker, args=(deps,), daemon=True).start()
 
     app = FastAPI(title="MemeRadar API", version="0.1.0")
+
+    # 讓 memeradar 的 log 進 stdout（Zeabur 可見）；不覆蓋既有 handler。
+    logging.basicConfig(
+        level=logging.INFO, stream=sys.stdout,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
+
+    @app.middleware("http")
+    async def _timing(request: Request, call_next):
+        """每個請求記路徑 + 耗時；慢（>5s）或 5xx 升為 WARNING，掛住/例外也留痕。
+
+        追蹤「請求卡住」用：卡住的請求現在最多 ~30-60s 就因逾時收場，會在此以慢/失敗留下 log。
+        """
+        t0 = time.monotonic()
+        try:
+            resp = await call_next(request)
+        except Exception:
+            dt = (time.monotonic() - t0) * 1000
+            logger.exception("[req] %s %s 例外 after %.0fms",
+                             request.method, request.url.path, dt)
+            raise
+        dt = (time.monotonic() - t0) * 1000
+        if dt > 5000 or resp.status_code >= 500:
+            logger.warning("[req慢] %s %s -> %s (%.0fms)",
+                           request.method, request.url.path, resp.status_code, dt)
+        else:
+            logger.info("[req] %s %s -> %s (%.0fms)",
+                        request.method, request.url.path, resp.status_code, dt)
+        return resp
 
     @app.exception_handler(Exception)
     async def _capture_server_error(request: Request, exc: Exception):
