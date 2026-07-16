@@ -51,7 +51,8 @@ export default function UploadView({ onDone }: { onDone?: () => void }) {
     const poll = () => {
       fetchAnnotationPending()
         .then((r) => alive && setPending(r.pending))
-        .catch(() => {});
+        // 查不到（API 忙/斷線）就清成 unknown，別讓舊數字一直掛著誤導（看似佇列卡住）
+        .catch(() => alive && setPending(null));
     };
     poll();
     const timer = setInterval(poll, 4000);

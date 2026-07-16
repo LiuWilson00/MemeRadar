@@ -1058,6 +1058,18 @@ function ResultsScreen({
 
   return (
     <div className="flex flex-1 flex-col animate-fade-in">
+      {/* 左上返回：回到搜尋起點（同「搜尋下一張圖」），比只有底部按鈕直覺 */}
+      <div className="flex shrink-0 items-center px-2 pt-1">
+        <button
+          onClick={onReset}
+          className="flex items-center gap-0.5 rounded-full px-2 py-1.5 text-sm text-muted
+                     active:bg-panel"
+          aria-label="返回搜尋"
+        >
+          <ChevronLeft className="size-4" /> 返回
+        </button>
+      </div>
+
       {response.intent.sensitive && (
         <p className="mx-4 mb-1 flex items-center justify-center gap-1.5 rounded-full bg-amber-soft px-3 py-1.5 text-center text-xs text-amber">
           <AlertTriangle className="size-3.5" /> 偵測到敏感情境，回應已降級為安撫
