@@ -42,8 +42,15 @@ def get_pool():
         if _pool is not None:
             _pool.close()
         _pool = ConnectionPool(
-            dsn, min_size=1, max_size=10, open=True,
-            kwargs={"row_factory": dict_row},
+            dsn, min_size=1, max_size=20, open=True,
+            # timeout=10：拿不到連線時最多等 10s 就拋 PoolTimeout（快速失敗、放掉執行緒），
+            # 免得「等連線的人」把執行緒池一條條吃光、連 /health 都排不到（假死的最後一哩）。
+            timeout=10.0,
+            kwargs={
+                "row_factory": dict_row,
+                # 後盾：借出的連線若交易閒置逾 60s（例如卡在外部呼叫）由 DB 端中止、放回池子。
+                "options": "-c idle_in_transaction_session_timeout=60000",
+            },
         )
         _pool_dsn = dsn
     return _pool

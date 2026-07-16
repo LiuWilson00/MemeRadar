@@ -553,8 +553,14 @@ def create_app(deps: Deps | None = None) -> FastAPI:
 
     def get_conn() -> Iterator[psycopg.Connection]:
         # 請求路徑走連線池（短連線）；context manager 會 commit/rollback 並歸還連線
-        with get_pool().connection() as conn:
-            yield conn
+        from psycopg_pool import PoolTimeout
+
+        try:
+            with get_pool().connection() as conn:
+                yield conn
+        except PoolTimeout:
+            # 池子滿、10s 內拿不到連線 → 快速回 503（別在執行緒裡卡等拖垮 app）
+            raise HTTPException(status_code=503, detail="服務忙碌中，請稍後再試") from None
 
     @app.get("/health")
     def health() -> dict:
