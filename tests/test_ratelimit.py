@@ -32,3 +32,14 @@ def test_keys_are_independent():
     assert rl.allow("ip1") is True
     assert rl.allow("ip2") is True  # 不同 key 各自計數
     assert rl.allow("ip1") is False
+
+
+def test_key_table_is_bounded_lru():
+    """防 X-Forwarded-For 洗 key 撐爆記憶體：不同 key 數超過 max_keys 就淘汰最久未用的。"""
+    box, clk = _clock()
+    rl = RateLimiter(5, 60, clock=clk, max_keys=10)
+    for i in range(100):
+        rl.allow(f"ip{i}")
+    assert len(rl._hits) <= 10  # 表被硬上限綁住，不隨 key 數無界成長
+    assert "ip99" in rl._hits  # 最近用到的還在
+    assert "ip0" not in rl._hits  # 最久未用的被淘汰

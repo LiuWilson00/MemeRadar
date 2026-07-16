@@ -256,10 +256,16 @@ def _task_label(request: RecommendRequest) -> str:
 
 
 def _client_key(request: Request) -> str:
-    """限流的 key：優先取 X-Forwarded-For 第一段（Zeabur 等反代後才是真實 IP）。"""
+    """限流的 key：取 X-Forwarded-For 的「最後」一段——信任的反代（Zeabur）附加的對端 IP。
+
+    取最後而非第一段：第一段是 client 可自填偽造的，攻擊者輪換假值就能繞過限流、還撐爆限流表；
+    最後一段才是反代加上的真實 client IP（假設一層可信反代）。無 XFF（本機直連）退回 client.host。
+    """
     fwd = request.headers.get("x-forwarded-for")
     if fwd:
-        return fwd.split(",")[0].strip()
+        parts = [p.strip() for p in fwd.split(",") if p.strip()]
+        if parts:
+            return parts[-1]
     return request.client.host if request.client else "unknown"
 
 
@@ -408,16 +414,26 @@ def annotate_one_pending(deps: Deps, conn: psycopg.Connection) -> bool:
 
 
 def _annotation_worker(deps: Deps) -> None:
-    """常駐背景執行緒：慢慢把待標註的梗圖標註完（照 NVIDIA 限流節奏）。"""
+    """常駐背景執行緒：慢慢把待標註的梗圖標註完（照 NVIDIA 限流節奏）。
+
+    連線開一次、跨輪重用；出錯（限流耗盡 / 連線被 idle 逾時砍 / 網路斷）才關掉重連。
+    原本每 1-8s connect+close 一次＝閒置時一天也白做上萬次 TCP+TLS+auth 握手。
+    """
+    conn = None
     while True:
         did = False
-        conn = connect(deps.db_path)
         try:
+            if conn is None or conn.closed:
+                conn = connect(deps.db_path)
             did = annotate_one_pending(deps, conn)
-        except Exception:  # noqa: BLE001 限流耗盡等 → 留待下輪，別讓 worker 掛掉
+        except Exception:  # noqa: BLE001 出錯就丟掉連線重來，別讓 worker 掛掉
             did = False
-        finally:
-            conn.close()
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                conn = None
         time.sleep(1.0 if did else 8.0)  # 有活就快點跑；沒活就緩一緩
 
 
