@@ -119,7 +119,7 @@ export interface Dashboard {
   };
 }
 
-export type TaskStatus = "pending" | "running" | "done" | "error";
+export type TaskStatus = "pending" | "running" | "done" | "error" | "cancelled";
 
 /** 歷史列表項（精簡，不含完整 result；has_result 為 SQLite 0/1）。 */
 export interface TaskSummary {

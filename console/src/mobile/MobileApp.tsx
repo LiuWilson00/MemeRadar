@@ -28,6 +28,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import MemeImage from "../components/MemeImage";
 import {
+  cancelTask,
   DEFAULT_PARAMS,
   fetchLeaderboard,
   fetchMeme,
@@ -191,6 +192,7 @@ export default function MobileApp({ initialMemeId }: { initialMemeId?: string | 
   const fileRef = useRef<HTMLInputElement>(null);
   const lastInput = useRef<Input | null>(null);
   const startRef = useRef(loadActiveSearch()?.startedAt ?? 0); // 本機任務起算時間（ms）
+  const genRef = useRef(0); // 送出代數：取消 / 重送會遞增，讓在途的 submit 失效不再啟動輪詢
 
   useEffect(() => {
     fetchMeta().then(setMeta).catch(() => {});
@@ -260,6 +262,7 @@ export default function MobileApp({ initialMemeId }: { initialMemeId?: string | 
 
   const submit = useCallback(
     async (input: Input, filters: Filters, params: Params, fast: boolean) => {
+    const gen = ++genRef.current; // 這次送出的代數
     lastInput.current = input;
     logBreadcrumb("action", `搜尋：${input.kind}${fast ? "（快速）" : "（精準）"}`);
     startRef.current = Date.now();
@@ -271,18 +274,34 @@ export default function MobileApp({ initialMemeId }: { initialMemeId?: string | 
     setSubmitting(true);
     try {
       const { task_id } = await submitTask(input, filters, params, fast);
+      if (gen !== genRef.current) return; // 送出期間被取消/重送 → 不啟動輪詢
       setActiveTaskId(task_id); // 觸發輪詢
       saveActiveSearch(task_id, startRef.current); // 存起來 → 重整可續跑
     } catch (e) {
+      if (gen !== genRef.current) return;
       if (e instanceof QuotaError) {
         setQuota({ limit: e.limit }); // 免費次數用完 → 引導登入
       } else {
         setHomeError(e instanceof Error ? e.message : "送出失敗，請再試一次");
       }
     } finally {
-      setSubmitting(false);
+      if (gen === genRef.current) setSubmitting(false);
     }
   }, []);
+
+  // 取消進行中的搜尋：停止輪詢、通知後端標記 cancelled、回到閒置
+  const cancelSearch = useCallback(() => {
+    genRef.current++; // 讓在途的 submit 失效
+    const id = activeTaskId;
+    logBreadcrumb("action", "取消搜尋");
+    clearActiveSearch();
+    startRef.current = 0;
+    setActiveTaskId(null);
+    setTask(null);
+    setSubmitting(false);
+    setHomeError(null);
+    if (id) void cancelTask(id);
+  }, [activeTaskId]);
 
   // 從歷史開啟某任務：done 立刻顯示結果，仍在跑則接續輪詢
   const openTask = useCallback((id: string) => {
@@ -352,7 +371,9 @@ export default function MobileApp({ initialMemeId }: { initialMemeId?: string | 
 
   const done = task?.status === "done" && task.result ? task.result : null;
   const errorMsg = homeError ?? (task?.status === "error" ? task?.error : null);
-  const loading = submitting || (activeTaskId !== null && !done && task?.status !== "error");
+  const loading =
+    submitting ||
+    (activeTaskId !== null && !done && task?.status !== "error" && task?.status !== "cancelled");
   const loadingBattle =
     task?.input_type === "meme_battle" || lastInput.current?.kind === "battle";
   // 已跑秒數的起算點：優先用「本機送出時間」（無時鐘差、跨分頁/重整都對），
@@ -373,7 +394,9 @@ export default function MobileApp({ initialMemeId }: { initialMemeId?: string | 
       />
     );
   } else if (loading) {
-    home = <LoadingScreen battle={loadingBattle} startedAtMs={loadingStartMs} />;
+    home = (
+      <LoadingScreen battle={loadingBattle} startedAtMs={loadingStartMs} onCancel={cancelSearch} />
+    );
   } else if (errorMsg) {
     home = (
       <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center animate-fade-in">
@@ -735,7 +758,15 @@ function pickQuip(): string {
 }
 
 /** startedAtMs：任務起算時間（毫秒 epoch）。以它算已跑秒數 → 切到其他分頁再回來也不會歸零。 */
-function LoadingScreen({ battle, startedAtMs }: { battle: boolean; startedAtMs: number }) {
+function LoadingScreen({
+  battle,
+  startedAtMs,
+  onCancel,
+}: {
+  battle: boolean;
+  startedAtMs: number;
+  onCancel?: () => void;
+}) {
   const stages = battle ? LOADING_STAGES.battle : LOADING_STAGES.normal;
   const [now, setNow] = useState(() => Date.now());
   const [quip, setQuip] = useState(() => pickQuip());
@@ -788,6 +819,16 @@ function LoadingScreen({ battle, startedAtMs }: { battle: boolean; startedAtMs: 
         免費模型有時要想久一點。可以先去別的地方逛逛，
         <span className="text-fg">好了會出現在「歷史」</span>。
       </p>
+
+      {/* 太久想放棄 → 取消（跑 3 秒後才出現，免得快速搜尋一閃即逝） */}
+      {onCancel && secs >= 3 && (
+        <button
+          onClick={onCancel}
+          className="flex items-center gap-1.5 rounded-full border border-line px-5 py-2 text-sm text-muted active:bg-panel active:text-fg animate-fade-in"
+        >
+          <XCircle className="size-4" /> 取消搜尋
+        </button>
+      )}
     </div>
   );
 }
@@ -797,6 +838,7 @@ const STATUS_META: Record<TaskStatus, { label: string; Icon: typeof Clock; cls: 
   running: { label: "運算中", Icon: Loader2, cls: "text-amber" },
   done: { label: "完成", Icon: CheckCircle2, cls: "text-signal" },
   error: { label: "失敗", Icon: XCircle, cls: "text-danger" },
+  cancelled: { label: "已取消", Icon: XCircle, cls: "text-muted" },
 };
 
 const INPUT_LABEL: Record<TaskSummary["input_type"], string> = {

@@ -1609,6 +1609,35 @@ class TestBugReports:
         assert client.get("/bug-reports").status_code == 401
 
 
+class TestCancelTask:
+    """取消搜尋：僅本人、僅未完成；取消後背景跑完的結果不覆寫。"""
+
+    def test_cancel_marks_cancelled(self, env):
+        client, _conn, _memes, deps = env
+        deps.run_async = lambda fn: None  # 建任務但不執行 → 維持 pending
+        tid = client.post("/tasks", json={**BASE_REQUEST, "client_id": "c_me"}).json()["task_id"]
+        r = client.post(f"/tasks/{tid}/cancel", params={"client_id": "c_me"})
+        assert r.status_code == 200 and r.json()["cancelled"] is True
+        assert client.get(f"/tasks/{tid}").json()["status"] == "cancelled"
+
+    def test_cancel_wrong_client_is_noop(self, env):
+        client, _conn, _memes, deps = env
+        deps.run_async = lambda fn: None
+        tid = client.post("/tasks", json={**BASE_REQUEST, "client_id": "c_me"}).json()["task_id"]
+        r = client.post(f"/tasks/{tid}/cancel", params={"client_id": "someone_else"})
+        assert r.json()["cancelled"] is False
+        assert client.get(f"/tasks/{tid}").json()["status"] in ("pending", "running")
+
+    def test_completed_result_does_not_overwrite_cancel(self, env):
+        client, conn, _memes, deps = env
+        deps.run_async = lambda fn: None
+        tid = client.post("/tasks", json={**BASE_REQUEST, "client_id": "c_me"}).json()["task_id"]
+        repo.cancel_task(conn, tid, "c_me")
+        # 背景任務跑完寫 done（帶 only_if_not=cancelled）→ 不可覆寫
+        repo.set_task_status(conn, tid, "done", result={"x": 1}, only_if_not="cancelled")
+        assert repo.get_task(conn, tid)["status"] == "cancelled"
+
+
 class TestAnnotationQueueResilience:
     """壞圖（圖檔到處都讀不到）不能無限重試阻塞佇列 → 轉 pending_review。"""
 

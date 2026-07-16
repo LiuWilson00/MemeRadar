@@ -1282,19 +1282,32 @@ def set_task_status(
     *,
     result: object | None = None,
     error: str | None = None,
+    only_if_not: str | None = None,
 ) -> None:
-    """更新任務狀態；done 時附 result，error 時附 error 訊息。"""
-    conn.execute(
-        "UPDATE tasks SET status = %s, result = %s, error = %s, updated_at = %s WHERE task_id = %s",
-        (
-            status,
-            _dumps(result) if result is not None else None,
-            error,
-            _now_iso(),
-            task_id,
-        ),
+    """更新任務狀態；done 時附 result，error 時附 error 訊息。
+
+    ``only_if_not``：僅在目前狀態不等於它時才更新（背景任務跑完不覆寫已取消的任務）。
+    """
+    sql = (
+        "UPDATE tasks SET status = %s, result = %s, error = %s, updated_at = %s WHERE task_id = %s"
+    )
+    params = [status, _dumps(result) if result is not None else None, error, _now_iso(), task_id]
+    if only_if_not is not None:
+        sql += " AND status != %s"
+        params.append(only_if_not)
+    conn.execute(sql, params)
+    conn.commit()
+
+
+def cancel_task(conn: sqlite3.Connection, task_id: str, client_id: str) -> bool:
+    """使用者取消進行中的任務（僅本人、僅 pending/running）；回傳是否有取消到。"""
+    cur = conn.execute(
+        "UPDATE tasks SET status = 'cancelled', updated_at = %s "
+        "WHERE task_id = %s AND client_id = %s AND status IN ('pending', 'running')",
+        (_now_iso(), task_id, client_id),
     )
     conn.commit()
+    return cur.rowcount > 0
 
 
 def abort_orphan_tasks(conn: sqlite3.Connection) -> int:

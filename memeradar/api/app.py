@@ -217,6 +217,9 @@ def _is_public(method: str, path: str) -> bool:
         return True
     if re.match(r"^/memes/[^/]+/comments/[^/]+$", path) is not None:
         return True
+    # 取消任務：前台按取消（僅 POST）
+    if method == "POST" and re.match(r"^/tasks/[^/]+/cancel$", path) is not None:
+        return True
     # 任務進度查詢：前台輪詢，公開（僅 GET）
     return method == "GET" and re.match(r"^/tasks/[^/]+$", path) is not None
 
@@ -251,8 +254,10 @@ def _run_task(deps: Deps, task_id: str, request: RecommendRequest,
               image_bytes: bytes | None) -> None:
     """背景執行一筆推薦任務，寫回 done/error（自開連線；任何例外都收斂為 error）。"""
     conn = connect(deps.db_path)
+    # 使用者中途取消時，任務會被標成 cancelled；背景跑完的結果不可覆寫它（only_if_not）
+    done = lambda **kw: repo.set_task_status(conn, task_id, only_if_not="cancelled", **kw)  # noqa: E731
     try:
-        repo.set_task_status(conn, task_id, "running")
+        done(status="running")
         if request.fast_mode:
             result = run_fast_recommendation(
                 conn, deps.ocr, deps.classifier, deps.embedder, request,
@@ -263,15 +268,15 @@ def _run_task(deps: Deps, task_id: str, request: RecommendRequest,
                 conn, deps.vlm, deps.embedder, request,
                 image_bytes=image_bytes, models=repo.get_task_models(conn),
             )
-        repo.set_task_status(conn, task_id, "done", result=result)
+        done(status="done", result=result)
     except IntentRefusedError:
-        repo.set_task_status(conn, task_id, "error", error="模型基於安全政策拒絕分析此對話")
+        done(status="error", error="模型基於安全政策拒絕分析此對話")
     except ScreenshotParseError as exc:
-        repo.set_task_status(conn, task_id, "error", error=f"截圖解析失敗：{exc}")
+        done(status="error", error=f"截圖解析失敗：{exc}")
     except OpponentMemeRefusedError:
-        repo.set_task_status(conn, task_id, "error", error="模型基於安全政策拒絕解析對方梗圖")
+        done(status="error", error="模型基於安全政策拒絕解析對方梗圖")
     except Exception as exc:  # noqa: BLE001 背景任務不可讓工作執行緒崩潰
-        repo.set_task_status(conn, task_id, "error", error=f"推薦失敗：{exc}")
+        done(status="error", error=f"推薦失敗：{exc}")
     finally:
         conn.close()
 
@@ -590,6 +595,14 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         if task is None:
             raise HTTPException(status_code=404, detail="任務不存在")
         return task
+
+    @app.post("/tasks/{task_id}/cancel")
+    def cancel_task(task_id: str, client_id: str = "",
+                    conn: psycopg.Connection = Depends(get_conn)):
+        """使用者取消進行中的搜尋（僅本人、僅未完成）。背景已在跑的模型呼叫無法中斷，
+        但任務會標成 cancelled、其結果不落地，前台即刻停止輪詢回到閒置。"""
+        cancelled = repo.cancel_task(conn, task_id, client_id)
+        return {"cancelled": cancelled}
 
     @app.post("/parse-screenshot")
     def parse_screenshot_endpoint(request: ParseScreenshotRequest):

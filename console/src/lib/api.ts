@@ -225,6 +225,18 @@ export async function fetchTask(taskId: string): Promise<TaskDetail> {
   return unwrap<TaskDetail>(await apiFetch(`/tasks/${encodeURIComponent(taskId)}`));
 }
 
+/** 取消進行中的搜尋任務（best-effort，不丟例外給 UI）。 */
+export async function cancelTask(taskId: string): Promise<void> {
+  try {
+    await apiFetch(
+      `/tasks/${encodeURIComponent(taskId)}/cancel?client_id=${encodeURIComponent(getClientId())}`,
+      { method: "POST" },
+    );
+  } catch {
+    /* 取消是 best-effort：前端已停止輪詢，後端標記失敗也無妨 */
+  }
+}
+
 /** 本機 client 的歷史任務（新到舊）。 */
 export async function fetchTaskHistory(): Promise<TaskSummary[]> {
   return unwrap<TaskSummary[]>(await apiFetch(`/tasks?client_id=${encodeURIComponent(getClientId())}`));
