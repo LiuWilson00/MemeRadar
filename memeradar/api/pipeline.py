@@ -33,6 +33,7 @@ from memeradar.shared import repository as repo
 from memeradar.shared.models import RecommendationLog, new_id
 from memeradar.understanding.classifier import Classification
 from memeradar.understanding.embedding import Embedder, embedding_signature
+from memeradar.understanding.nvidia_vlm import VlmExhaustedError
 from memeradar.understanding.opponent import analyze_opponent_meme, build_battle_turn
 
 logger = logging.getLogger("memeradar.pipeline")
@@ -160,7 +161,8 @@ def run_recommendation(
             model=pick("rerank"),
             log=sink,
         )
-    except RerankRefusedError:
+    except (RerankRefusedError, VlmExhaustedError):
+        # 拒答 或 VLM 卡住/限流耗盡 → 退純向量排序（快速回應，不讓慢 rerank 拖住請求）
         rerank_fallback = True
         ranked = _vector_fallback(retrieval.candidates, request.params.top_n)
     timings["rerank"] = int((time.perf_counter() - t0) * 1000)

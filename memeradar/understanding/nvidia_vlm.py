@@ -33,16 +33,17 @@ class VlmExhaustedError(RuntimeError):
     """所有 key 皆限流 / 失敗且超過等待上限時拋出。"""
 
 
-def build_clients(keys: list[str]) -> tuple[list[Any], list[str]]:
+def build_clients(keys: list[str], *, timeout: float = 25.0) -> tuple[list[Any], list[str]]:
     """由 key 清單建立 OpenAI client 與其遮罩後的 key id（供 log）。
 
-    timeout=60：單次呼叫最多等 60 秒（避免掛住的請求拖到 SDK 預設 ~600s，讓整批上傳看似凍結）。
+    timeout：單次呼叫最多等幾秒（避免掛住的請求拖到 SDK 預設 ~600s）。線上推薦（意圖/rerank）
+    要更短、卡住就快速失敗放人（見 build_default_vlm(fast_fail=True)）；批次標註可寬鬆些。
     max_retries=0：SDK 不自行重試 429／連線錯誤——由本類的 key 輪替迴圈即時換把處理，反應更快。
     """
     from openai import OpenAI
 
     clients = [
-        OpenAI(base_url=BASE_URL, api_key=k, timeout=60.0, max_retries=0) for k in keys
+        OpenAI(base_url=BASE_URL, api_key=k, timeout=timeout, max_retries=0) for k in keys
     ]
     key_ids = [("…" + k[-4:]) if len(k) >= 4 else "…" for k in keys]
     return clients, key_ids

@@ -254,8 +254,12 @@ def annotate_meme(
     return annotation
 
 
-def build_default_vlm():
-    """由 settings 的 NVIDIA key 清單建 NvidiaVlm（正式執行用）。"""
+def build_default_vlm(*, fast_fail: bool = False):
+    """由 settings 的 NVIDIA key 清單建 NvidiaVlm（正式執行用）。
+
+    ``fast_fail``：線上推薦（意圖/rerank）用——短逾時、不等冷卻，卡住就快速失敗（交管線
+    fallback，rerank 退純向量），避免搜尋把 API worker/連線占死。批次標註用預設（較有耐心）。
+    """
     from memeradar.understanding.nvidia_vlm import NvidiaVlm, build_clients
 
     settings = get_settings()
@@ -263,6 +267,11 @@ def build_default_vlm():
     if not keys:
         raise RuntimeError(
             "缺少 NVIDIA_API_KEYS：請於 .env 填入至少一把 NVIDIA key（逗號分隔多把）"
+        )
+    if fast_fail:
+        clients, key_ids = build_clients(keys, timeout=15.0)
+        return NvidiaVlm(
+            clients, key_ids, settings.nvidia_vlm_model, max_wait_s=8.0, cooldown_s=5.0
         )
     clients, key_ids = build_clients(keys)
     return NvidiaVlm(clients, key_ids, settings.nvidia_vlm_model)

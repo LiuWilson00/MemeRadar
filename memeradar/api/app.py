@@ -113,6 +113,9 @@ class Deps:
     # （NV-CLIP 沒字圖分類）。無 NVIDIA key 時為 None（fast_mode 請求會落背景任務 error）。
     ocr: Any = None
     classifier: Any = None
+    # 線上推薦（意圖/rerank）專用的「快速失敗」VLM：短逾時、不等冷卻，卡住就退 fallback，
+    # 不讓一次慢搜尋把 API worker/連線占死。None 時退用 vlm（測試/相容）。
+    online_vlm: Any = None
 
 
 logger = logging.getLogger("memeradar.api")
@@ -138,10 +141,12 @@ def _default_deps() -> Deps:
     settings = get_settings()
     api_key = settings.anthropic_api_key
     vlm = build_default_vlm()
+    online_vlm = build_default_vlm(fast_fail=True)  # 線上推薦：卡住快速失敗退 fallback
     ocr, classifier = _build_fast_clients(settings, vlm)
     return Deps(
         client=_anthropic_client(api_key),
         vlm=vlm,
+        online_vlm=online_vlm,
         embedder=get_embedder(settings.embedding_backend),
         db_path=settings.memeradar_data_dir,  # 連線改由 DATABASE_URL；此欄僅為相容保留
         data_dir=settings.memeradar_data_dir,
@@ -278,7 +283,7 @@ def _run_task(deps: Deps, task_id: str, request: RecommendRequest,
             )
         else:
             result = run_recommendation(
-                conn, deps.vlm, deps.embedder, request,
+                conn, deps.online_vlm or deps.vlm, deps.embedder, request,
                 image_bytes=image_bytes, models=repo.get_task_models(conn),
             )
         done(status="done", result=result)
@@ -579,7 +584,8 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             )
         try:
             return run_recommendation(
-                conn, deps.vlm, deps.embedder, request, image_bytes=image_bytes
+                conn, deps.online_vlm or deps.vlm, deps.embedder, request,
+                image_bytes=image_bytes,
             )
         except IntentRefusedError:
             raise HTTPException(
@@ -590,6 +596,11 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         except OpponentMemeRefusedError:
             raise HTTPException(
                 status_code=422, detail="模型基於安全政策拒絕解析對方梗圖"
+            ) from None
+        except VlmExhaustedError:
+            # 意圖分析卡住/限流耗盡：快速回 503（前端可改用快速模式或重試），不要拖住 worker
+            raise HTTPException(
+                status_code=503, detail="推薦服務忙碌中，請稍後再試或改用快速模式"
             ) from None
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=f"梗圖無法解析：{exc}") from None
