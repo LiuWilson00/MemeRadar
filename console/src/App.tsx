@@ -17,7 +17,7 @@ import ResultCard from "./components/ResultCard";
 import ReviewView from "./components/ReviewView";
 import SettingsView from "./components/SettingsView";
 import UploadView from "./components/UploadView";
-import { apiFetch, DEFAULT_FILTERS, DEFAULT_PARAMS, fetchMeta, recommend } from "./lib/api";
+import { apiFetch, DEFAULT_FILTERS, DEFAULT_PARAMS, fetchMeta, recommendViaTask } from "./lib/api";
 import { navigate, useRoute } from "./lib/router";
 import type { Filters, HistoryDetail, Meta, Params, RecommendResponse, Turn } from "./types";
 
@@ -81,7 +81,8 @@ export default function App() {
       setLoading(true);
       setError(null);
       try {
-        setResponse(await recommend(cleaned, queryFilters, queryParams));
+        // 走背景佇列（/tasks）而非同步 /recommend：慢搜尋不占請求連線池、不會拖垮 API
+        setResponse(await recommendViaTask(cleaned, queryFilters, queryParams));
       } catch (e) {
         setResponse(null);
         setError(e instanceof Error ? e.message : "查詢失敗");

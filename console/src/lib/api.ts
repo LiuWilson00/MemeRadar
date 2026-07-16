@@ -106,59 +106,37 @@ async function unwrap<T>(response: Response): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export async function recommend(
+/** 送出多輪對話到背景佇列（/tasks），回 task_id。 */
+async function submitConversationTask(
   turns: Turn[],
   filters: Filters,
   params: Params,
-): Promise<RecommendResponse> {
-  const response = await apiFetch("/recommend", {
+): Promise<{ task_id: string; status: TaskStatus }> {
+  const response = await apiFetch("/tasks", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(buildRecommendRequest(turns, filters, params)),
   });
-  return unwrap<RecommendResponse>(response);
+  return unwrap(response);
 }
 
-/** 梗圖大戰：上傳對方的梗圖，後端理解後推薦反擊梗（input_type=meme_battle）。 */
-export async function recommendByMemeBattle(
-  imageBase64: string,
-  filters: Filters = DEFAULT_FILTERS,
-  params: Params = DEFAULT_PARAMS,
+/** 後台工作台推薦：與 recommend() 同介面，但走背景佇列（送出→輪詢），
+ * 不占用同步請求連線 —— 慢搜尋不會拖住 API 的請求連線池。 */
+export async function recommendViaTask(
+  turns: Turn[],
+  filters: Filters,
+  params: Params,
 ): Promise<RecommendResponse> {
-  const response = await apiFetch("/recommend", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      input_type: "meme_battle",
-      image: imageBase64,
-      conversation: [],
-      filters,
-      params,
-      client_id: getClientId(),
-    }),
-  });
-  return unwrap<RecommendResponse>(response);
-}
-
-/** 截圖直推（手機 client 主流程）：input_type=screenshot，後端一次完成解析＋推薦。 */
-export async function recommendByScreenshot(
-  imageBase64: string,
-  filters: Filters = DEFAULT_FILTERS,
-  params: Params = DEFAULT_PARAMS,
-): Promise<RecommendResponse> {
-  const response = await apiFetch("/recommend", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      input_type: "screenshot",
-      image: imageBase64,
-      conversation: [],
-      filters,
-      params,
-      client_id: getClientId(),
-    }),
-  });
-  return unwrap<RecommendResponse>(response);
+  const { task_id } = await submitConversationTask(turns, filters, params);
+  const deadline = Date.now() + 120_000; // 最多輪詢 2 分鐘
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 1500));
+    const t = await fetchTask(task_id);
+    if (t.status === "done" && t.result) return t.result;
+    if (t.status === "error") throw new Error(t.error ?? "推薦失敗");
+    if (t.status === "cancelled") throw new Error("已取消");
+    if (Date.now() > deadline) throw new Error("推薦逾時，請稍後再試");
+  }
 }
 
 // ── 非同步任務（免費端點延遲高：送出即回、背景執行、輪詢查結果）────────────
