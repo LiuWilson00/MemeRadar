@@ -413,9 +413,10 @@ export default function MobileApp({ initialMemeId }: { initialMemeId?: string | 
   }
 
   return (
-    <div className="mx-auto flex min-h-[100dvh] max-w-md flex-col">
+    // 固定滿版視窗高度、不隨內容成長；header/footer 釘住，內容只在 main 內捲動
+    <div className="mx-auto flex h-[100dvh] max-w-md flex-col overflow-hidden">
       <header
-        className={`relative flex items-center justify-center gap-2 overflow-hidden px-4 transition-all duration-300 ${
+        className={`relative flex shrink-0 items-center justify-center gap-2 overflow-hidden px-4 transition-all duration-300 ${
           headerHidden && tab !== "explore"
             ? "max-h-0 py-0 opacity-0"
             : "max-h-28 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))]"
@@ -449,7 +450,7 @@ export default function MobileApp({ initialMemeId }: { initialMemeId?: string | 
         )}
       </header>
 
-      <main ref={mainRef} className="flex min-h-0 flex-1 flex-col">
+      <main ref={mainRef} className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         {tab === "settings" ? (
           <SettingsScreen
           settings={settings}
@@ -521,7 +522,7 @@ function NavBar({
     { id: "settings", label: "設定", Icon: SlidersHorizontal },
   ];
   return (
-    <nav className="flex border-t border-line bg-panel pb-[env(safe-area-inset-bottom)]">
+    <nav className="flex shrink-0 border-t border-line bg-panel pb-[env(safe-area-inset-bottom)]">
       {items.map(({ id, label, Icon, busy }) => (
         <button
           key={id}
