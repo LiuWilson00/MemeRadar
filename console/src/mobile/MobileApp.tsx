@@ -77,6 +77,19 @@ type Tab = "home" | "chat" | "explore" | "history" | "settings";
 type Mode = "screenshot" | "battle";
 type Input = TaskInput;
 
+// 情境快選：一句話的語意 → 快速檢索出對應梗圖（emoji 純視覺）
+type Scenario = { emoji: string; label: string; query: string };
+const SCENARIOS: Scenario[] = [
+  { emoji: "😤", label: "憤怒", query: "生氣 憤怒 森77 火大 抓狂" },
+  { emoji: "🙄", label: "無言", query: "無言 傻眼 翻白眼 問號 三條線" },
+  { emoji: "🧊", label: "句點", query: "句點對方 終結話題 冷淡 不想聊 已讀不回" },
+  { emoji: "😬", label: "尷尬", query: "尷尬 冷場 好尷尬 場面僵" },
+  { emoji: "😏", label: "嘲諷", query: "嘲諷 陰陽怪氣 反串 酸 諷刺" },
+  { emoji: "🤷", label: "敷衍", query: "敷衍 隨便 好喔 擺爛 無所謂" },
+  { emoji: "🙏", label: "膜拜", query: "膜拜 讚嘆 太神了 佩服 跪了" },
+  { emoji: "😵", label: "崩潰", query: "崩潰 心累 厭世 好累 撐不住" },
+];
+
 const POLL_MS = 1800;
 const RUNNING: TaskStatus[] = ["pending", "running"];
 
@@ -264,7 +277,7 @@ export default function MobileApp({ initialMemeId }: { initialMemeId?: string | 
   };
 
   const submit = useCallback(
-    async (input: Input, filters: Filters, params: Params, fast: boolean) => {
+    async (input: Input, filters: Filters, params: Params, fast: boolean, variety = false) => {
     const gen = ++genRef.current; // 這次送出的代數
     lastInput.current = input;
     logBreadcrumb("action", `搜尋：${input.kind}${fast ? "（快速）" : "（精準）"}`);
@@ -276,7 +289,7 @@ export default function MobileApp({ initialMemeId }: { initialMemeId?: string | 
     setTab("home");
     setSubmitting(true);
     try {
-      const { task_id } = await submitTask(input, filters, params, fast);
+      const { task_id } = await submitTask(input, filters, params, fast, variety);
       if (gen !== genRef.current) return; // 送出期間被取消/重送 → 不啟動輪詢
       setActiveTaskId(task_id); // 觸發輪詢
       saveActiveSearch(task_id, startRef.current); // 存起來 → 重整可續跑
@@ -323,6 +336,22 @@ export default function MobileApp({ initialMemeId }: { initialMemeId?: string | 
     modeRef.current = mode;
     fileRef.current?.click();
   };
+
+  // 情境快選：用該情境的語意做快速檢索（variety=加權隨機，每次不同）→ 完整結果頁
+  const onScenario = useCallback(
+    (s: Scenario) => {
+      logBreadcrumb("action", `情境：${s.label}`);
+      setBattleImage(null);
+      void submit(
+        { kind: "text", text: s.query },
+        settingsToFilters(settings),
+        DEFAULT_PARAMS,
+        true, // 快速
+        true, // variety
+      );
+    },
+    [submit, settings],
+  );
 
   const onFile = useCallback(
     async (file: File | undefined) => {
@@ -432,6 +461,7 @@ export default function MobileApp({ initialMemeId }: { initialMemeId?: string | 
         onToggleTyping={() => setTyping((v) => !v)}
         onSubmitText={onText}
         onPick={pick}
+        onScenario={onScenario}
         fastMode={settings.fastMode}
         onToggleFast={() => updateSettings({ ...settings, fastMode: !settings.fastMode })}
       />
@@ -579,6 +609,7 @@ function IdleScreen({
   onToggleTyping,
   onSubmitText,
   onPick,
+  onScenario,
   fastMode,
   onToggleFast,
 }: {
@@ -588,11 +619,29 @@ function IdleScreen({
   onToggleTyping: () => void;
   onSubmitText: () => void;
   onPick: (mode: Mode) => void;
+  onScenario: (s: Scenario) => void;
   fastMode: boolean;
   onToggleFast: () => void;
 }) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-6 px-6 pb-4">
+    <div className="flex flex-1 flex-col px-6 pb-4">
+      {/* 情境快選：一排橫向捲動（首頁上端）。點一下 → 快速檢索該情境的梗圖（每次不同） */}
+      <div className="pt-4 animate-fade-in">
+        <p className="mb-2 px-1 text-xs text-muted">不想打字？選個情境，直接秀梗圖 👇</p>
+        <div className="-mx-6 flex gap-2 overflow-x-auto px-6 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {SCENARIOS.map((s) => (
+            <button
+              key={s.label}
+              onClick={() => onScenario(s)}
+              className="flex shrink-0 items-center gap-1.5 rounded-full border border-line bg-panel px-3.5 py-2 text-sm active:scale-95 active:bg-raised"
+            >
+              <span className="text-base">{s.emoji}</span> {s.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex flex-1 flex-col items-center justify-center gap-6">
       <div
         className="text-center animate-fade-in-up stagger"
         style={{ "--i": 0 } as React.CSSProperties}
@@ -695,6 +744,7 @@ function IdleScreen({
             </button>
           </div>
         )}
+      </div>
       </div>
     </div>
   );

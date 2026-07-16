@@ -170,6 +170,21 @@ class TestFastPipeline:
         )
         assert out["results"] == []
 
+    def test_variety_returns_distinct_subset_from_pool(self, conn):
+        # 情境快選：variety=True → 從候選池加權隨機抽 top_n 張不重複
+        ids = {seed(conn, [1.0, 0.0]).meme_id for _ in range(10)}
+        embedder = RoutedEmbedder({"生氣 森77": [1.0, 0.0]})
+        req = _request(
+            input_type="text",
+            conversation=[{"speaker": "other", "text": "生氣 森77"}],
+            variety=True,
+        )
+        out = run_fast_recommendation(conn, StubOcr(""), StubClassifier([]), embedder, req)
+        got = [r["meme_id"] for r in out["results"]]
+        assert len(got) == 5  # top_n
+        assert len(set(got)) == 5  # 不重複
+        assert set(got) <= ids  # 都來自候選池
+
     def test_empty_input_returns_empty_results_no_crash(self, conn):
         seed(conn, [1.0, 0.0])
         embedder = RoutedEmbedder({})

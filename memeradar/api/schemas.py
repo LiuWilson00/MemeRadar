@@ -39,6 +39,8 @@ class RecommendRequest(BaseModel):
     # 快速模式：OCR（有字）/ NV-CLIP（沒字）→ 向量檢索，跳過 VLM/LLM（秒回，較粗）。
     # 後端預設 False（精準）；手機端預設打勾送 True，取消勾選才走 VLM 精準模式。
     fast_mode: bool = False
+    # 情境快選用：從候選池加權隨機抽，讓同一情境每次結果有變化（僅快速模式）。
+    variety: bool = False
 
 
 class ParseScreenshotRequest(BaseModel):

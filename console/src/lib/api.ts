@@ -176,6 +176,7 @@ export function buildTaskRequest(
   filters: Filters,
   params: Params,
   fastMode = false,
+  variety = false,
 ) {
   return {
     input_type: INPUT_TYPE[input.kind],
@@ -185,6 +186,7 @@ export function buildTaskRequest(
     params,
     client_id: getClientId(),
     fast_mode: fastMode,
+    variety,
   };
 }
 
@@ -204,11 +206,12 @@ export async function submitTask(
   filters: Filters,
   params: Params,
   fastMode = false,
+  variety = false,
 ): Promise<{ task_id: string; status: TaskStatus }> {
   const response = await apiFetch("/tasks", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(buildTaskRequest(input, filters, params, fastMode)),
+    body: JSON.stringify(buildTaskRequest(input, filters, params, fastMode, variety)),
   });
   if (response.status === 429) {
     const detail = await response.json().then((b) => b?.detail).catch(() => null);

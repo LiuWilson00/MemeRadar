@@ -7,6 +7,7 @@ rerank 拒答時退回純向量排序（``debug.rerank_fallback = true``），
 
 from __future__ import annotations
 
+import random
 import sqlite3
 import time
 from typing import Any
@@ -39,9 +40,7 @@ FAST_REASON = "（快速模式：依語意相似度排序）"
 _FAST_MIN_OCR_CHARS = 2
 
 
-def _vector_fallback(
-    candidates: list[Candidate], top_n: int, *, reason: str = VECTOR_FALLBACK_REASON
-) -> list[RankedMeme]:
+def _to_ranked(cands: list[Candidate], *, reason: str) -> list[RankedMeme]:
     return [
         RankedMeme(
             meme_id=c.meme_id,
@@ -52,8 +51,29 @@ def _vector_fallback(
             reason=reason,
             scores={"vector": c.similarity, "rerank": c.similarity, "final": c.similarity},
         )
-        for rank, c in enumerate(candidates[:top_n], start=1)
+        for rank, c in enumerate(cands, start=1)
     ]
+
+
+def _vector_fallback(
+    candidates: list[Candidate], top_n: int, *, reason: str = VECTOR_FALLBACK_REASON
+) -> list[RankedMeme]:
+    return _to_ranked(candidates[:top_n], reason=reason)
+
+
+def _variety_pick(candidates: list[Candidate], top_n: int) -> list[RankedMeme]:
+    """情境快選：從較相關的候選池加權隨機抽 top_n 張（權重＝相似度²），每次結果有變化。
+
+    用 Efraimidis–Spirakis 加權不重複抽樣（key = u^(1/w)，取 key 最大的前 top_n）。
+    """
+    pool = candidates[: max(top_n * 4, top_n)]  # 只從前段（夠相關）抽，免抽到不相干的
+    if len(pool) > top_n:
+        pool = sorted(
+            pool,
+            key=lambda c: random.random() ** (1.0 / (max(c.similarity, 0.01) ** 2)),
+            reverse=True,
+        )[:top_n]
+    return _to_ranked(pool, reason=FAST_REASON)
 
 
 def run_recommendation(
@@ -358,7 +378,10 @@ def run_fast_recommendation(
     )
     timings["retrieval"] = int((time.perf_counter() - t0) * 1000)
 
-    ranked = _vector_fallback(retrieval.candidates, request.params.top_n, reason=FAST_REASON)
+    if request.variety:
+        ranked = _variety_pick(retrieval.candidates, request.params.top_n)
+    else:
+        ranked = _vector_fallback(retrieval.candidates, request.params.top_n, reason=FAST_REASON)
 
     return _assemble_and_log(
         conn,
