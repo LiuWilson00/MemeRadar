@@ -401,8 +401,31 @@ export function shareUrl(memeId: string): string {
   return `${base}/m/${memeId}`;
 }
 
-/** 分享或複製：手機優先叫原生分享面板（可直接送 Line），否則複製到剪貼簿。 */
-export async function shareOrCopy(memeId: string): Promise<"shared" | "copied"> {
+/** 抓梗圖並轉成 PNG blob。剪貼簿圖片多半只吃 PNG；用 fetch→blob→bitmap→canvas，
+ *  blob 已在記憶體、非跨源 <img>，canvas 不會被污染，toBlob 可正常匯出。 */
+async function memePngBlob(memeId: string): Promise<Blob> {
+  const res = await fetch(`${API_BASE}/memes/${memeId}/image?dl=1`);
+  if (!res.ok) throw new Error("圖片載入失敗");
+  const blob = await res.blob();
+  if (blob.type === "image/png") return blob;
+  const bitmap = await createImageBitmap(blob);
+  const canvas = document.createElement("canvas");
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("canvas 不可用");
+  ctx.drawImage(bitmap, 0, 0);
+  return await new Promise<Blob>((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("轉檔失敗"))), "image/png"),
+  );
+}
+
+/** 分享 / 複製梗圖：
+ *  1) 手機原生分享面板（帶 OG 預覽縮圖，可直接送 Line）
+ *  2) 網頁：把「圖片本身」複製到剪貼簿（Clipboard API），可直接貼進聊天
+ *  3) 都不支援：複製分享連結
+ *  回傳實際做了哪一種，供 UI 顯示對應提示。 */
+export async function shareOrCopy(memeId: string): Promise<"shared" | "image" | "link"> {
   const url = shareUrl(memeId);
   if (typeof navigator !== "undefined" && navigator.share) {
     try {
@@ -412,8 +435,17 @@ export async function shareOrCopy(memeId: string): Promise<"shared" | "copied"> 
       if ((e as { name?: string })?.name === "AbortError") return "shared"; // 使用者取消
     }
   }
+  // 網頁優先複製圖片本身：把 blob 的 Promise 直接交給 ClipboardItem（兼容 Safari 的手勢要求）
+  if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": memePngBlob(memeId) })]);
+      return "image";
+    } catch {
+      /* 不支援 / CORS / 轉檔失敗 → 退回複製連結 */
+    }
+  }
   await navigator.clipboard.writeText(url);
-  return "copied";
+  return "link";
 }
 
 export async function fetchComments(memeId: string): Promise<MemeComment[]> {

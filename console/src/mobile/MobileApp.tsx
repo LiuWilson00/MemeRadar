@@ -478,15 +478,6 @@ export default function MobileApp({ initialMemeId }: { initialMemeId?: string | 
             : "max-h-28 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))]"
         }`}
       >
-        {tab === "explore" && (
-          <button
-            onClick={() => setTab("home")}
-            className="absolute left-2 top-[max(0.5rem,env(safe-area-inset-top))] flex items-center gap-0.5 rounded-full px-2 py-1 text-sm text-muted active:bg-panel active:text-fg"
-            aria-label="返回"
-          >
-            <ChevronLeft className="size-5" /> 返回
-          </button>
-        )}
         <span className="radar h-5 w-5 shrink-0" aria-hidden />
         <h1 className="font-mono text-sm font-semibold tracking-[0.35em]">
           {tab === "explore" ? "探索圖庫" : (
@@ -525,8 +516,8 @@ export default function MobileApp({ initialMemeId }: { initialMemeId?: string | 
         )}
       </main>
 
-      {/* 探索圖庫沉浸式：隱藏底部導覽，改用左上「返回」（沿用你偏好的體驗） */}
-      {tab !== "explore" && <NavBar tab={tab} onTab={setTab} running={loading} />}
+      {/* 底部導覽在所有分頁都釘住（含探索）：與 header 一樣 shrink-0，不隨內容捲動 */}
+      <NavBar tab={tab} onTab={setTab} running={loading} />
 
       {showBoard && <LeaderboardModal onClose={() => setShowBoard(false)} />}
 

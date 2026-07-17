@@ -72,7 +72,7 @@ export default function ExploreScreen() {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto px-3 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))]">
+    <div className="flex-1 overflow-y-auto px-3 pt-3 pb-4">
       <p className="px-1 pb-2 text-xs text-muted">大家的梗圖庫 —— 逛一逛、按讚、留彈幕。</p>
 
       {items.length === 0 && loading ? (
