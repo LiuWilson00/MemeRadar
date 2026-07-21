@@ -20,6 +20,7 @@ describe("buildRecommendRequest", () => {
         hotness_weight: 0.1,
       },
       client_id: "anon", // node 測試環境無 localStorage → getClientId 退回固定匿名值
+      debug: true, // 後台工作台走此請求，需候選明細供 DebugPanel
     });
   });
 

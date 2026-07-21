@@ -371,6 +371,29 @@ export default function MobileApp({ initialMemeId }: { initialMemeId?: string | 
     [submit, settings],
   );
 
+  // 網頁版：直接 Ctrl/⌘+V 貼上截圖就搜（抓剪貼簿裡的圖 → 走截圖搜尋）。純文字貼上不攔、照常貼入。
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith("image/")) {
+          const file = items[i].getAsFile();
+          if (file) {
+            e.preventDefault();
+            modeRef.current = "screenshot";
+            setTab("home");
+            void onFile(file);
+          }
+          return; // 有圖就處理；沒圖（純文字）不攔
+        }
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onFile]);
+
   const onText = useCallback(() => {
     const t = text.trim();
     if (!t) return;
