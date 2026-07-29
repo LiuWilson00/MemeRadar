@@ -322,10 +322,40 @@ open https://<frontend>.zeabur.app/admin      # 後台（設了帳密應要登�
 NVIDIA 下架 hosted `baai/bge-m3` 後的自主路線。用 HuggingFace TEI（Rust，比 torch 省很多），
 它的 `/v1/embeddings` 是 OpenAI 相容的，故**我方程式不需改**，只要設 `EMBEDDING_SELFHOST_URL`。
 
+API 跑在 Zeabur（香港）、TEI 跑在你自己的 VPS，兩者之間是走公網的，所以 **TEI 不能只綁
+`127.0.0.1`**（那樣 Zeabur 連不到），但也**絕不能裸奔公開**——它沒有任何內建認證，
+公開等於送人免費 GPU/CPU 算力。正解是：綁 localhost + 反向代理上 TLS + 開 TEI 的 `--api-key`。
+
 ```bash
+# VPS 上：TEI 只聽 localhost，由反向代理對外
 docker run -d --restart=always -p 127.0.0.1:8080:80 -v /opt/tei-data:/data \
   ghcr.io/huggingface/text-embeddings-inference:cpu-1.8 \
-  --model-id BAAI/bge-m3 --max-batch-tokens 2048 --max-client-batch-size 32 --auto-truncate
+  --model-id BAAI/bge-m3 --max-batch-tokens 2048 --max-client-batch-size 32 \
+  --auto-truncate --api-key "$(openssl rand -hex 24)"
+```
+
+反向代理最省事的是 Caddy（自動申請憑證），`/etc/caddy/Caddyfile`：
+
+```
+embed.你的網域 {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+然後 Zeabur 的 api 服務設：
+
+```
+EMBEDDING_PROVIDERS=selfhost,nvidia
+EMBEDDING_SELFHOST_URL=https://embed.你的網域/v1      # 要含 /v1，且不是 API 自己的網域
+EMBEDDING_SELFHOST_KEYS=<上面 --api-key 產生的那串>
+```
+
+部署前先在本機驗一次打得通（回 1024 個浮點數才算成功）：
+
+```bash
+curl -sS -X POST https://embed.你的網域/v1/embeddings \
+  -H "Authorization: Bearer <api-key>" -H "Content-Type: application/json" \
+  -d '{"model":"BAAI/bge-m3","input":["hello"]}' | head -c 200
 ```
 
 **`--max-batch-tokens 2048 --auto-truncate` 不可省**：TEI 預設 `16384` 會照「16384 tokens ×
