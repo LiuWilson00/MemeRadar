@@ -18,7 +18,10 @@ from memeradar.shared.config import get_settings
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False 不可省：遷移是在 API process 內跑的（db.ensure_schema →
+    # command.upgrade），預設的 True 會把 import 期就建好的 memeradar.* logger 全部 disabled，
+    # 導致上線後一行應用 log 都寫不出來（2026-07-27 事故：runtime log 整天空白）。
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 
 def _sqlalchemy_url() -> str:

@@ -95,6 +95,25 @@ class TestMigration:
         version = conn.execute("SELECT version_num FROM alembic_version").fetchone()
         assert version["version_num"] == "0012_perf_indexes"  # 最新 head
 
+    def test_migrate_does_not_disable_app_loggers(self):
+        """遷移是在 API process 內跑的：alembic env.py 的 fileConfig 若用預設
+        disable_existing_loggers=True，會把 import 期建好的 memeradar.* logger 全部停用
+        → 上線後一行應用 log 都寫不出來（2026-07-27 事故：runtime log 整天空白）。
+        """
+        import logging
+
+        from memeradar.shared import db
+
+        logger = logging.getLogger("memeradar.api")
+        logger.disabled = False
+        db._schema_ready = False  # 強制真的再跑一次 env.py
+        try:
+            db.ensure_schema()
+        finally:
+            db._schema_ready = True
+
+        assert not logger.disabled
+
 
 class TestSeedRoundtrip:
     def test_full_seed_write_and_read_back(self, conn):

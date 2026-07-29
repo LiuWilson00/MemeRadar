@@ -1702,3 +1702,77 @@ class TestServerErrorCapture:
             for e in errors
         ), errors
         conn.close()
+
+
+class TestObservability:
+    """2026-07-27 事故：hosted embedding 供應商全掛，搜尋 100% 失敗，但 /health 是綠的、
+    runtime log 整天 0 筆——故障完全無痕。以下三題把那三個消音點各釘死一個。
+    """
+
+    @staticmethod
+    def _capture(caplog):
+        """app 會把 memeradar logger 的 propagate 關掉，故直接把 caplog 掛上套件 logger。"""
+        import logging
+
+        pkg = logging.getLogger("memeradar")
+        pkg.addHandler(caplog.handler)
+        return pkg
+
+    def test_background_task_failure_is_logged(self, env, caplog):
+        import logging
+
+        client, _conn, _memes, deps = env
+        deps.run_async = lambda fn: fn()  # 同步跑，方便觀察
+        deps.embedder = _BrokenEmbedder()
+        pkg = self._capture(caplog)
+        try:
+            with caplog.at_level(logging.ERROR, logger="memeradar"):
+                tid = client.post(
+                    "/tasks", json={**BASE_REQUEST, "client_id": "c_me"}
+                ).json()["task_id"]
+        finally:
+            pkg.removeHandler(caplog.handler)
+
+        assert client.get(f"/tasks/{tid}").json()["status"] == "error"
+        assert any(
+            "推薦失敗" in r.getMessage() for r in caplog.records
+        ), "推薦引擎整個掛掉卻沒留下任何 log"
+
+    def test_readyz_is_degraded_when_a_dependency_is_broken(self, env):
+        client, _conn, _memes, deps = env
+        deps.embedder = _BrokenEmbedder()
+
+        r = client.get("/readyz")
+
+        assert r.status_code == 503
+        body = r.json()
+        assert body["status"] == "degraded"
+        assert body["checks"]["db"] == "ok"
+        assert "供應商掛了" in body["checks"]["embedding"]
+
+    def test_readyz_ok_when_everything_works(self, env):
+        client, *_ = env
+        r = client.get("/readyz")
+        assert r.status_code == 200
+        assert r.json()["checks"] == {"db": "ok", "embedding": "ok"}
+
+    def test_health_stays_dumb_even_when_dependencies_are_down(self, env):
+        """平台探針掛 /health：外部供應商掛掉不可讓 Zeabur 把容器重啟到死。"""
+        client, _conn, _memes, deps = env
+        deps.embedder = _BrokenEmbedder()
+        assert client.get("/health").status_code == 200
+
+    def test_app_logging_survives_schema_migration(self, env):
+        """遷移（alembic fileConfig）跑在 API process 內，不可把應用 logger 關掉。"""
+        import logging
+
+        logger = logging.getLogger("memeradar.api")
+        assert not logger.disabled
+        assert logger.isEnabledFor(logging.INFO)
+
+
+class _BrokenEmbedder:
+    model_id = "bge-m3"
+
+    def embed(self, texts):
+        raise RuntimeError("供應商掛了")

@@ -283,12 +283,18 @@ def _run_task(deps: Deps, task_id: str, request: RecommendRequest,
             )
         done(status="done", result=result)
     except IntentRefusedError:
+        logger.info("[task] %s 模型拒絕分析對話", task_id)
         done(status="error", error="模型基於安全政策拒絕分析此對話")
     except ScreenshotParseError as exc:
+        logger.warning("[task] %s 截圖解析失敗：%s", task_id, exc)
         done(status="error", error=f"截圖解析失敗：{exc}")
     except OpponentMemeRefusedError:
+        logger.info("[task] %s 模型拒絕解析對方梗圖", task_id)
         done(status="error", error="模型基於安全政策拒絕解析對方梗圖")
     except Exception as exc:  # noqa: BLE001 背景任務不可讓工作執行緒崩潰
+        # 一定要留 log：推薦引擎整個掛掉時，HTTP 層仍是 202/200、/health 仍是綠的，
+        # 只寫 DB 的話事故在 runtime log 上完全無痕（2026-07-27 事故教訓）。
+        logger.exception("[task] %s 推薦失敗：%s", task_id, exc)
         done(status="error", error=f"推薦失敗：{exc}")
     finally:
         conn.close()
@@ -440,6 +446,31 @@ def _check_basic_auth(header: str | None, user: str, password: str) -> bool:
     return secrets.compare_digest(got_user, user) and secrets.compare_digest(got_pass, password)
 
 
+def _configure_logging() -> None:
+    """讓 memeradar.* 的 log 確實進 stdout（Zeabur runtime log 看得到）。
+
+    不能只靠 ``logging.basicConfig``：schema 遷移（``db.ensure_schema`` → alembic
+    ``env.py`` 的 ``fileConfig``）在同一個 process 內先跑，會在 root 掛上 handler 並把
+    root 設成 WARNING，使後面的 basicConfig 直接變成 no-op、INFO 全被丟掉。這裡改設定
+    套件層 logger，不受 root 狀態影響；``propagate=False`` 避免再往 root 重複輸出一份。
+    """
+    pkg = logging.getLogger("memeradar")
+    pkg.setLevel(logging.INFO)
+    # fileConfig(disable_existing_loggers=True) 曾把既有子 logger 全部停用（見 alembic/env.py）
+    pkg.disabled = False
+    for name, child in logging.root.manager.loggerDict.items():
+        if name.startswith("memeradar.") and isinstance(child, logging.Logger):
+            child.disabled = False
+    if not any(getattr(h, "_memeradar", False) for h in pkg.handlers):
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+        )
+        handler._memeradar = True  # 冪等標記：重複建 app（測試）不重複掛 handler
+        pkg.addHandler(handler)
+    pkg.propagate = False
+
+
 def create_app(deps: Deps | None = None) -> FastAPI:
     if deps is None:
         deps = _default_deps()
@@ -469,11 +500,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
 
     app = FastAPI(title="MemeRadar API", version="0.1.0")
 
-    # 讓 memeradar 的 log 進 stdout（Zeabur 可見）；不覆蓋既有 handler。
-    logging.basicConfig(
-        level=logging.INFO, stream=sys.stdout,
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-    )
+    _configure_logging()
 
     @app.middleware("http")
     async def _timing(request: Request, call_next):
@@ -575,6 +602,42 @@ def create_app(deps: Deps | None = None) -> FastAPI:
     @app.get("/health")
     def health() -> dict:
         return {"status": "ok"}
+
+    _readyz_cache = TTLCache(15.0)
+
+    @app.get("/readyz")
+    def readyz():
+        """真的去碰依賴的健康檢查（DB + embedding），壞了回 503。
+
+        刻意**不**與 /health 合併：平台探針掛的是 /health，若把外部依賴綁進探針，
+        供應商一掛 Zeabur 就會把容器重啟到死——外部故障被放大成自家 crash-loop。
+        這支只給人／外部監控看（走 admin 認證，且 15 秒快取，避免被灌爆昂貴的 embed）。
+        """
+
+        def _check_db() -> None:
+            with get_pool().connection() as conn:
+                conn.execute("SELECT 1")
+
+        def probe() -> tuple[bool, dict]:
+            checks: dict[str, str] = {}
+            for name, check in (
+                ("db", _check_db),
+                ("embedding", lambda: deps.embedder.embed(["ping"])),
+            ):
+                try:
+                    check()
+                    checks[name] = "ok"
+                except Exception as exc:  # noqa: BLE001 檢查本身不可拋
+                    checks[name] = f"{type(exc).__name__}: {exc}"[:300]
+            return all(v == "ok" for v in checks.values()), checks
+
+        ok, checks = _readyz_cache.get_or_compute(probe)
+        if not ok:
+            logger.warning("[readyz] 依賴異常：%s", checks)
+            return JSONResponse(
+                status_code=503, content={"status": "degraded", "checks": checks}
+            )
+        return {"status": "ok", "checks": checks}
 
     def _decode_image(image_b64: str | None) -> bytes:
         if not image_b64:
