@@ -1776,3 +1776,100 @@ class _BrokenEmbedder:
 
     def embed(self, texts):
         raise RuntimeError("供應商掛了")
+
+
+class TestStartupIsNeverBlockedByEmbedding:
+    """2026-07-29 事故：啟動暖機打到會逾時的 embedding 供應商，卡了 3 分鐘 →
+    Zeabur 啟動探針判定失敗把容器殺掉 → crash loop，整個 API 下線。
+
+    暖機是 best-effort，**絕不能**擋在綁 port 之前。
+    """
+
+    def test_create_app_returns_even_if_embedder_hangs(self, tmp_path, monkeypatch):
+        import threading
+        import time
+
+        from memeradar.api import app as app_module
+
+        release = threading.Event()
+
+        class _HangingEmbedder:
+            model_id = "bge-m3"
+
+            def embed(self, texts):
+                release.wait(30)  # 模擬供應商逾時
+                return [[0.0] * 4 for _ in texts]
+
+        db_path = tmp_path / "db.sqlite3"
+        conn = connect(db_path)
+        migrate(conn)
+        conn.close()
+        deps = Deps(
+            client=DualStubClient(), vlm=StubVlm(), embedder=_HangingEmbedder(),
+            db_path=db_path, data_dir=tmp_path,
+        )
+        monkeypatch.setattr(app_module, "_default_deps", lambda: deps)
+
+        t0 = time.monotonic()
+        try:
+            app_module.create_app()  # deps=None → 走會暖機的那條路
+            elapsed = time.monotonic() - t0
+        finally:
+            release.set()
+
+        assert elapsed < 5, f"create_app 被暖機擋了 {elapsed:.1f}s——上線會被啟動探針殺掉"
+
+    def test_warmup_failure_is_logged_not_swallowed(self, tmp_path, monkeypatch, caplog):
+        """原本是 except: pass，暖機失敗完全無痕。"""
+        import logging
+        import time
+
+        from memeradar.api import app as app_module
+
+        db_path = tmp_path / "db.sqlite3"
+        conn = connect(db_path)
+        migrate(conn)
+        conn.close()
+        deps = Deps(
+            client=DualStubClient(), vlm=StubVlm(), embedder=_BrokenEmbedder(),
+            db_path=db_path, data_dir=tmp_path,
+        )
+        monkeypatch.setattr(app_module, "_default_deps", lambda: deps)
+
+        pkg = logging.getLogger("memeradar")
+        pkg.addHandler(caplog.handler)
+        try:
+            with caplog.at_level(logging.WARNING, logger="memeradar"):
+                app_module.create_app()
+                deadline = time.monotonic() + 5  # 暖機在背景，等它跑完
+                while time.monotonic() < deadline:
+                    if any("暖機" in r.getMessage() for r in caplog.records):
+                        break
+                    time.sleep(0.05)
+        finally:
+            pkg.removeHandler(caplog.handler)
+
+        assert any("暖機" in r.getMessage() for r in caplog.records)
+
+
+class TestHostedEmbedderFailsFast:
+    """供應商逾時時，備援鏈的最壞情況不能長到把使用者請求拖死。"""
+
+    def test_client_gets_tight_timeout_and_few_retries(self):
+        from memeradar.understanding.embedding import (
+            HOSTED_PROVIDERS,
+            HostedBgeM3Embedder,
+        )
+
+        got = {}
+
+        def factory(*, base_url, api_key, **kw):
+            got.update(kw)
+            raise AssertionError("只驗建構參數")
+
+        with pytest.raises(AssertionError):
+            HostedBgeM3Embedder(
+                HOSTED_PROVIDERS["nvidia"], ["k"], client_factory=factory
+            )
+        assert got["timeout"] <= 10, "逾時太長：一家供應商就能吃掉整個延遲預算"
+        assert got["max_retries"] <= 1, "SDK 層重試次數會與外圈重試相乘"

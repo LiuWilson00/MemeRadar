@@ -6,6 +6,7 @@
 """
 
 import importlib.util
+import time
 
 import pytest
 
@@ -174,6 +175,33 @@ class TestHostedProviders:
         assert made[0].base_url == "https://api.deepinfra.com/v1/openai"
         assert call["model"] == "BAAI/bge-m3"  # 各家 model id 大小寫不同
         assert "extra_body" not in call
+
+    def test_gives_up_on_time_budget_instead_of_retrying_forever(self):
+        """光數重試次數封不住上限：每次都可能耗到逾時。4 把 key 就能拖到 40s+，
+        2026-07-29 事故就是這樣把啟動探針拖爆的。故以總時間預算硬性封頂。
+        """
+        calls = []
+
+        class _SlowEmbeddings:
+            def create(self, **_kw):
+                calls.append(1)
+                time.sleep(0.2)  # 模擬慢到逾時
+                raise RuntimeError("timed out")
+
+        def slow_factory(*, base_url, api_key, **_kw):
+            return type("C", (), {"embeddings": _SlowEmbeddings()})()
+
+        emb = HostedBgeM3Embedder(
+            HOSTED_PROVIDERS["nvidia"], ["k1", "k2", "k3", "k4"],
+            budget=0.3, client_factory=slow_factory,
+        )
+        t0 = time.monotonic()
+        with pytest.raises(RuntimeError, match="nvidia"):
+            emb.embed(["hi"])
+        elapsed = time.monotonic() - t0
+
+        assert len(calls) < 4, f"預算沒生效，試了 {len(calls)} 次"
+        assert elapsed < 2, f"耗了 {elapsed:.1f}s，超過預算太多"
 
     def test_every_provider_keeps_the_same_signature(self):
         """換供應商不得改變入庫簽名，否則整庫向量要重建。"""

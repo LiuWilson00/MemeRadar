@@ -33,6 +33,11 @@ from memeradar.understanding.retrieval_doc import (
 DEFAULT_BACKEND = "nvidia-bge-m3"
 BATCH_SIZE = 32
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+# 單次呼叫逾時 / SDK 層重試次數。務必留小：見 HostedBgeM3Embedder 內的相乘說明。
+REQUEST_TIMEOUT = 10.0
+SDK_RETRIES = 0
+# 單一供應商的總時間預算：超過就放棄，讓備援鏈換下一家（見 _embed_batch）
+PROVIDER_BUDGET = 20.0
 
 logger = logging.getLogger("memeradar.embedding")
 
@@ -114,6 +119,7 @@ class HostedBgeM3Embedder:
         keys: list[str],
         *,
         batch_size: int = BATCH_SIZE,
+        budget: float = PROVIDER_BUDGET,
         client_factory: Callable[..., Any] | None = None,
     ):
         if not keys:
@@ -125,14 +131,21 @@ class HostedBgeM3Embedder:
         if client_factory is None:
             from openai import OpenAI
 
-            # timeout=30：卡住的 embedding 呼叫快速失敗，不讓 SDK 預設 ~600s 拖住呼叫端
-            def client_factory(*, base_url, api_key):  # noqa: ANN001
-                return OpenAI(base_url=base_url, api_key=api_key, timeout=30.0, max_retries=2)
+            def client_factory(*, base_url, api_key, **kw):  # noqa: ANN001
+                return OpenAI(base_url=base_url, api_key=api_key, **kw)
 
+        # 逾時與重試次數會相乘：SDK 的 max_retries × 下面 _embed_batch 的外圈重試。
+        # 2026-07-29 事故：timeout=30 × 3 次嘗試 × 外圈 2 輪 ≈ 181 秒，久到啟動探針
+        # 直接把容器殺掉。有備援鏈時「快速失敗換下一家」遠比原地重試划算。
         self._clients = [
-            client_factory(base_url=provider.base_url, api_key=k) for k in keys
+            client_factory(
+                base_url=provider.base_url, api_key=k,
+                timeout=REQUEST_TIMEOUT, max_retries=SDK_RETRIES,
+            )
+            for k in keys
         ]
         self._batch = batch_size
+        self._budget = budget
         self._rr = 0
 
     def embed(self, texts: list[str]) -> list[list[float]]:
@@ -147,8 +160,11 @@ class HostedBgeM3Embedder:
             if self.provider.nim_extras
             else {}
         )
+        # 時間預算硬性封頂：光靠「重試幾次」無法封頂，因為每次都可能耗到逾時上限
+        # （4 把 key × 逾時 10s 就是 40s+）。超過預算就放棄、讓備援鏈換下一家。
+        deadline = time.monotonic() + self._budget
         last_exc: Exception | None = None
-        for _ in range(max(2, len(self._clients) * 2)):
+        for attempt in range(max(2, len(self._clients))):
             client = self._clients[self._rr % len(self._clients)]
             self._rr += 1
             try:
@@ -158,6 +174,12 @@ class HostedBgeM3Embedder:
                 return [d.embedding for d in sorted(resp.data, key=lambda d: d.index)]
             except Exception as exc:  # noqa: BLE001 速率限制/瞬斷 → 換 key 重試
                 last_exc = exc
+                if time.monotonic() >= deadline:
+                    logger.warning(
+                        "[embedding] %s 用完 %.0fs 預算（試了 %d 次），放棄換備援",
+                        self.provider.name, self._budget, attempt + 1,
+                    )
+                    break
                 time.sleep(0.5)
         raise RuntimeError(f"{self.provider.name} embedding 失敗：{last_exc}")
 

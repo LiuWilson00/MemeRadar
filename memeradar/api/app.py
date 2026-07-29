@@ -471,15 +471,22 @@ def _configure_logging() -> None:
     pkg.propagate = False
 
 
+def _warm_up_embedder(deps: Deps) -> None:
+    """背景暖機。失敗只記 log——絕不可往外拋（會殺掉整個執行緒且無痕）。"""
+    try:
+        deps.embedder.embed(["暖機"])
+        logger.info("[startup] embedding 暖機完成")
+    except Exception:  # noqa: BLE001
+        logger.warning("[startup] embedding 暖機失敗（不影響啟動）", exc_info=True)
+
+
 def create_app(deps: Deps | None = None) -> FastAPI:
     if deps is None:
         deps = _default_deps()
-        # 啟動即暖機（本地 BGE 冷載入 / 驗證 NVIDIA embedding 連線）；best-effort，
-        # 暫時性錯誤不擋啟動。
-        try:
-            deps.embedder.embed(["暖機"])
-        except Exception:  # noqa: BLE001
-            pass
+        # 暖機（本地 BGE 冷載入 / 驗證 embedding 連線）丟背景執行緒：這是 best-effort，
+        # 絕不能擋住綁 port。2026-07-29 事故：暖機打到會逾時的供應商卡了 3 分鐘，
+        # Zeabur 啟動探針判定失敗把容器殺掉 → crash loop、整個 API 下線。
+        threading.Thread(target=_warm_up_embedder, args=(deps,), daemon=True).start()
 
     # 跨源部署（有設 CORS_ORIGINS）卻沒設後台帳密 → 後台端點全裸；直接拒啟（fail closed）。
     if deps.cors_origins and not (deps.admin_username and deps.admin_password):
