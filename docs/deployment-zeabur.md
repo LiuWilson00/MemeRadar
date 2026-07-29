@@ -74,6 +74,11 @@ API 很重（torch + BGE ~2–4GB RAM、冷啟 ~40s，且掛 Volume 後每次重
   - monorepo Dockerfile 命名：`api.Dockerfile` 或 `Dockerfile.api`（Zeabur 依服務名匹配）。
 - **Volume**：`Mount Directory = /data`（＝ `MEMERADAR_DATA_DIR`，上傳圖片落地在 `/data/images`）。
 - **Health Check**：Settings → Health Check → Path = `/health`（回 2xx 才算 ready）。
+  > `/health` 刻意只回靜態 `{"status":"ok"}`、**不碰任何依賴**：平台探針若綁上外部依賴，
+  > 供應商一掛 Zeabur 就會把容器重啟到死，把別人的故障放大成自家 crash-loop。
+  > 要看真實依賴狀態請打 **`/readyz`**（會實際試 DB + embedding，壞了回 503；走 admin 認證、
+  > 結果快取 15 秒）。外部監控請掛 `/readyz` 而非 `/health`——2026-07-27 事故中
+  > hosted embedding 全掛、搜尋 100% 失敗，而 `/health` 全程是綠的。
 - **Port**：容器須聽 `$PORT`（Zeabur 注入；Git 服務未設時預設 8080）。見 §3 host binding 修改。
 - migration：走 start command（Dockerfile CMD 內 `alembic upgrade head && uvicorn …`）。
 
@@ -181,6 +186,8 @@ API 端 Basic Auth 已做好、也測過（帳密對才放行）。缺的是後�
 | `MEMERADAR_DATA_DIR` | `/data` | 對上 Volume 掛載點 |
 | `NVIDIA_API_KEYS` | `nvapi-…,nvapi-…` | 多把逗號分隔 |
 | `NVIDIA_VLM_MODEL` | `qwen/qwen3.5-122b-a10b` | 預設模型 |
+| `EMBEDDING_PROVIDERS` | `nvidia,deepinfra` | **至少兩家**，見下方警告 |
+| `DEEPINFRA_API_KEYS` | `…` | 備援供應商金鑰 |
 | `ANTHROPIC_API_KEY` | （選填，目前推薦路徑全 NVIDIA） | 未用可留空 |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | 自訂 | **兩者皆填**才啟用後台登入 |
 | `CORS_ORIGINS` | `https://<frontend>.zeabur.app` | 見 §3.2 |
@@ -283,7 +290,9 @@ CMD alembic upgrade head && \
 
 ```bash
 # API 健康 + 資料
-curl https://<api>.zeabur.app/health           # {"status":"ok"}
+curl https://<api>.zeabur.app/health           # {"status":"ok"}（只證明 process 活著）
+curl -u "$ADMIN_USERNAME:$ADMIN_PASSWORD" \
+     https://<api>.zeabur.app/readyz           # {"checks":{"db":"ok","embedding":"ok"}}；503 = 有依賴壞了
 curl https://<api>.zeabur.app/meta             # franchises 應有數字（資料有搬的話）
 # 前端
 open https://<frontend>.zeabur.app             # 前台載入
@@ -307,6 +316,41 @@ open https://<frontend>.zeabur.app/admin      # 後台（設了帳密應要登�
   `ALTER TABLE embeddings ALTER COLUMN vector TYPE vector(1024)` + `CREATE INDEX … USING hnsw (vector vector_cosine_ops)`。
 - **限流 / 濫用**：見 §3.7，上線前補基本限流。
 - **可觀測性**：目前 uvicorn 預設 log。生產建議結構化 log + 錯誤追蹤（Sentry 等）。
+
+### 9.1 自架 bge-m3（EMBEDDING_PROVIDERS=selfhost）
+
+NVIDIA 下架 hosted `baai/bge-m3` 後的自主路線。用 HuggingFace TEI（Rust，比 torch 省很多），
+它的 `/v1/embeddings` 是 OpenAI 相容的，故**我方程式不需改**，只要設 `EMBEDDING_SELFHOST_URL`。
+
+```bash
+docker run -d --restart=always -p 127.0.0.1:8080:80 -v /opt/tei-data:/data \
+  ghcr.io/huggingface/text-embeddings-inference:cpu-1.8 \
+  --model-id BAAI/bge-m3 --max-batch-tokens 2048 --max-client-batch-size 32 --auto-truncate
+```
+
+**`--max-batch-tokens 2048 --auto-truncate` 不可省**：TEI 預設 `16384` 會照「16384 tokens ×
+8192 最大序列長」配置 warmup 記憶體，實測 **4GB 與 8GB 都會被 OOM 砍（exit 137）**；
+低於模型 max_input_length 時必須同時加 `--auto-truncate`，否則啟動直接報錯。
+
+實測（2026-07-29，容器限額模擬；輸入為實際的查詢句與檢索文件）：
+
+| 項目 | 實測值 |
+|---|---|
+| 穩定記憶體 | **2.25 GiB**（含權重 2.27GB fp32） |
+| 磁碟 | 映像 686MB + 模型 2.3GB ≈ **5GB** |
+| 單筆查詢延遲 | p50 **42ms**（2 核） |
+| 併發 8 | p50 253ms、31.7 req/s（2 核） |
+| 批次回填 | 78ms/筆 → 2000 筆約 **2.6 分鐘** |
+| 2 核 → 4 核 | **幾乎無提升**（42ms → 41ms），此工作負載不吃核心數 |
+| 輸出維度 | **1024** → 與現有 `vector(1024)` + HNSW 相容，**不需重建索引** |
+
+規格建議：**2 vCPU / 8GB**（4GB 可跑但只剩約 1.7GB headroom；2GB 絕對不夠——光權重就 2.25GB）。
+多花錢買核心數沒有意義。首次啟動要下載 2.3GB（約 4 分鐘），之後 warmup 約 7 秒。
+
+**務必不要把 TEI 公開上網**：綁 `127.0.0.1` + 反向代理或防火牆只放行 Zeabur 出口 IP，
+或加 TEI 的 `--api-key` 並設 `EMBEDDING_SELFHOST_KEYS`。
+
+建議鏈：`EMBEDDING_PROVIDERS=selfhost,nvidia` —— 自架為主，NVIDIA 留著，哪天它修好就自動多一層備援。
 
 ---
 

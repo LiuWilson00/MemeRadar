@@ -12,10 +12,13 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import sys
 import time
-from typing import Protocol
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any, Protocol
 
 from memeradar.shared import repository as repo
 from memeradar.shared.models import Embedding
@@ -30,6 +33,8 @@ from memeradar.understanding.retrieval_doc import (
 DEFAULT_BACKEND = "nvidia-bge-m3"
 BATCH_SIZE = 32
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+
+logger = logging.getLogger("memeradar.embedding")
 
 
 class Embedder(Protocol):
@@ -65,8 +70,36 @@ class BgeM3Embedder:
         return [vector.tolist() for vector in vectors]
 
 
-class NvidiaBgeM3Embedder:
-    """NVIDIA NIM hosted ``baai/bge-m3``。
+@dataclass(frozen=True)
+class HostedProvider:
+    """OpenAI 相容的 hosted bge-m3 供應商。
+
+    各家服務的都是同一份 ``BAAI/bge-m3`` 權重，故向量可互換、``model_id`` 一律 "bge-m3"
+    （換家不必重建整庫索引）；檢索走 pgvector ``<=>`` 餘弦距離，尺度差異也不影響排序。
+    """
+
+    name: str
+    base_url: str
+    model: str  # 各家對同一個模型的 id 大小寫不同
+    keys_env: str  # Settings 欄位名（大寫即環境變數名）
+    nim_extras: bool = False  # input_type / truncate 是 NVIDIA NIM 專屬擴充，別家會擋
+
+
+HOSTED_PROVIDERS: dict[str, HostedProvider] = {
+    "nvidia": HostedProvider(
+        "nvidia", NVIDIA_BASE_URL, "baai/bge-m3", "nvidia_api_keys", nim_extras=True
+    ),
+    "deepinfra": HostedProvider(
+        "deepinfra", "https://api.deepinfra.com/v1/openai", "BAAI/bge-m3", "deepinfra_api_keys"
+    ),
+    "siliconflow": HostedProvider(
+        "siliconflow", "https://api.siliconflow.cn/v1", "BAAI/bge-m3", "siliconflow_api_keys"
+    ),
+}
+
+
+class HostedBgeM3Embedder:
+    """Hosted ``bge-m3``（OpenAI 相容 embeddings 介面）。
 
     與本地 sentence-transformers bge-m3 的向量**完全相同**（實測 cosine=1.0），故
     ``model_id`` 沿用 "bge-m3"、簽名相同、既有向量相容。不需 torch/本地模型，記憶體極省。
@@ -74,19 +107,30 @@ class NvidiaBgeM3Embedder:
     """
 
     model_id = "bge-m3"  # 與本地相同 → 簽名相同 → 既有向量相容
-    _NV_MODEL = "baai/bge-m3"
 
-    def __init__(self, keys: list[str], *, batch_size: int = BATCH_SIZE):
+    def __init__(
+        self,
+        provider: HostedProvider,
+        keys: list[str],
+        *,
+        batch_size: int = BATCH_SIZE,
+        client_factory: Callable[..., Any] | None = None,
+    ):
         if not keys:
             raise RuntimeError(
-                "NVIDIA embedding 需要 NVIDIA_API_KEYS（或設 EMBEDDING_BACKEND=bge-m3 走本地）"
+                f"{provider.name} embedding 需要 {provider.keys_env.upper()}"
+                "（或設 EMBEDDING_BACKEND=bge-m3 走本地）"
             )
-        from openai import OpenAI
+        self.provider = provider
+        if client_factory is None:
+            from openai import OpenAI
 
-        # timeout=30：卡住的 embedding 呼叫快速失敗，不讓 SDK 預設 ~600s 拖住呼叫端
+            # timeout=30：卡住的 embedding 呼叫快速失敗，不讓 SDK 預設 ~600s 拖住呼叫端
+            def client_factory(*, base_url, api_key):  # noqa: ANN001
+                return OpenAI(base_url=base_url, api_key=api_key, timeout=30.0, max_retries=2)
+
         self._clients = [
-            OpenAI(base_url=NVIDIA_BASE_URL, api_key=k, timeout=30.0, max_retries=2)
-            for k in keys
+            client_factory(base_url=provider.base_url, api_key=k) for k in keys
         ]
         self._batch = batch_size
         self._rr = 0
@@ -98,33 +142,119 @@ class NvidiaBgeM3Embedder:
         return out
 
     def _embed_batch(self, batch: list[str]) -> list[list[float]]:
+        extra = (
+            {"extra_body": {"input_type": "passage", "truncate": "END"}}
+            if self.provider.nim_extras
+            else {}
+        )
         last_exc: Exception | None = None
         for _ in range(max(2, len(self._clients) * 2)):
             client = self._clients[self._rr % len(self._clients)]
             self._rr += 1
             try:
                 resp = client.embeddings.create(
-                    model=self._NV_MODEL, input=batch,
-                    extra_body={"input_type": "passage", "truncate": "END"},
+                    model=self.provider.model, input=batch, **extra
                 )
                 return [d.embedding for d in sorted(resp.data, key=lambda d: d.index)]
             except Exception as exc:  # noqa: BLE001 速率限制/瞬斷 → 換 key 重試
                 last_exc = exc
                 time.sleep(0.5)
-        raise RuntimeError(f"NVIDIA embedding 失敗：{last_exc}")
+        raise RuntimeError(f"{self.provider.name} embedding 失敗：{last_exc}")
+
+
+class FallbackEmbedder:
+    """依序試多個供應商，前一家整個掛掉就換下一家。
+
+    2026-07-27 事故：NVIDIA hosted bge-m3 全面回 500，而 embedding 是每一筆搜尋的
+    必經之路 → 單一供應商等於全站搜尋的單點故障。降級一律留 WARNING，不再無聲。
+    """
+
+    def __init__(self, embedders: list[Embedder]):
+        if not embedders:
+            raise ValueError("備援鏈不可為空")
+        spaces = {e.model_id for e in embedders}
+        if len(spaces) > 1:
+            raise ValueError(
+                f"備援鏈的向量空間不一致：{sorted(spaces)}——混用會讓檢索結果失去意義"
+            )
+        self.embedders = list(embedders)
+        self.model_id = embedders[0].model_id
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        failures: list[str] = []
+        for index, embedder in enumerate(self.embedders):
+            name = getattr(getattr(embedder, "provider", None), "name", type(embedder).__name__)
+            try:
+                return embedder.embed(texts)
+            except Exception as exc:  # noqa: BLE001 換下一家；全掛才往上拋
+                failures.append(f"{name}：{exc}")
+                if index + 1 < len(self.embedders):
+                    logger.warning("[embedding] 供應商 %s 失敗，改用備援：%s", name, exc)
+        raise RuntimeError("embedding 供應商全數失敗——" + "；".join(failures))
+
+
+SELFHOST = "selfhost"
+
+
+def _selfhost_provider(settings) -> HostedProvider:
+    """自架 bge-m3（HuggingFace TEI 等）：走它的 OpenAI 相容 /v1/embeddings。
+
+    同一份 BAAI/bge-m3 權重 → 向量與既有索引相容（1024 維），不必重建。
+    """
+    url = settings.embedding_selfhost_url.strip().rstrip("/")
+    if not url:
+        raise RuntimeError(
+            "selfhost embedding 需要 EMBEDDING_SELFHOST_URL"
+            "（例：https://embed.example.com/v1）"
+        )
+    return HostedProvider(
+        SELFHOST, url, settings.embedding_selfhost_model, "embedding_selfhost_keys"
+    )
+
+
+def build_hosted_embedder(settings=None) -> Embedder:
+    """依 ``EMBEDDING_PROVIDERS`` 順序組供應商鏈；沒設 key 的自動略過。"""
+    if settings is None:
+        from memeradar.shared.config import get_settings
+
+        settings = get_settings()
+    chain: list[Embedder] = []
+    keyless: list[HostedProvider] = []
+    for name in settings.embedding_provider_list():
+        if name == SELFHOST:
+            provider = _selfhost_provider(settings)
+            # 自架服務多半不開認證（TEI 未加 --api-key 時不驗）；有設就照送
+            keys = settings.csv_list(provider.keys_env) or ["not-needed"]
+            chain.append(HostedBgeM3Embedder(provider, keys))
+            continue
+        provider = HOSTED_PROVIDERS.get(name)
+        if provider is None:
+            available = "、".join([*sorted(HOSTED_PROVIDERS), SELFHOST])
+            raise ValueError(f"未知的 embedding 供應商：{name!r}（可用：{available}）")
+        keys = settings.csv_list(provider.keys_env)
+        if not keys:
+            keyless.append(provider)
+            continue
+        chain.append(HostedBgeM3Embedder(provider, keys))
+    if not chain:
+        wanted = "、".join(p.keys_env.upper() for p in keyless) or "EMBEDDING_PROVIDERS"
+        raise RuntimeError(
+            f"沒有可用的 embedding 供應商：請設定 {wanted}（或設 EMBEDDING_BACKEND=bge-m3 走本地）"
+        )
+    return chain[0] if len(chain) == 1 else FallbackEmbedder(chain)
 
 
 _LOCAL_BACKENDS: dict[str, type] = {
     "bge-m3": BgeM3Embedder,
 }
-_BACKENDS = frozenset({"nvidia-bge-m3", *_LOCAL_BACKENDS})
+# "nvidia-bge-m3" 是舊名（正式環境 .env 仍在用）：現在一律解析成可換供應商的 hosted 鏈
+_HOSTED_BACKENDS = frozenset({"hosted-bge-m3", "nvidia-bge-m3"})
+_BACKENDS = frozenset({*_HOSTED_BACKENDS, *_LOCAL_BACKENDS})
 
 
 def get_embedder(name: str) -> Embedder:
-    if name == "nvidia-bge-m3":
-        from memeradar.shared.config import get_settings
-
-        return NvidiaBgeM3Embedder(get_settings().nvidia_keys())
+    if name in _HOSTED_BACKENDS:
+        return build_hosted_embedder()
     if name in _LOCAL_BACKENDS:
         return _LOCAL_BACKENDS[name]()
     available = "、".join(sorted(_BACKENDS))

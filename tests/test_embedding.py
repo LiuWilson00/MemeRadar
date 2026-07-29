@@ -10,9 +10,14 @@ import importlib.util
 import pytest
 
 from memeradar.shared import repository as repo
+from memeradar.shared.config import Settings, get_settings
 from memeradar.shared.db import connect, migrate
 from memeradar.shared.models import Meme, MemeAnnotation, new_id
 from memeradar.understanding.embedding import (
+    HOSTED_PROVIDERS,
+    FallbackEmbedder,
+    HostedBgeM3Embedder,
+    build_hosted_embedder,
     embed_pending_memes,
     embedding_signature,
     get_embedder,
@@ -105,6 +110,200 @@ class TestEmbedderInterface:
         embedder = get_embedder("bge-m3")
         with pytest.raises(RuntimeError, match="local-embedding"):
             embedder.embed(["測試"])
+
+
+class _FakeClient:
+    """形狀比照 openai.OpenAI：``embeddings.create(model=, input=, **kw)``。
+
+    真 client 的漂移只有真 key 打得出來（見 smoke script）；這裡只驗證我方送出的
+    參數與供應商切換邏輯。
+    """
+
+    def __init__(self, *, base_url: str, api_key: str, fail: Exception | None = None):
+        self.base_url = base_url
+        self.api_key = api_key
+        self.fail = fail
+        self.calls: list[dict] = []
+        outer = self
+
+        class _Embeddings:
+            def create(self, *, model, input, **kw):
+                outer.calls.append({"model": model, "input": list(input), **kw})
+                if outer.fail is not None:
+                    raise outer.fail
+                data = [
+                    type("E", (), {"embedding": [float(len(s)), 1.0], "index": i})()
+                    for i, s in enumerate(input)
+                ]
+                return type("R", (), {"data": data})()
+
+        self.embeddings = _Embeddings()
+
+
+def _factory(made: list, *, fail: Exception | None = None):
+    def make(*, base_url, api_key, **_kw):
+        client = _FakeClient(base_url=base_url, api_key=api_key, fail=fail)
+        made.append(client)
+        return client
+
+    return make
+
+
+class TestHostedProviders:
+    def test_nvidia_sends_nim_only_params(self):
+        made: list[_FakeClient] = []
+        emb = HostedBgeM3Embedder(
+            HOSTED_PROVIDERS["nvidia"], ["k1"], client_factory=_factory(made)
+        )
+        emb.embed(["hi"])
+
+        call = made[0].calls[0]
+        assert made[0].base_url == "https://integrate.api.nvidia.com/v1"
+        assert call["model"] == "baai/bge-m3"
+        assert call["extra_body"] == {"input_type": "passage", "truncate": "END"}
+
+    def test_third_party_omits_nvidia_only_params(self):
+        """input_type / truncate 是 NVIDIA NIM 擴充；別家會當成未知參數。"""
+        made: list[_FakeClient] = []
+        emb = HostedBgeM3Embedder(
+            HOSTED_PROVIDERS["deepinfra"], ["k1"], client_factory=_factory(made)
+        )
+        emb.embed(["hi"])
+
+        call = made[0].calls[0]
+        assert made[0].base_url == "https://api.deepinfra.com/v1/openai"
+        assert call["model"] == "BAAI/bge-m3"  # 各家 model id 大小寫不同
+        assert "extra_body" not in call
+
+    def test_every_provider_keeps_the_same_signature(self):
+        """換供應商不得改變入庫簽名，否則整庫向量要重建。"""
+        for provider in HOSTED_PROVIDERS.values():
+            emb = HostedBgeM3Embedder(provider, ["k"], client_factory=_factory([]))
+            assert emb.model_id == "bge-m3"
+            assert embedding_signature(emb) == f"bge-m3|{RETRIEVAL_DOC_VERSION}"
+
+
+class TestFallbackEmbedder:
+    def test_falls_over_to_next_provider(self):
+        dead, alive = [], []
+        primary = HostedBgeM3Embedder(
+            HOSTED_PROVIDERS["nvidia"], ["k"],
+            client_factory=_factory(dead, fail=RuntimeError("500 boom")),
+        )
+        backup = HostedBgeM3Embedder(
+            HOSTED_PROVIDERS["deepinfra"], ["k"], client_factory=_factory(alive)
+        )
+
+        vectors = FallbackEmbedder([primary, backup]).embed(["hi"])
+
+        assert vectors == [[2.0, 1.0]]  # 備援真的有回值
+        assert alive[0].calls, "備援供應商應被呼叫"
+
+    def test_raises_naming_every_provider_when_all_fail(self):
+        chain = [
+            HostedBgeM3Embedder(
+                HOSTED_PROVIDERS[name], ["k"],
+                client_factory=_factory([], fail=RuntimeError("boom")),
+            )
+            for name in ("nvidia", "deepinfra")
+        ]
+        with pytest.raises(RuntimeError) as exc:
+            FallbackEmbedder(chain).embed(["hi"])
+
+        assert "nvidia" in str(exc.value) and "deepinfra" in str(exc.value)
+
+    def test_logs_warning_on_failover(self, caplog):
+        """降級必須留痕——這次事故就是因為全程無聲才查不出來。"""
+        primary = HostedBgeM3Embedder(
+            HOSTED_PROVIDERS["nvidia"], ["k"],
+            client_factory=_factory([], fail=RuntimeError("500 boom")),
+        )
+        backup = HostedBgeM3Embedder(
+            HOSTED_PROVIDERS["deepinfra"], ["k"], client_factory=_factory([])
+        )
+        with caplog.at_level("WARNING"):
+            FallbackEmbedder([primary, backup]).embed(["hi"])
+
+        assert any("nvidia" in r.getMessage() for r in caplog.records)
+
+    def test_refuses_to_mix_vector_spaces(self):
+        """不同 model_id = 不同向量空間，混用會讓檢索結果無意義。"""
+        with pytest.raises(ValueError, match="向量空間"):
+            FallbackEmbedder([FakeEmbedder(), AnotherFakeEmbedder()])
+
+
+class TestBuildHostedEmbedder:
+    def test_chain_follows_configured_order(self, monkeypatch):
+        monkeypatch.setenv("EMBEDDING_PROVIDERS", "deepinfra,nvidia")
+        monkeypatch.setenv("DEEPINFRA_API_KEYS", "d1")
+        monkeypatch.setenv("NVIDIA_API_KEYS", "n1")
+        get_settings.cache_clear()
+
+        embedder = build_hosted_embedder()
+
+        assert [e.provider.name for e in embedder.embedders] == ["deepinfra", "nvidia"]
+
+    def test_skips_providers_without_keys(self, monkeypatch):
+        monkeypatch.setenv("EMBEDDING_PROVIDERS", "nvidia,deepinfra")
+        monkeypatch.setenv("NVIDIA_API_KEYS", "n1")
+        monkeypatch.delenv("DEEPINFRA_API_KEYS", raising=False)
+        get_settings.cache_clear()
+
+        embedder = build_hosted_embedder()
+
+        assert embedder.provider.name == "nvidia"  # 單一可用供應商 → 不包 fallback
+
+    def test_no_usable_provider_names_the_env_var(self):
+        # _env_file=None：不讀本機 .env，才測得到「什麼 key 都沒設」的情境
+        settings = Settings(_env_file=None, embedding_providers="nvidia")
+
+        with pytest.raises(RuntimeError, match="NVIDIA_API_KEYS"):
+            build_hosted_embedder(settings)
+
+    def test_unknown_provider_lists_available(self):
+        settings = Settings(_env_file=None, embedding_providers="openai")
+
+        with pytest.raises(ValueError, match="deepinfra"):
+            build_hosted_embedder(settings)
+
+    def test_selfhost_uses_configured_url_and_needs_no_key(self):
+        """自架 TEI：URL 由設定給，且未開 --api-key 時不該逼使用者填金鑰。"""
+        settings = Settings(
+            _env_file=None,
+            embedding_providers="selfhost",
+            embedding_selfhost_url="https://embed.example.com/v1/",
+        )
+        embedder = build_hosted_embedder(settings)
+
+        assert embedder.provider.base_url == "https://embed.example.com/v1"  # 尾斜線去掉
+        assert embedder.provider.model == "BAAI/bge-m3"
+        assert embedder.provider.nim_extras is False  # 不是 NIM，別送 NVIDIA 專屬參數
+        assert embedder.model_id == "bge-m3"  # 同一份權重 → 既有向量相容
+
+    def test_selfhost_can_be_chained_with_hosted_providers(self):
+        settings = Settings(
+            _env_file=None,
+            embedding_providers="selfhost,nvidia",
+            embedding_selfhost_url="https://embed.example.com/v1",
+            nvidia_api_keys="n1",
+        )
+        embedder = build_hosted_embedder(settings)
+
+        assert [e.provider.name for e in embedder.embedders] == ["selfhost", "nvidia"]
+
+    def test_selfhost_without_url_names_the_env_var(self):
+        settings = Settings(_env_file=None, embedding_providers="selfhost")
+
+        with pytest.raises(RuntimeError, match="EMBEDDING_SELFHOST_URL"):
+            build_hosted_embedder(settings)
+
+    def test_legacy_backend_name_still_resolves(self, monkeypatch):
+        """正式環境 .env 目前寫 nvidia-bge-m3，不能因改名而開不起來。"""
+        monkeypatch.setenv("NVIDIA_API_KEYS", "n1")
+        monkeypatch.setenv("EMBEDDING_PROVIDERS", "nvidia")
+        get_settings.cache_clear()
+
+        assert get_embedder("nvidia-bge-m3").model_id == "bge-m3"
 
 
 @pytest.fixture

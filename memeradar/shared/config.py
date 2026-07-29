@@ -42,8 +42,18 @@ class Settings(BaseSettings):
     cors_origins: str = ""
     # 公開昂貴端點（/recommend、/tasks）每 IP 每分鐘上限；0 = 不限流。
     rate_limit_per_min: int = 30
-    # embedding 後端：nvidia-bge-m3（hosted，免容器 torch）或 bge-m3（本地離線）。
+    # embedding 後端：hosted-bge-m3（免容器 torch；舊名 nvidia-bge-m3 等效）或 bge-m3（本地離線）。
     embedding_backend: str = "nvidia-bge-m3"
+    # hosted embedding 供應商優先序（逗號分隔，前者掛了自動換後者）。各家服務同一份
+    # BAAI/bge-m3 權重 → 向量互通、不必重建索引。可用：nvidia、deepinfra、siliconflow。
+    # 2026-07-27 NVIDIA 端 bge-m3 全面 500 停擺，故務必設第二家備援。
+    embedding_providers: str = "nvidia"
+    deepinfra_api_keys: str = ""
+    siliconflow_api_keys: str = ""
+    # 自架 bge-m3（HuggingFace TEI 等）的 OpenAI 相容端點，例：https://embed.example.com/v1
+    embedding_selfhost_url: str = ""
+    embedding_selfhost_keys: str = ""  # TEI 有開 --api-key 才需要
+    embedding_selfhost_model: str = "BAAI/bge-m3"
     # Google 登入（前台使用者）：填了 client id 才啟用。session_secret 用來簽我方 JWT，
     # 上 prod 務必設一個隨機值（見 .env.example）。兩者皆空 = 不開放使用者登入。
     google_client_id: str = ""
@@ -74,8 +84,15 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
+    def csv_list(self, field_name: str) -> list[str]:
+        """逗號分隔欄位 → 去空白、忽略空項的清單。"""
+        return [v.strip() for v in getattr(self, field_name).split(",") if v.strip()]
+
     def nvidia_keys(self) -> list[str]:
-        return [k.strip() for k in self.nvidia_api_keys.split(",") if k.strip()]
+        return self.csv_list("nvidia_api_keys")
+
+    def embedding_provider_list(self) -> list[str]:
+        return [p.strip().lower() for p in self.embedding_providers.split(",") if p.strip()]
 
     def admin_auth_enabled(self) -> bool:
         return bool(self.admin_username and self.admin_password)
