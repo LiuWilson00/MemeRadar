@@ -15,6 +15,7 @@ import base64
 from pydantic import BaseModel, Field
 
 from memeradar.matching.screenshot import detect_media_type
+from memeradar.shared.imaging import downscale_for_vlm
 from memeradar.shared.prompt_lang import OUTPUT_ZH_TW
 from memeradar.understanding.nvidia_vlm import call_structured
 
@@ -51,7 +52,10 @@ def analyze_opponent_meme(
     vlm, image_bytes: bytes, *, model: str | None = None, log=None
 ) -> OpponentMeme:
     """用 NVIDIA VLM 理解對方梗圖（記憶體，不落庫）；解析失敗 / 拒答拋 refused。"""
-    media_type = detect_media_type(image_bytes)  # 不支援格式 → ValueError
+    detect_media_type(image_bytes)  # 先驗原始格式：不支援 → ValueError
+    # 先縮再送：VLM 延遲與尺寸強相關，手機原圖會直接撞線上逾時（見 shared/imaging.py）
+    image_bytes = downscale_for_vlm(image_bytes)
+    media_type = detect_media_type(image_bytes)  # 縮圖會轉 JPEG，故縮完才定 media type
     image_b64 = base64.standard_b64encode(image_bytes).decode("ascii")
     result = call_structured(
         vlm, OpponentMeme, build_system_prompt(), "請理解對方丟來的這張梗圖，只回 JSON。",

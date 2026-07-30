@@ -227,3 +227,68 @@ class TestPermanentErrorsAreNotMaskedAsExhaustion:
             vlm.chat("sys", "hi")
 
         assert "500" in str(exc.value), f"沒帶出最後的真實錯誤：{exc.value}"
+
+
+class TestFastFailBudgetAllowsRetry:
+    """單次呼叫逾時若 >= 總預算，永遠只會嘗試一次——4 把 key 全閒著也不會換。
+
+    2026-07-30：fast_fail 設 client timeout=15s、max_wait_s=8s，於是一通慢呼叫逾時後
+    deadline 早已過，直接放棄。而實測 NVIDIA 免費層延遲變異極大（同圖 3.4～12.9s），
+    「快速放棄＋換把重試」的成功率遠高於「耐心等一次」。
+    """
+
+    def test_slow_call_is_retried_on_another_key(self):
+        clock = Clock()
+
+        class _Slow(FakeClient):
+            """模擬呼叫耗時：每次 create 都讓時鐘前進 timeout 秒後失敗。"""
+
+            def __init__(self, script, cost):
+                super().__init__(script)
+                self.cost = cost
+
+            def _create(self, **kwargs):
+                clock.t += self.cost
+                return super()._create(**kwargs)
+
+        slow = _Slow(["err"], cost=6.0)  # 第一把慢到逾時
+        fast = _Slow(["ok:成功"], cost=1.0)  # 第二把很快
+        vlm = NvidiaVlm(
+            clients=[slow, fast], key_ids=["k0", "k1"], model="m",
+            now=clock.now, sleep=clock.sleep,
+            cooldown_s=5.0, error_cooldown_s=1.0, max_wait_s=20.0,
+        )
+
+        assert vlm.chat("sys", "hi") == "成功"
+        assert fast.calls == 1, "第一把逾時後沒有換第二把重試"
+
+    def test_build_default_vlm_keeps_timeout_below_total_budget(self):
+        """不變量：單次逾時必須 < 總等待預算，否則整個 key 輪替機制形同虛設。"""
+        from memeradar.understanding import annotator
+
+        captured = {}
+
+        def fake_build_clients(keys, *, timeout=25.0):
+            captured["timeout"] = timeout
+            return [FakeClient(["ok:x"]) for _ in keys], list(keys)
+
+        class _S:
+            nvidia_vlm_model = "m"
+
+            def nvidia_keys(self):
+                return ["k1", "k2"]
+
+        import memeradar.understanding.nvidia_vlm as nv
+
+        orig_build, orig_settings = nv.build_clients, annotator.get_settings
+        nv.build_clients = fake_build_clients
+        annotator.get_settings = lambda: _S()
+        try:
+            vlm = annotator.build_default_vlm(fast_fail=True)
+        finally:
+            nv.build_clients, annotator.get_settings = orig_build, orig_settings
+
+        assert captured["timeout"] < vlm._max_wait_s, (
+            f"單次逾時 {captured['timeout']}s >= 總預算 {vlm._max_wait_s}s"
+            "——一次逾時就用完預算，永遠不會換 key 重試"
+        )

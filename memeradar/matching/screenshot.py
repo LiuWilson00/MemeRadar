@@ -15,6 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from memeradar.shared.imaging import downscale_for_vlm
 from memeradar.shared.prompt_lang import OUTPUT_ZH_TW
 
 DEFAULT_PARSE_MODEL = "claude-sonnet-5"
@@ -79,9 +80,11 @@ def parse_screenshot(
     from memeradar.understanding.nvidia_vlm import call_structured
 
     try:
-        media_type = detect_media_type(image_bytes)
+        detect_media_type(image_bytes)  # 先驗原始格式
     except ValueError as exc:
         raise ScreenshotParseError(str(exc)) from exc
+    image_bytes = downscale_for_vlm(image_bytes)  # 見 shared/imaging.py
+    media_type = detect_media_type(image_bytes)  # 縮圖會轉 JPEG，故縮完才定 media type
     image_b64 = base64.standard_b64encode(image_bytes).decode("ascii")
     result = call_structured(
         vlm, ScreenshotParseResult, build_system_prompt(), "請解析這張對話截圖，只回 JSON。",

@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from memeradar.shared import repository as repo
 from memeradar.shared.config import get_settings
+from memeradar.shared.imaging import downscale_for_vlm
 from memeradar.shared.models import Meme, MemeAnnotation, MemeSource
 from memeradar.shared.prompt_lang import OUTPUT_ZH_TW
 from memeradar.shared.taxonomy import get_taxonomy
@@ -208,8 +209,12 @@ def annotate_meme(
     """
     data_dir = data_dir if data_dir is not None else get_settings().memeradar_data_dir
     image_bytes = load_meme_image_bytes(conn, meme, data_dir=data_dir)
+    media_type = media_type_for(meme.image_uri)  # 副作用：不支援的副檔名 → ValueError
+    shrunk = downscale_for_vlm(image_bytes)  # 見 shared/imaging.py
+    if shrunk is not image_bytes:
+        media_type = "image/jpeg"  # 縮圖後一律是 JPEG，不能沿用副檔名推出的型別
+        image_bytes = shrunk
     image_b64 = base64.standard_b64encode(image_bytes).decode("ascii")
-    media_type = media_type_for(meme.image_uri)
     system = build_system_prompt()
     user_text = build_user_text(build_context_text(repo.list_sources(conn, meme.meme_id)))
     used_model = model or vlm.model
@@ -272,9 +277,13 @@ def build_default_vlm(*, fast_fail: bool = False):
             "缺少 NVIDIA_API_KEYS：請於 .env 填入至少一把 NVIDIA key（逗號分隔多把）"
         )
     if fast_fail:
-        clients, key_ids = build_clients(keys, timeout=15.0)
+        # 單次逾時**必須**小於 max_wait_s，否則一通慢呼叫就吃光預算 → 永遠只嘗試一次，
+        # 多把 key 形同虛設（2026-07-30 事故：timeout=15s > max_wait=8s，梗圖大戰只要
+        # 碰到一次慢呼叫就直接失敗）。實測 NVIDIA 免費層同一張圖延遲 3.4～12.9s 變異極大，
+        # 「8 秒放棄、換把重試」的成功率遠高於「耐心等一次 15 秒」。
+        clients, key_ids = build_clients(keys, timeout=8.0)
         return NvidiaVlm(
-            clients, key_ids, settings.nvidia_vlm_model, max_wait_s=8.0, cooldown_s=5.0
+            clients, key_ids, settings.nvidia_vlm_model, max_wait_s=18.0, cooldown_s=5.0
         )
     clients, key_ids = build_clients(keys)
     return NvidiaVlm(clients, key_ids, settings.nvidia_vlm_model)
