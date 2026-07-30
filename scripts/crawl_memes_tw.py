@@ -37,6 +37,25 @@ def _download(url: str, *, timeout: float = 20.0) -> bytes:
     return resp.content
 
 
+def ensure_live(conn, *, connect=None):
+    """回傳一條活著的連線；原本那條若已斷就重連。
+
+    抓候選（大批回填時可能翻上百頁、數分鐘）期間連線是閒置的，很容易被 Zeabur/PG 端斷掉。
+    2026-07-30 實測：3000 筆回填因此全軍覆沒（重複 2099 / 失敗 901 / 入庫 0），
+    最後還崩在 set_watermark 的 "connection is closed"。
+    """
+    if connect is None:
+        from memeradar.shared.db import connect as connect
+
+    try:
+        if not getattr(conn, "closed", False):
+            conn.execute("SELECT 1")
+            return conn
+    except Exception:  # noqa: BLE001 連線已死 → 重連
+        pass
+    return connect()
+
+
 def _import_one(conn, cand, content: bytes, data_dir, *, vlm=None, embedder=None) -> str:
     """單張匯入：去重 → import_image_bytes（帶 attribution）→ 落 R2/DB → 登記 phash。
 
@@ -245,6 +264,8 @@ def main(argv: list[str] | None = None) -> int:
         for adapter in adapters:
             before = None if args.ignore_watermark else repo.get_watermark(conn, adapter.name)
             cands, after = adapter.fetch(before)
+            # 抓候選可能耗時數分鐘，連線常在這段閒置期被斷（見 ensure_live）
+            conn = ensure_live(conn)
             mode = f"（{args.workers} 緒並行）" if args.workers > 1 and vlm else ""
             print(f"\n[{adapter.name}] 抓到 {len(cands)} 張"
                   f"（水位 {before} → {after}）{mode}，匯入中…")
