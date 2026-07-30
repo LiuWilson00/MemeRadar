@@ -382,6 +382,22 @@ curl -sS -X POST https://embed.你的網域/v1/embeddings \
 
 建議鏈：`EMBEDDING_PROVIDERS=selfhost,nvidia` —— 自架為主，NVIDIA 留著，哪天它修好就自動多一層備援。
 
+#### 9.1.1 也可以直接在 Zeabur 開一個 TEI 服務（走私有網路，最省事）
+
+Add Service → Deploy Docker Image → `ghcr.io/huggingface/text-embeddings-inference:cpu-1.8`，
+環境變數 `MODEL_ID=BAAI/bge-m3`、`MAX_BATCH_TOKENS=2048`、`AUTO_TRUNCATE=true`、
+`HUGGINGFACE_HUB_CACHE=/data`，並掛 Volume 到 `/data`（沒掛的話每次重啟要重抓 2.3GB）。
+不要 Generate Domain —— 走私有網路就不必 TLS 也不必 api-key。
+
+> ⚠️ **`EMBEDDING_SELFHOST_URL` 一定要寫出 port**：
+> `http://<服務>.zeabur.internal:8080/v1`。TEI 監聽 **8080**，不是 80。
+> 少寫 port 的失敗方式極難察覺——ClusterIP 上沒有 80 的轉發規則，封包被靜靜丟掉，
+> 所以症狀是**逾時**而不是乾脆的 connection refused。2026-07-29 就是這樣：
+> TEI 一切正常、log 顯示 Ready，但 api 每次呼叫都逾時，並因而 crash loop 數小時。
+>
+> `Invalid hostname, defaulting to 0.0.0.0` 這行 WARN 無害：Zeabur 依 k8s 慣例把
+> `HOSTNAME` 設成 pod 名稱，TEI 把它當綁定位址、解析失敗就退回 `0.0.0.0`（正是我們要的）。
+
 ---
 
 ## 附錄：config-as-code
