@@ -141,7 +141,10 @@ export interface TaskDetail {
   input_type: "text" | "screenshot" | "meme_battle";
   label: string;
   status: TaskStatus;
+  /** 給使用者看的文案（後端 api/error_copy.py 產生），可直接顯示 */
   error: string | null;
+  /** 技術原因，只給我們 debug 用——不要顯示在畫面上 */
+  error_detail: string | null;
   created_at: string;
   updated_at: string;
   result: RecommendResponse | null;

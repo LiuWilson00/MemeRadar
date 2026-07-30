@@ -1307,16 +1307,27 @@ def set_task_status(
     *,
     result: object | None = None,
     error: str | None = None,
+    error_detail: str | None = None,
     only_if_not: str | None = None,
 ) -> None:
     """更新任務狀態；done 時附 result，error 時附 error 訊息。
 
+    ``error`` 是**給使用者看的文案**（前台原封不動顯示），``error_detail`` 才是技術原因；
+    兩者的分工見 memeradar/api/error_copy.py。
     ``only_if_not``：僅在目前狀態不等於它時才更新（背景任務跑完不覆寫已取消的任務）。
     """
     sql = (
-        "UPDATE tasks SET status = %s, result = %s, error = %s, updated_at = %s WHERE task_id = %s"
+        "UPDATE tasks SET status = %s, result = %s, error = %s, error_detail = %s, "
+        "updated_at = %s WHERE task_id = %s"
     )
-    params = [status, _dumps(result) if result is not None else None, error, _now_iso(), task_id]
+    params = [
+        status,
+        _dumps(result) if result is not None else None,
+        error,
+        error_detail,
+        _now_iso(),
+        task_id,
+    ]
     if only_if_not is not None:
         sql += " AND status != %s"
         params.append(only_if_not)

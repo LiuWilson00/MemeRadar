@@ -1881,3 +1881,30 @@ class TestHostedEmbedderFailsFast:
             )
         assert got["timeout"] <= 10, "逾時太長：一家供應商就能吃掉整個延遲預算"
         assert got["max_retries"] <= 1, "SDK 層重試次數會與外圈重試相乘"
+
+
+class TestTaskErrorCopy:
+    """任務失敗要分兩層：使用者看到梗圖魂文案，後端拿得到技術細節。"""
+
+    def test_failure_splits_user_copy_from_technical_detail(self, env):
+        client, _conn, _memes, deps = env
+        deps.run_async = lambda fn: fn()
+        deps.embedder = _BrokenEmbedder()
+
+        tid = client.post("/tasks", json={**BASE_REQUEST, "client_id": "c_me"}).json()["task_id"]
+        body = client.get(f"/tasks/{tid}").json()
+
+        assert body["status"] == "error"
+        # 使用者看到的那一欄不得出現內部字眼
+        for word in ("供應商", "embedding", "RuntimeError", "NVIDIA"):
+            assert word not in body["error"], f"error 欄洩漏 {word!r}：{body['error']!r}"
+        # 技術細節仍要拿得到，否則沒得 debug
+        assert "供應商掛了" in body["error_detail"]
+
+    def test_success_leaves_both_error_fields_empty(self, env):
+        client, _conn, _memes, deps = env
+        deps.run_async = lambda fn: fn()  # 同步跑完才查得到終態
+        tid = client.post("/tasks", json={**BASE_REQUEST, "client_id": "c_me"}).json()["task_id"]
+        body = client.get(f"/tasks/{tid}").json()
+        assert body["status"] == "done"
+        assert not body["error"] and not body["error_detail"]

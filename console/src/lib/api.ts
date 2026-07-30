@@ -134,9 +134,10 @@ export async function recommendViaTask(
     await new Promise((r) => setTimeout(r, 1500));
     const t = await fetchTask(task_id);
     if (t.status === "done" && t.result) return t.result;
-    if (t.status === "error") throw new Error(t.error ?? "推薦失敗");
+    // t.error 是後端寫好的使用者文案（技術細節在 t.error_detail，不顯示給使用者）
+    if (t.status === "error") throw new Error(t.error ?? "出事了阿 Sir，但我不知道出什麼事。");
     if (t.status === "cancelled") throw new Error("已取消");
-    if (Date.now() > deadline) throw new Error("推薦逾時，請稍後再試");
+    if (Date.now() > deadline) throw new Error("等太久了，先放過我一次好嗎。");
   }
 }
 

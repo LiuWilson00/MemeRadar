@@ -32,6 +32,7 @@ from fastapi.responses import (
     Response,
 )
 
+from memeradar.api.error_copy import user_facing
 from memeradar.api.pipeline import run_fast_recommendation, run_recommendation
 from memeradar.api.ratelimit import RateLimiter
 from memeradar.api.schemas import (
@@ -282,22 +283,31 @@ def _run_task(deps: Deps, task_id: str, request: RecommendRequest,
                 image_bytes=image_bytes, models=repo.get_task_models(conn),
             )
         done(status="done", result=result)
-    except IntentRefusedError:
-        logger.info("[task] %s 模型拒絕分析對話", task_id)
-        done(status="error", error="模型基於安全政策拒絕分析此對話")
+    except (IntentRefusedError, OpponentMemeRefusedError) as exc:
+        logger.info("[task] %s 模型基於安全政策拒答：%s", task_id, type(exc).__name__)
+        _fail(done, exc)
     except ScreenshotParseError as exc:
         logger.warning("[task] %s 截圖解析失敗：%s", task_id, exc)
-        done(status="error", error=f"截圖解析失敗：{exc}")
-    except OpponentMemeRefusedError:
-        logger.info("[task] %s 模型拒絕解析對方梗圖", task_id)
-        done(status="error", error="模型基於安全政策拒絕解析對方梗圖")
+        _fail(done, exc)
     except Exception as exc:  # noqa: BLE001 背景任務不可讓工作執行緒崩潰
         # 一定要留 log：推薦引擎整個掛掉時，HTTP 層仍是 202/200、/health 仍是綠的，
         # 只寫 DB 的話事故在 runtime log 上完全無痕（2026-07-27 事故教訓）。
         logger.exception("[task] %s 推薦失敗：%s", task_id, exc)
-        done(status="error", error=f"推薦失敗：{exc}")
+        _fail(done, exc)
     finally:
         conn.close()
+
+
+def _fail(done, exc: BaseException) -> None:
+    """把失敗寫回任務：``error`` 給使用者看、``error_detail`` 給我們 debug。
+
+    前台會原封不動顯示 ``error``，所以那欄不能出現供應商/模型/狀態碼（見 api/error_copy.py）。
+    """
+    done(
+        status="error",
+        error=user_facing(exc),
+        error_detail=f"{type(exc).__name__}: {exc}"[:2000],
+    )
 
 
 def _persist_image(conn: psycopg.Connection, meme_id: str, image_uri: str, content: bytes) -> None:

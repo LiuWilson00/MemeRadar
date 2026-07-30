@@ -42,6 +42,14 @@ PROVIDER_BUDGET = 20.0
 logger = logging.getLogger("memeradar.embedding")
 
 
+class EmbeddingUnavailableError(RuntimeError):
+    """embedding 供應商不可用（單一供應商失敗，或備援鏈全數失敗）。
+
+    有專用型別才能在 API 層對應到使用者文案——靠比對錯誤訊息字串的話，
+    訊息一改對應就會悄悄失效（見 memeradar/api/error_copy.py）。
+    """
+
+
 class Embedder(Protocol):
     model_id: str
 
@@ -181,7 +189,7 @@ class HostedBgeM3Embedder:
                     )
                     break
                 time.sleep(0.5)
-        raise RuntimeError(f"{self.provider.name} embedding 失敗：{last_exc}")
+        raise EmbeddingUnavailableError(f"{self.provider.name} embedding 失敗：{last_exc}")
 
 
 class FallbackEmbedder:
@@ -212,7 +220,7 @@ class FallbackEmbedder:
                 failures.append(f"{name}：{exc}")
                 if index + 1 < len(self.embedders):
                     logger.warning("[embedding] 供應商 %s 失敗，改用備援：%s", name, exc)
-        raise RuntimeError("embedding 供應商全數失敗——" + "；".join(failures))
+        raise EmbeddingUnavailableError("embedding 供應商全數失敗——" + "；".join(failures))
 
 
 SELFHOST = "selfhost"
