@@ -279,11 +279,16 @@ def build_default_vlm(*, fast_fail: bool = False):
     if fast_fail:
         # 單次逾時**必須**小於 max_wait_s，否則一通慢呼叫就吃光預算 → 永遠只嘗試一次，
         # 多把 key 形同虛設（2026-07-30 事故：timeout=15s > max_wait=8s，梗圖大戰只要
-        # 碰到一次慢呼叫就直接失敗）。實測 NVIDIA 免費層同一張圖延遲 3.4～12.9s 變異極大，
-        # 「8 秒放棄、換把重試」的成功率遠高於「耐心等一次 15 秒」。
-        clients, key_ids = build_clients(keys, timeout=8.0)
+        # 碰到一次慢呼叫就直接失敗）。
+        #
+        # 數值依實測定（2026-07-30，真 key + 真 prompt）：NVIDIA 免費層當時嚴重壅塞，
+        # 意圖分析（純文字、輸出僅 186 tokens）要 23.2 / 24.9 / 31.8 秒——同一支 prompt
+        # 半小時前只要 5.2～6.2 秒。逾時必須蓋得住觀測到的最慢值，否則每次搜尋都必死。
+        # ⚠️ 這是在賭免費層當天的壅塞程度，不是穩定解。真正的解是把 intent/rerank
+        #    這類「純文字、延遲敏感」的呼叫移出免費層（見 intent.DEFAULT_INTENT_MODEL）。
+        clients, key_ids = build_clients(keys, timeout=35.0)
         return NvidiaVlm(
-            clients, key_ids, settings.nvidia_vlm_model, max_wait_s=18.0, cooldown_s=5.0
+            clients, key_ids, settings.nvidia_vlm_model, max_wait_s=50.0, cooldown_s=5.0
         )
     clients, key_ids = build_clients(keys)
     return NvidiaVlm(clients, key_ids, settings.nvidia_vlm_model)
