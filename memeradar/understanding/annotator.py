@@ -262,9 +262,10 @@ def annotate_meme(
     return annotation
 
 
-def build_default_vlm(*, fast_fail: bool = False):
+def build_default_vlm(*, fast_fail: bool = False, model: str | None = None):
     """由 settings 的 NVIDIA key 清單建 NvidiaVlm（正式執行用）。
 
+    ``model``：覆寫本次使用的模型（CLI 回填時偶爾要換更好的那顆）；留空沿用設定值。
     ``fast_fail``：線上推薦（意圖/rerank）用——短逾時、不等冷卻，卡住就快速失敗（交管線
     fallback，rerank 退純向量），避免搜尋把 API worker/連線占死。批次標註用預設（較有耐心）。
     """
@@ -293,11 +294,11 @@ def build_default_vlm(*, fast_fail: bool = False):
         #    這類「純文字、延遲敏感」的呼叫移出免費層（見 intent.DEFAULT_INTENT_MODEL）。
         clients, key_ids = build_clients(keys, base_url=base_url, timeout=20.0)
         return NvidiaVlm(
-            clients, key_ids, settings.vlm_model,
+            clients, key_ids, model or settings.vlm_model,
             max_wait_s=45.0, cooldown_s=5.0, extra_body=extra,
         )
     clients, key_ids = build_clients(keys, base_url=base_url)
-    return NvidiaVlm(clients, key_ids, settings.vlm_model, extra_body=extra)
+    return NvidiaVlm(clients, key_ids, model or settings.vlm_model, extra_body=extra)
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -349,3 +349,30 @@ class TestProviderIsConfigurable:
                 annotator.build_default_vlm()
         finally:
             annotator.get_settings = orig
+
+
+class TestModelOverride:
+    def test_build_default_vlm_accepts_model_override(self):
+        """CLI 回填時偶爾要換更好的那顆；但預設必須沿用設定，不可各處自己寫死。"""
+        from memeradar.understanding import annotator
+
+        class _S:
+            vlm_base_url = "https://example.test/v1"
+            vlm_model = "vendor/from-settings"
+            vlm_disable_reasoning = False
+
+            def vlm_keys(self):
+                return ["k1"]
+
+        import memeradar.understanding.nvidia_vlm as nv
+
+        orig_build, orig_settings = nv.build_clients, annotator.get_settings
+        nv.build_clients = lambda keys, *, base_url=None, timeout=25.0: (
+            [FakeClient(["ok:x"]) for _ in keys], list(keys)
+        )
+        annotator.get_settings = lambda: _S()
+        try:
+            assert annotator.build_default_vlm().model == "vendor/from-settings"
+            assert annotator.build_default_vlm(model="vendor/override").model == "vendor/override"
+        finally:
+            nv.build_clients, annotator.get_settings = orig_build, orig_settings

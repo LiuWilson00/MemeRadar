@@ -187,8 +187,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--img-delay", type=float, default=0.15, help="每張圖下載間隔秒")
     parser.add_argument("--dry-run", action="store_true", help="只抓+對映、不下載不入庫")
     parser.add_argument("--local-annotate", action="store_true",
-                        help="本地用 Claude 標註+向量後再入庫（需 ANTHROPIC_API_KEY）")
-    parser.add_argument("--model", default="claude-haiku-4-5", help="local-annotate 的 Claude 模型")
+                        help="本地標註+向量後再入庫（不丟給背景 worker）；模型與背景 worker 相同")
+    parser.add_argument("--model", default=None,
+                        help="覆寫 --local-annotate 的標註模型（預設沿用背景 worker 的設定）")
     parser.add_argument("--ignore-watermark", action="store_true",
                         help="忽略水位、從最新往回爬（回填舊圖用；去重擋掉已入庫的）")
     parser.add_argument("--workers", type=int, default=1,
@@ -222,20 +223,17 @@ def main(argv: list[str] | None = None) -> int:
 
     vlm = embedder = None
     if args.local_annotate:
-        if not settings.anthropic_api_key:
-            print("✗ --local-annotate 需要 .env 的 ANTHROPIC_API_KEY", file=sys.stderr)
-            return 1
-        import anthropic
-
-        from memeradar.understanding.claude_vlm import ClaudeVlm
+        # 刻意複用正式站背景 worker 的同一個 builder，而不是自己再指定一個模型：
+        # 兩邊各自寫死預設值的話，換模型時很容易只改一邊，於是同一批爬蟲跑出來的圖
+        # 會因為有沒有加 --local-annotate 而由不同模型標註。usage_hints 是檢索的第一
+        # 公民欄位，兩種用詞習慣混在同一個圖庫裡，查詢向量只會偏向其中一種，另一半
+        # 相對被埋掉——而且不會有任何錯誤訊息。
+        from memeradar.understanding.annotator import build_default_vlm
         from memeradar.understanding.embedding import get_embedder
 
-        # max_retries：Anthropic 偶發 529 overloaded，靠 SDK 內建指數退避撐過瞬間過載，
-        # 免得標註失敗把梗圖留在 active 卻沒標註/沒向量（見 _import_one 註解）。
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key, max_retries=8)
-        vlm = ClaudeVlm(client, model=args.model)
+        vlm = build_default_vlm(model=args.model)  # 批次標註用「有耐心」的那組逾時設定
         embedder = get_embedder(settings.embedding_backend)
-        print(f"🧠 本地完整處理：Claude（{args.model}）標註 + {embedder.model_id} 向量。")
+        print(f"🧠 本地完整處理：{vlm.model} 標註 + {embedder.model_id} 向量。")
 
     conn = connect()
     migrate(conn)
