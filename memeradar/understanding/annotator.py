@@ -30,9 +30,9 @@ from memeradar.shared.prompt_lang import OUTPUT_ZH_TW
 from memeradar.shared.taxonomy import get_taxonomy
 
 ANNOTATION_PROMPT_VERSION = "labeler-v1"
-# 2026-07 搬到 NVIDIA NIM 免費 VLM（成本考量）；預設模型見 config.nvidia_vlm_model，
-# Console 可切換。標的可用 model= / --model 覆寫。
-DEFAULT_ANNOTATION_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+# 2026-07-30 改走 OpenRouter；預設模型見 config.vlm_model，Console 可分任務切換。
+# 標註不吃延遲，用 OCR 最完整的那顆（實測看圖 10.2s，是 7/20 前一直在用的模型）。
+DEFAULT_ANNOTATION_MODEL = "qwen/qwen3.5-122b-a10b"
 # 2026-07 依積壓佇列實證下調（原 0.7）：模型對正常梗圖多給 0.6（92 張積壓中
 # 79 張剛好 0.6、全 is_meme=true），0.7 門檻把好圖灌爆複核佇列。0.5 只攔真正很低者。
 CONFIDENCE_REVIEW_THRESHOLD = 0.5
@@ -271,11 +271,16 @@ def build_default_vlm(*, fast_fail: bool = False):
     from memeradar.understanding.nvidia_vlm import NvidiaVlm, build_clients
 
     settings = get_settings()
-    keys = settings.nvidia_keys()
+    keys = settings.vlm_keys()
     if not keys:
         raise RuntimeError(
-            "缺少 NVIDIA_API_KEYS：請於 .env 填入至少一把 NVIDIA key（逗號分隔多把）"
+            "缺少 VLM_API_KEYS：請於 .env 填入線上模型供應商的 key"
+            "（亦接受 OPENROUTER_API_KEY / NVIDIA_API_KEYS）"
         )
+    base_url = settings.vlm_base_url
+    # 關掉 thinking：我們的任務是填 JSON 欄位，不需要模型先想 25 秒。
+    # 實測意圖分析 27.8s → 1.85s、看圖 12.0s → 6.4s（見 shared/config.py）。
+    extra = {"reasoning": {"enabled": False}} if settings.vlm_disable_reasoning else None
     if fast_fail:
         # 單次逾時**必須**小於 max_wait_s，否則一通慢呼叫就吃光預算 → 永遠只嘗試一次，
         # 多把 key 形同虛設（2026-07-30 事故：timeout=15s > max_wait=8s，梗圖大戰只要
@@ -286,12 +291,13 @@ def build_default_vlm(*, fast_fail: bool = False):
         # 半小時前只要 5.2～6.2 秒。逾時必須蓋得住觀測到的最慢值，否則每次搜尋都必死。
         # ⚠️ 這是在賭免費層當天的壅塞程度，不是穩定解。真正的解是把 intent/rerank
         #    這類「純文字、延遲敏感」的呼叫移出免費層（見 intent.DEFAULT_INTENT_MODEL）。
-        clients, key_ids = build_clients(keys, timeout=35.0)
+        clients, key_ids = build_clients(keys, base_url=base_url, timeout=20.0)
         return NvidiaVlm(
-            clients, key_ids, settings.nvidia_vlm_model, max_wait_s=50.0, cooldown_s=5.0
+            clients, key_ids, settings.vlm_model,
+            max_wait_s=45.0, cooldown_s=5.0, extra_body=extra,
         )
-    clients, key_ids = build_clients(keys)
-    return NvidiaVlm(clients, key_ids, settings.nvidia_vlm_model)
+    clients, key_ids = build_clients(keys, base_url=base_url)
+    return NvidiaVlm(clients, key_ids, settings.vlm_model, extra_body=extra)
 
 
 def main(argv: list[str] | None = None) -> None:

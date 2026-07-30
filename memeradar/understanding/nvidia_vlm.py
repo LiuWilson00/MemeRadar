@@ -1,6 +1,7 @@
-"""NVIDIA NIM VLM client：多把免費 key 輪替 + 撞速率限制自動換 key + 全冷卻就等。
+"""線上 LLM/VLM client：多把 key 輪替 + 撞速率限制自動換 key + 全冷卻就等。
 
-- OpenAI 相容端點（``integrate.api.nvidia.com/v1``）跑 Qwen 等 vision 模型。
+- OpenAI 相容端點；供應商由 ``settings.vlm_base_url`` 決定（2026-07-30 起預設 OpenRouter，
+  先前是 NVIDIA NIM）。類別名 ``NvidiaVlm`` 是歷史遺留，改名要動十來個檔案，暫留。
 - 免費方案有速率限制 → 多把 key round-robin 均攤；撞 429 就把該把 key 冷卻
   ``cooldown_s`` 秒並換下一把；全部冷卻時**等待**（依使用者決策「卡住就等就好」，
   不 fallback），直到 ``max_wait_s`` 上限才拋 ``VlmExhaustedError``。
@@ -17,21 +18,16 @@ from typing import Any
 
 BASE_URL = "https://integrate.api.nvidia.com/v1"
 
-# Console 模型切換按鈕的候選清單（首項為預設）。
+# Console 模型切換按鈕的候選清單（首項為預設）。OpenRouter 的 model id。
 #
-# 2026-07-30 全部重測過（真 key、真中文梗圖、真 prompt）：NVIDIA 把整個 qwen 系列與
-# llama-4-maverick 下架了（HTTP 410 Gone，EOL 2026-07-20），原本的預設 qwen/qwen3.5-122b-a10b
-# 已不存在。以下為實測仍可用者，附上量到的延遲與繁中表現——線上路徑（意圖/對手/截圖）
-# 只有數秒預算，所以預設放最快的那個；品質最好的 omni 要 ~23s，只適合背景標註。
+# 2026-07-30 用真 key、線上真實中文梗圖、專案真實 prompt 實測（皆已關閉 thinking）：
 VISION_MODELS = [
-    # ~5s、繁中可用（需 prompt 明確要求，見 shared/prompt_lang.py）→ 線上路徑預設
-    "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
-    # ~23s 但繁中最佳（整張中文表格都讀對）→ 建議在 Console 指給「標註」任務
-    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
-    # ~14-16s，且實測對中文圖會退化成無限換行，不建議
-    "nvidia/nemotron-nano-12b-v2-vl",
-    # ~12s，輸出偏英文
-    "meta/llama-3.2-90b-vision-instruct",
+    # $0.065/$0.26。看圖 6.4s、意圖 1.85s、JSON 3/3、繁中 60% → 預設
+    "qwen/qwen3.5-flash-02-23",
+    # $0.26/$2.08。看圖 10.2s、OCR 最完整（你 7/20 前一直在用的那顆）→ 想拚品質時用
+    "qwen/qwen3.5-122b-a10b",
+    # $0.03/$0.13 最便宜，但實測上游持續回 429，暫不可用；哪天通了值得再測
+    "qwen/qwen3.7-flash",
 ]
 
 
@@ -51,7 +47,9 @@ class VlmConfigError(VlmExhaustedError):
 _PERMANENT_STATUSES = frozenset({401, 403, 404, 410})
 
 
-def build_clients(keys: list[str], *, timeout: float = 25.0) -> tuple[list[Any], list[str]]:
+def build_clients(
+    keys: list[str], *, base_url: str = BASE_URL, timeout: float = 25.0
+) -> tuple[list[Any], list[str]]:
     """由 key 清單建立 OpenAI client 與其遮罩後的 key id（供 log）。
 
     timeout：單次呼叫最多等幾秒（避免掛住的請求拖到 SDK 預設 ~600s）。線上推薦（意圖/rerank）
@@ -61,7 +59,7 @@ def build_clients(keys: list[str], *, timeout: float = 25.0) -> tuple[list[Any],
     from openai import OpenAI
 
     clients = [
-        OpenAI(base_url=BASE_URL, api_key=k, timeout=timeout, max_retries=0) for k in keys
+        OpenAI(base_url=base_url, api_key=k, timeout=timeout, max_retries=0) for k in keys
     ]
     key_ids = [("…" + k[-4:]) if len(k) >= 4 else "…" for k in keys]
     return clients, key_ids
@@ -84,6 +82,7 @@ class NvidiaVlm:
         max_wait_s: float = 180.0,
         max_tokens: int = 1024,
         temperature: float = 0.2,
+        extra_body: dict | None = None,
     ):
         if not clients:
             raise ValueError("NvidiaVlm 需要至少一把 key")
@@ -98,6 +97,9 @@ class NvidiaVlm:
         self._max_wait_s = max_wait_s
         self._max_tokens = max_tokens
         self._temperature = temperature
+        # 供應商專屬參數，例如 OpenRouter 的 {"reasoning": {"enabled": False}}——
+        # 關掉 thinking 是延遲的關鍵（見 shared/config.py 的 vlm_disable_reasoning）
+        self._extra_body = extra_body or {}
         self._cool = [0.0] * len(clients)  # 每把 key 冷卻到期的時間戳
         self._rr = 0  # round-robin 指標
         self._lock = threading.Lock()  # 背景標註 worker + 請求緒會並發存取 _cool/_rr
@@ -180,6 +182,7 @@ class NvidiaVlm:
                     messages=messages,
                     max_tokens=self._max_tokens,
                     temperature=self._temperature,
+                    **({"extra_body": self._extra_body} if self._extra_body else {}),
                 )
                 usage = getattr(resp, "usage", None)
                 self._emit(sink, i, task, meme_id, use_model, "ok", t0, usage=usage)

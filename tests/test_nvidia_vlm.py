@@ -268,14 +268,16 @@ class TestFastFailBudgetAllowsRetry:
 
         captured = {}
 
-        def fake_build_clients(keys, *, timeout=25.0):
+        def fake_build_clients(keys, *, base_url=None, timeout=25.0):
             captured["timeout"] = timeout
             return [FakeClient(["ok:x"]) for _ in keys], list(keys)
 
         class _S:
-            nvidia_vlm_model = "m"
+            vlm_model = "m"
+            vlm_base_url = "https://example.test/v1"
+            vlm_disable_reasoning = False
 
-            def nvidia_keys(self):
+            def vlm_keys(self):
                 return ["k1", "k2"]
 
         import memeradar.understanding.nvidia_vlm as nv
@@ -292,3 +294,58 @@ class TestFastFailBudgetAllowsRetry:
             f"單次逾時 {captured['timeout']}s >= 總預算 {vlm._max_wait_s}s"
             "——一次逾時就用完預算，永遠不會換 key 重試"
         )
+
+
+class TestProviderIsConfigurable:
+    """2026-07-30：NVIDIA 把 qwen 系列下架後改走 OpenRouter。供應商端點不能寫死——
+    寫死的話換家就得改程式、重新部署，而這半年已經被迫換兩次了。
+    """
+
+    def test_build_default_vlm_uses_configured_base_url(self):
+        from memeradar.understanding import annotator
+
+        captured = {}
+
+        def fake_build_clients(keys, *, base_url, timeout=25.0):
+            captured.update(base_url=base_url, keys=list(keys))
+            return [FakeClient(["ok:x"]) for _ in keys], list(keys)
+
+        class _S:
+            vlm_base_url = "https://example.test/v1"
+            vlm_model = "vendor/some-model"
+            vlm_disable_reasoning = True
+
+            def vlm_keys(self):
+                return ["k1", "k2"]
+
+        import memeradar.understanding.nvidia_vlm as nv
+
+        orig_build, orig_settings = nv.build_clients, annotator.get_settings
+        nv.build_clients = fake_build_clients
+        annotator.get_settings = lambda: _S()
+        try:
+            vlm = annotator.build_default_vlm()
+        finally:
+            nv.build_clients, annotator.get_settings = orig_build, orig_settings
+
+        assert captured["base_url"] == "https://example.test/v1"
+        assert vlm.model == "vendor/some-model"
+
+    def test_missing_keys_names_the_env_var(self):
+        from memeradar.understanding import annotator
+
+        class _S:
+            vlm_base_url = "https://example.test/v1"
+            vlm_model = "m"
+            vlm_disable_reasoning = True
+
+            def vlm_keys(self):
+                return []
+
+        orig = annotator.get_settings
+        annotator.get_settings = lambda: _S()
+        try:
+            with pytest.raises(RuntimeError, match="VLM_API_KEYS"):
+                annotator.build_default_vlm()
+        finally:
+            annotator.get_settings = orig

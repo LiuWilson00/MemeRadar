@@ -185,7 +185,9 @@ API 端 Basic Auth 已做好、也測過（帳密對才放行）。缺的是後�
 | `DATABASE_URL` | `postgresql://${POSTGRES_USERNAME}:${POSTGRES_PASSWORD}@postgresql.zeabur.internal:5432/${POSTGRES_DATABASE}` | 私有網路；用參考變數組 |
 | `MEMERADAR_DATA_DIR` | `/data` | 對上 Volume 掛載點 |
 | `NVIDIA_API_KEYS` | `nvapi-…,nvapi-…` | 多把逗號分隔 |
-| `NVIDIA_VLM_MODEL` | `nvidia/llama-3.1-nemotron-nano-vl-8b-v1` | qwen 系列已於 2026-07-20 被 NVIDIA 下架（410） |
+| `OPENROUTER_API_KEY` | `sk-or-v1-…` | 線上 LLM/VLM；2026-07-30 起改走 OpenRouter |
+| `VLM_MODEL` | （選填，預設 `qwen/qwen3.5-flash-02-23`） | 換模型只改這個 |
+| `VLM_BASE_URL` | （選填，預設 OpenRouter） | 換供應商只改這個 |
 | `EMBEDDING_PROVIDERS` | `nvidia,deepinfra` | **至少兩家**，見下方警告 |
 | `DEEPINFRA_API_KEYS` | `…` | 備援供應商金鑰 |
 | `ANTHROPIC_API_KEY` | （選填，目前推薦路徑全 NVIDIA） | 未用可留空 |

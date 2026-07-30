@@ -28,9 +28,23 @@ class Settings(BaseSettings):
     voyage_api_key: str = ""
     reddit_client_id: str = ""
     reddit_client_secret: str = ""
-    # NVIDIA NIM（VLM 標註）：多把免費 key 逗號分隔，輪流用以分攤速率限制
+    # NVIDIA NIM：多把免費 key 逗號分隔。VLM 已改走 OpenRouter（見下），這幾把 key 現在
+    # 只用於 OCR / 影像 embedding / embedding 備援。
     nvidia_api_keys: str = ""
-    nvidia_vlm_model: str = "nvidia/llama-3.1-nemotron-nano-vl-8b-v1"
+
+    # 線上 LLM/VLM 供應商（OpenAI 相容）。2026-07-30 從 NVIDIA 免費層改走 OpenRouter：
+    # NVIDIA 先下架整個 qwen 系列（HTTP 410），之後又壅塞到單次呼叫 20-30 秒。
+    # 端點做成可設定，下次再換家不必改程式。
+    vlm_base_url: str = "https://openrouter.ai/api/v1"
+    vlm_model: str = "qwen/qwen3.5-flash-02-23"
+    # key 依序回退：VLM_API_KEYS → OPENROUTER_API_KEY → NVIDIA_API_KEYS
+    vlm_api_keys: str = ""
+    openrouter_api_key: str = ""
+    # 關掉模型的 thinking。Qwen3.x 是混合推理模型、預設開著 thinking，但我們的任務是
+    # 「填好 JSON 欄位」，不需要它先想 25 秒。2026-07-30 實測（真 key、真 prompt、真梗圖）：
+    #   意圖分析 27.8s → 1.85s（15 倍）、看圖 12.0s → 6.4s，輸出 token 砍半，JSON 正確率不變。
+    # 這是延遲問題的真正解——先前以為是供應商壅塞，其實是在等我們不需要的推理。
+    vlm_disable_reasoning: bool = True
     # 後台（admin console）登入：env 帳密；兩者皆填才啟用（空 = 不設防，方便 dev）
     admin_username: str = ""
     admin_password: str = ""
@@ -90,6 +104,14 @@ class Settings(BaseSettings):
 
     def nvidia_keys(self) -> list[str]:
         return self.csv_list("nvidia_api_keys")
+
+    def vlm_keys(self) -> list[str]:
+        """線上 LLM/VLM 的 key，依序回退到舊設定，讓既有部署不設新變數也不會掛。"""
+        for field in ("vlm_api_keys", "openrouter_api_key", "nvidia_api_keys"):
+            keys = self.csv_list(field)
+            if keys:
+                return keys
+        return []
 
     def embedding_provider_list(self) -> list[str]:
         return [p.strip().lower() for p in self.embedding_providers.split(",") if p.strip()]

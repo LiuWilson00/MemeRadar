@@ -62,3 +62,24 @@ def test_require_returns_value(monkeypatch):
     monkeypatch.setenv("VOYAGE_API_KEY", "va-test")
     s = Settings(_env_file=None)
     assert s.require("voyage_api_key") == "va-test"
+
+
+class TestVlmProviderSettings:
+    def test_defaults_point_at_openrouter_qwen(self):
+        s = Settings(_env_file=None)
+        assert "openrouter" in s.vlm_base_url
+        assert s.vlm_model.startswith("qwen/")
+
+    def test_vlm_keys_fall_back_to_nvidia_keys(self, monkeypatch):
+        """舊部署只設了 NVIDIA_API_KEYS——沒設新變數前不能整個掛掉。"""
+        s = Settings(_env_file=None, nvidia_api_keys="nv1,nv2")
+        assert s.vlm_keys() == ["nv1", "nv2"]
+
+    def test_explicit_vlm_keys_win(self):
+        s = Settings(_env_file=None, nvidia_api_keys="nv1", vlm_api_keys="or1,or2")
+        assert s.vlm_keys() == ["or1", "or2"]
+
+    def test_openrouter_key_is_accepted_without_renaming(self):
+        """既有 .env 就叫 OPENROUTER_API_KEY——不該逼使用者改名才會動。"""
+        s = Settings(_env_file=None, nvidia_api_keys="nv1", openrouter_api_key="or1")
+        assert s.vlm_keys() == ["or1"]
