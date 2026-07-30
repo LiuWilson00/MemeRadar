@@ -60,19 +60,32 @@ class MemesTwAdapter:
         self._get = http_get
         self._sleep = sleep or time.sleep
 
-    def _page(self, page: int) -> list:
+    def _page(self, page: int, *, retries: int = 3) -> list:
+        """抓一頁；瞬時失敗會退避重試。
+
+        memes.tw 偶發單頁讀取逾時（2026-07-30 實測：連抓 25 頁時中了一次）。沒有重試的話
+        一次逾時就讓整批爬蟲陣亡、水位不前進，整趟白跑。
+        """
         url = f"{API_URL}?page={page}"
         if self._contest is not None:
             url += f"&contest={self._contest}"
-        if self._get is not None:
-            data = self._get(url)
-        else:
-            import requests
+        last_exc: Exception | None = None
+        for attempt in range(retries):
+            try:
+                if self._get is not None:
+                    data = self._get(url)
+                else:
+                    import requests
 
-            resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=20)
-            resp.raise_for_status()
-            data = resp.json()
-        return data if isinstance(data, list) else []
+                    resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=20)
+                    resp.raise_for_status()
+                    data = resp.json()
+                return data if isinstance(data, list) else []
+            except Exception as exc:  # noqa: BLE001 網路瞬斷/逾時 → 退避重試
+                last_exc = exc
+                if attempt + 1 < retries:
+                    self._sleep(2.0 * (attempt + 1))
+        raise last_exc  # type: ignore[misc]
 
     def fetch(self, watermark: str | None) -> tuple[list[Candidate], str | None]:
         since = int(watermark) if watermark and str(watermark).isdigit() else 0

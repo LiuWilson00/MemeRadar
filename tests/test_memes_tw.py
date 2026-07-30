@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import urllib.parse as up
 
+import pytest
+
 from memeradar.ingestion.memes_tw import MemesTwAdapter, to_candidate
 
 
@@ -83,3 +85,37 @@ def test_empty_page_ends_crawl():
     cands, wm = _adapter({1: [_meme(5)], 2: []}, max_items=100).fetch(None)
     assert [c.post_id for c in cands] == ["5"]
     assert wm == "5"
+
+
+class TestPageRetry:
+    """單頁瞬時逾時不該把整批爬蟲弄死——25 頁就有 25 次機會被中斷。"""
+
+    def test_transient_failure_is_retried(self):
+        from memeradar.ingestion.memes_tw import MemesTwAdapter
+
+        calls = {"n": 0}
+
+        def flaky_get(url):
+            calls["n"] += 1
+            if calls["n"] == 1:  # 第一次逾時，之後正常
+                raise TimeoutError("read timed out")
+            if calls["n"] == 2:
+                return [{"id": 999, "text": "測試", "src": "https://x/1.jpg",
+                         "url": "https://x/p/999"}]
+            return []  # 第二頁起沒東西 → 結束分頁
+
+        adapter = MemesTwAdapter(http_get=flaky_get, sleep=lambda s: None)
+        cands, watermark = adapter.fetch(None)
+
+        assert calls["n"] >= 2, "第一頁逾時後沒有重試"
+        assert len(cands) == 1 and watermark == "999"
+
+    def test_gives_up_after_repeated_failures(self):
+        from memeradar.ingestion.memes_tw import MemesTwAdapter
+
+        def always_fails(url):
+            raise TimeoutError("read timed out")
+
+        adapter = MemesTwAdapter(http_get=always_fails, sleep=lambda s: None)
+        with pytest.raises(TimeoutError):
+            adapter.fetch(None)
