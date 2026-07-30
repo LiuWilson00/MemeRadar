@@ -23,6 +23,7 @@ from functools import lru_cache
 
 from pydantic import BaseModel, Field, field_validator
 
+from memeradar.shared.prompt_lang import OUTPUT_ZH_TW
 from memeradar.shared.taxonomy import get_taxonomy
 
 INTENT_PROMPT_VERSION = "intent-v1"
@@ -112,7 +113,8 @@ def build_system_prompt() -> str:
 
 query 撰寫規則：query 是拿去向量檢索梗圖庫的語句，梗圖庫以「這張圖通常什麼時候用」的使用情境語彙標註。因此 query 要用動作與情境詞描述想找的圖（例：「犯錯被抓包 誇張下跪道歉求饒」），不要複述對話原文、不要放人名等專有細節。
 
-只輸出一個 JSON 物件，不要多餘文字或圍欄。欄位：summary(字串)、punchline(字串)、other_party_emotion(字串陣列)、conversation_type(字串)、sensitive(布林)、low_context(布林)、language(字串)、strategies(物件陣列，每個含 name/rationale/query 三個字串)。"""
+只輸出一個 JSON 物件，不要多餘文字或圍欄。欄位：summary(字串)、punchline(字串)、other_party_emotion(字串陣列)、conversation_type(字串)、sensitive(布林)、low_context(布林)、language(字串)、strategies(物件陣列，每個含 name/rationale/query 三個字串)。
+""" + OUTPUT_ZH_TW
 
 
 def serialize_conversation(turns: list[ConversationTurn]) -> str:

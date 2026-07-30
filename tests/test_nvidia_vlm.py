@@ -35,6 +35,8 @@ class FakeClient:
             raise FakeErr(429)
         if action == "err":
             raise FakeErr(500)
+        if action.startswith("perm:"):
+            raise FakeErr(int(action.split(":", 1)[1]))
         text = action.split("ok:", 1)[1]
         return SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content=text))],
@@ -186,3 +188,42 @@ class TestVlmCallLogTable:
         assert row[("…abcd", "ok")] == 1
         assert row[("…abcd", "rate_limited")] == 1
         conn.close()
+
+
+class TestPermanentErrorsAreNotMaskedAsExhaustion:
+    """2026-07-30 事故：NVIDIA 把 qwen/qwen3.5-122b-a10b 下架（HTTP 410 Gone，EOL
+    2026-07-20），但錯誤被收斂成「所有 key 皆不可用且已達等待上限 8s」——看起來像限流，
+    害人往配額方向查。永久性錯誤換 key 或再等都不會好，必須立刻原文拋出。
+    """
+
+    @pytest.mark.parametrize("status", [401, 403, 404, 410])
+    def test_permanent_status_fails_immediately_with_real_reason(self, status):
+        clients = [FakeClient([f"perm:{status}"]) for _ in range(4)]
+        vlm, _logs, _clock = make(clients, max_wait_s=8.0)
+
+        with pytest.raises(VlmExhaustedError) as exc:
+            vlm.chat("sys", "hi")
+
+        msg = str(exc.value)
+        assert str(status) in msg, f"錯誤訊息沒帶 HTTP 狀態碼：{msg}"
+        assert "qwen/test" in msg, f"錯誤訊息沒帶模型名，看不出是哪個模型死了：{msg}"
+        assert "等待上限" not in msg, f"永久性錯誤被誤報成限流耗盡：{msg}"
+        # 不該把 4 把 key 全打過、也不該在 deadline 內反覆重打
+        assert sum(c.calls for c in clients) == 1, "永久性錯誤仍在重試，白打 API"
+
+    def test_rate_limit_exhaustion_still_reports_wait_cap(self):
+        clients = [FakeClient(["429"]) for _ in range(2)]
+        vlm, _logs, _clock = make(clients, max_wait_s=8.0, cooldown_s=30.0)
+
+        with pytest.raises(VlmExhaustedError, match="等待上限"):
+            vlm.chat("sys", "hi")
+
+    def test_transient_error_message_carries_last_reason(self):
+        """暫時性錯誤耗盡時，也要把最後一個真實錯誤帶出來，別只留一句空話。"""
+        clients = [FakeClient(["err"]) for _ in range(2)]
+        vlm, _logs, _clock = make(clients, max_wait_s=8.0)
+
+        with pytest.raises(VlmExhaustedError) as exc:
+            vlm.chat("sys", "hi")
+
+        assert "500" in str(exc.value), f"沒帶出最後的真實錯誤：{exc.value}"

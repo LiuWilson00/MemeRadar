@@ -17,20 +17,38 @@ from typing import Any
 
 BASE_URL = "https://integrate.api.nvidia.com/v1"
 
-# Console 模型切換按鈕的候選清單（NVIDIA NIM 上實測可吃圖的 vision 模型；
-# 首項為預設，繁中理解最佳）。
+# Console 模型切換按鈕的候選清單（首項為預設）。
+#
+# 2026-07-30 全部重測過（真 key、真中文梗圖、真 prompt）：NVIDIA 把整個 qwen 系列與
+# llama-4-maverick 下架了（HTTP 410 Gone，EOL 2026-07-20），原本的預設 qwen/qwen3.5-122b-a10b
+# 已不存在。以下為實測仍可用者，附上量到的延遲與繁中表現——線上路徑（意圖/對手/截圖）
+# 只有數秒預算，所以預設放最快的那個；品質最好的 omni 要 ~23s，只適合背景標註。
 VISION_MODELS = [
-    "qwen/qwen3.5-122b-a10b",
-    "qwen/qwen3.5-397b-a17b",
-    "nvidia/nemotron-nano-12b-v2-vl",
-    "meta/llama-4-maverick-17b-128e-instruct",
-    "meta/llama-3.2-90b-vision-instruct",
+    # ~5s、繁中可用（需 prompt 明確要求，見 shared/prompt_lang.py）→ 線上路徑預設
+    "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
+    # ~23s 但繁中最佳（整張中文表格都讀對）→ 建議在 Console 指給「標註」任務
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+    # ~14-16s，且實測對中文圖會退化成無限換行，不建議
+    "nvidia/nemotron-nano-12b-v2-vl",
+    # ~12s，輸出偏英文
+    "meta/llama-3.2-90b-vision-instruct",
 ]
 
 
 class VlmExhaustedError(RuntimeError):
     """所有 key 皆限流 / 失敗且超過等待上限時拋出。"""
+
+
+class VlmConfigError(VlmExhaustedError):
+    """模型下架 / 未對此帳號開通 / 認證失敗——重試與換 key 都不會好。
+
+    刻意繼承 ``VlmExhaustedError``：呼叫端既有的優雅降級（退向量排序、回 503、
+    標註留給下輪）全部照舊，只是錯誤訊息會帶出真正的原因而非「限流耗盡」。
+    """
+
+
+# 這些狀態碼換 key 或再等都不會好（模型 EOL 回 410、未開通回 404、認證 401/403）
+_PERMANENT_STATUSES = frozenset({401, 403, 404, 410})
 
 
 def build_clients(keys: list[str], *, timeout: float = 25.0) -> tuple[list[Any], list[str]]:
@@ -60,6 +78,9 @@ class NvidiaVlm:
         now: Callable[[], float] = time.time,
         sleep: Callable[[float], None] = time.sleep,
         cooldown_s: float = 30.0,
+        # 暫時性錯誤（5xx / 連線）後這把 key 的短冷卻：迴圈本身不 sleep，沒有這個
+        # 會在 max_wait_s 之前以最高速率空轉狂打 API。
+        error_cooldown_s: float = 1.0,
         max_wait_s: float = 180.0,
         max_tokens: int = 1024,
         temperature: float = 0.2,
@@ -73,6 +94,7 @@ class NvidiaVlm:
         self._now = now
         self._sleep = sleep
         self._cooldown_s = cooldown_s
+        self._error_cooldown_s = error_cooldown_s
         self._max_wait_s = max_wait_s
         self._max_tokens = max_tokens
         self._temperature = temperature
@@ -141,6 +163,7 @@ class NvidiaVlm:
             {"role": "user", "content": user_content},
         ]
         deadline = self._now() + self._max_wait_s
+        last_error: str | None = None
         while True:
             i = self._acquire()
             if i is None:  # 全部冷卻 → 等到最近一把解凍（卡住就等）
@@ -163,17 +186,33 @@ class NvidiaVlm:
                 return resp.choices[0].message.content or ""
             except Exception as exc:  # noqa: BLE001 — 依 status_code 分流
                 status = getattr(exc, "status_code", None)
+                if status in _PERMANENT_STATUSES:
+                    # 模型下架 / 未開通 / 認證錯 → 換 key 或再等都不會好。立刻原文拋出，
+                    # 別收斂成「限流耗盡」害人往配額方向查（2026-07-30：qwen 下架回 410，
+                    # 錯誤訊息卻只說「所有 key 皆不可用且已達等待上限 8s」）。
+                    self._emit(sink, i, task, meme_id, use_model, "error", t0,
+                               error=str(exc)[:200])
+                    raise VlmConfigError(
+                        f"NVIDIA VLM 模型 {use_model!r} 不可用（HTTP {status}）：{exc}"
+                        "——重試無用，請檢查 NVIDIA_VLM_MODEL 是否已下架或未對此帳號開通"
+                    ) from exc
+                last_error = f"HTTP {status}: {exc}" if status else str(exc)
                 if status == 429:
                     with self._lock:
                         self._cool[i] = self._now() + self._cooldown_s
                     self._emit(sink, i, task, meme_id, use_model, "rate_limited", t0)
                 else:
                     self._emit(sink, i, task, meme_id, use_model, "error", t0, error=str(exc)[:200])
+                    # 暫時性錯誤也要讓這把 key 短暫冷卻：否則迴圈不 sleep，會在 deadline
+                    # 之前以最高速率空轉狂打 API。
+                    with self._lock:
+                        self._cool[i] = self._now() + self._error_cooldown_s
                 if self._now() >= deadline:
                     break
 
+        tail = f"（最後錯誤：{last_error[:200]}）" if last_error else ""
         raise VlmExhaustedError(
-            f"NVIDIA VLM 所有 key 皆不可用且已達等待上限 {self._max_wait_s:.0f}s"
+            f"NVIDIA VLM 所有 key 皆不可用且已達等待上限 {self._max_wait_s:.0f}s{tail}"
         )
 
     def _emit(self, sink, i, task, meme_id, model, status, t0, *, usage=None, error=None) -> None:

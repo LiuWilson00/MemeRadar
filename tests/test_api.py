@@ -1037,7 +1037,12 @@ class TestLibrary:
     def test_vlm_models_lists_candidates_and_default(self, env):
         client, *_ = env
         body = client.get("/vlm/models").json()
-        assert "qwen/qwen3.5-122b-a10b" in body["models"]
+        # 不釘死特定 model id：NVIDIA 會下架模型（2026-07-20 整個 qwen 系列回 410），
+        # 釘死只會讓測試在模型換代時變成假警報。改驗清單非空且與程式碼的候選一致。
+        from memeradar.understanding.nvidia_vlm import VISION_MODELS
+
+        assert body["models"] == list(VISION_MODELS)
+        assert body["models"], "候選清單不可為空"
         assert body["default"] == "qwen/test"  # StubVlm.model
 
     def test_upload_passes_chosen_model(self, env):
@@ -1275,7 +1280,10 @@ class TestModelSettingsEndpoints:
         keys = {t["key"] for t in body["tasks"]}
         assert keys == {"annotation", "intent", "rerank", "screenshot", "opponent"}
         assert all(t["current"] is None for t in body["tasks"])  # 預設未覆寫
-        assert "qwen/qwen3.5-122b-a10b" in body["available"]
+        # 同上：不釘死特定 model id（NVIDIA 會下架模型），只驗與程式碼候選一致
+        from memeradar.understanding.nvidia_vlm import VISION_MODELS
+
+        assert body["available"] == list(VISION_MODELS)
         assert body["default"] == "qwen/test"  # StubVlm.model
 
     def test_put_persists_and_reflects_in_get(self, env):

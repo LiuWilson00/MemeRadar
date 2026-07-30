@@ -25,12 +25,13 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from memeradar.shared import repository as repo
 from memeradar.shared.config import get_settings
 from memeradar.shared.models import Meme, MemeAnnotation, MemeSource
+from memeradar.shared.prompt_lang import OUTPUT_ZH_TW
 from memeradar.shared.taxonomy import get_taxonomy
 
 ANNOTATION_PROMPT_VERSION = "labeler-v1"
 # 2026-07 搬到 NVIDIA NIM 免費 VLM（成本考量）；預設模型見 config.nvidia_vlm_model，
 # Console 可切換。標的可用 model= / --model 覆寫。
-DEFAULT_ANNOTATION_MODEL = "qwen/qwen3.5-122b-a10b"
+DEFAULT_ANNOTATION_MODEL = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
 # 2026-07 依積壓佇列實證下調（原 0.7）：模型對正常梗圖多給 0.6（92 張積壓中
 # 79 張剛好 0.6、全 is_meme=true），0.7 門檻把好圖灌爆複核佇列。0.5 只攔真正很低者。
 CONFIDENCE_REVIEW_THRESHOLD = 0.5
@@ -114,7 +115,8 @@ nsfw 判準：含成人、血腥、露骨性暗示內容為 true；一般嘲諷�
 
 confidence 為你對整體標註正確性的自評（0–1），拿不準的冷僻典故請誠實給低分。
 
-只輸出一個 JSON 物件，不要多餘文字、不要 markdown 圍欄。欄位（型別）：is_meme(布林)、nsfw(布林)、ocr_text(字串)、description(字串)、characters(字串陣列)、franchise(字串或 null)、template_name(字串或 null)、emotions(字串陣列)、usage_hints(字串陣列)、categories(字串陣列)、confidence(0~1 浮點)。"""
+只輸出一個 JSON 物件，不要多餘文字、不要 markdown 圍欄。欄位（型別）：is_meme(布林)、nsfw(布林)、ocr_text(字串)、description(字串)、characters(字串陣列)、franchise(字串或 null)、template_name(字串或 null)、emotions(字串陣列)、usage_hints(字串陣列)、categories(字串陣列)、confidence(0~1 浮點)。
+""" + OUTPUT_ZH_TW
 
 
 def media_type_for(image_uri: str) -> str:

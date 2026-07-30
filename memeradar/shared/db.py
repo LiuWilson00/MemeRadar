@@ -84,8 +84,9 @@ def ensure_schema() -> None:
     global _schema_ready
     if _schema_ready:
         return
-    from alembic import command
     from alembic.config import Config
+
+    from alembic import command
 
     cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
     command.upgrade(cfg, "head")

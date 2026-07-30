@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     reddit_client_secret: str = ""
     # NVIDIA NIM（VLM 標註）：多把免費 key 逗號分隔，輪流用以分攤速率限制
     nvidia_api_keys: str = ""
-    nvidia_vlm_model: str = "qwen/qwen3.5-122b-a10b"
+    nvidia_vlm_model: str = "nvidia/llama-3.1-nemotron-nano-vl-8b-v1"
     # 後台（admin console）登入：env 帳密；兩者皆填才啟用（空 = 不設防，方便 dev）
     admin_username: str = ""
     admin_password: str = ""
