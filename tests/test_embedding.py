@@ -203,6 +203,25 @@ class TestHostedProviders:
         assert len(calls) < 4, f"預算沒生效，試了 {len(calls)} 次"
         assert elapsed < 2, f"耗了 {elapsed:.1f}s，超過預算太多"
 
+    def test_openrouter_is_available_as_bge_m3_provider(self):
+        """2026-07-30：selfhost 之外唯一活著的 bge-m3 備援——NVIDIA 的自 7/27 起一直回 500。"""
+        p = HOSTED_PROVIDERS["openrouter"]
+        assert p.base_url == "https://openrouter.ai/api/v1"
+        assert p.model == "baai/bge-m3"  # 1024 維，與既有索引相容
+        assert p.nim_extras is False  # 不是 NIM，別送 NVIDIA 專屬參數
+        assert p.keys_env == "openrouter_api_key"  # 與 VLM 共用同一把 key
+
+    def test_selfhost_can_chain_with_openrouter(self):
+        settings = Settings(
+            _env_file=None,
+            embedding_providers="selfhost,openrouter",
+            embedding_selfhost_url="https://embed.example.com/v1",
+            openrouter_api_key="or1",
+        )
+        embedder = build_hosted_embedder(settings)
+        assert [e.provider.name for e in embedder.embedders] == ["selfhost", "openrouter"]
+        assert embedder.model_id == "bge-m3"  # 簽名不變 → 既有 2000+ 向量照用
+
     def test_every_provider_keeps_the_same_signature(self):
         """換供應商不得改變入庫簽名，否則整庫向量要重建。"""
         for provider in HOSTED_PROVIDERS.values():

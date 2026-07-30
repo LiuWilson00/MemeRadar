@@ -188,7 +188,7 @@ API 端 Basic Auth 已做好、也測過（帳密對才放行）。缺的是後�
 | `OPENROUTER_API_KEY` | `sk-or-v1-…` | 線上 LLM/VLM；2026-07-30 起改走 OpenRouter |
 | `VLM_MODEL` | （選填，預設 `qwen/qwen3.5-flash-02-23`） | 換模型只改這個 |
 | `VLM_BASE_URL` | （選填，預設 OpenRouter） | 換供應商只改這個 |
-| `EMBEDDING_PROVIDERS` | `nvidia,deepinfra` | **至少兩家**，見下方警告 |
+| `EMBEDDING_PROVIDERS` | `selfhost,openrouter` | **至少兩家**；別放 nvidia（其 bge-m3 自 2026-07-27 起持續 500） |
 | `DEEPINFRA_API_KEYS` | `…` | 備援供應商金鑰 |
 | `ANTHROPIC_API_KEY` | （選填，目前推薦路徑全 NVIDIA） | 未用可留空 |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | 自訂 | **兩者皆填**才啟用後台登入 |

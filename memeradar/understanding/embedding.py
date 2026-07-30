@@ -108,6 +108,12 @@ HOSTED_PROVIDERS: dict[str, HostedProvider] = {
     "siliconflow": HostedProvider(
         "siliconflow", "https://api.siliconflow.cn/v1", "BAAI/bge-m3", "siliconflow_api_keys"
     ),
+    # OpenRouter 的 /v1/embeddings 不在它的 /v1/models 清單裡（那份只列 chat 模型），
+    # 但確實可用：2026-07-30 實測 baai/bge-m3 回 1024 維，與既有索引同模型同維度。
+    # 我們的 VLM 已經走 OpenRouter，拿同一把 key 當 embedding 備援等於不用多開帳號。
+    "openrouter": HostedProvider(
+        "openrouter", "https://openrouter.ai/api/v1", "baai/bge-m3", "openrouter_api_key"
+    ),
 }
 
 
