@@ -19,7 +19,8 @@ class FakeErr(Exception):
 
 
 class FakeClient:
-    """script: 每次呼叫依序取一個動作：'ok:<text>' / '429' / 'err'（用盡後重複最後一個）。"""
+    """script: 每次呼叫依序取一個動作：'ok:<text>' / 'len:<text>'（撞 max_tokens）/
+    '429' / 'err'（用盡後重複最後一個）。"""
 
     def __init__(self, script):
         self.script = list(script)
@@ -37,9 +38,12 @@ class FakeClient:
             raise FakeErr(500)
         if action.startswith("perm:"):
             raise FakeErr(int(action.split(":", 1)[1]))
-        text = action.split("ok:", 1)[1]
+        kind, text = action.split(":", 1)
         return SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content=text))],
+            choices=[SimpleNamespace(
+                message=SimpleNamespace(content=text),
+                finish_reason="length" if kind == "len" else "stop",
+            )],
             usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5),
         )
 
@@ -376,3 +380,67 @@ class TestModelOverride:
             assert annotator.build_default_vlm(model="vendor/override").model == "vendor/override"
         finally:
             nv.build_clients, annotator.get_settings = orig_build, orig_settings
+
+
+class TestOutputBudgetReachesTheAPI:
+    """各模組宣告的 MAX_OUTPUT_TOKENS 必須真的傳進 API。
+
+    2026-07-31 事故：rerank.py 寫了 MAX_OUTPUT_TOKENS=2000，但 NvidiaVlm 用自己的預設
+    1024——25 個候選要 score + 25 字理由，輸出永遠停在 1024、JSON 被截斷、call_structured
+    重試三次全敗，最後退回純向量排序。使用者等 18-70 秒換來一句「rerank 暫不可用」。
+    """
+
+    def test_chat_honours_per_call_max_tokens(self):
+        client = FakeClient(["ok:x"])
+        vlm, _logs, _clock = make([client])
+        vlm.chat("sys", "hi", max_tokens=2000)
+        assert client.last_kwargs["max_tokens"] == 2000
+
+    def test_annotate_honours_per_call_max_tokens(self):
+        client = FakeClient(["ok:x"])
+        vlm, _logs, _clock = make([client])
+        vlm.annotate("b64", "image/png", "sys", "hi", max_tokens=2048)
+        assert client.last_kwargs["max_tokens"] == 2048
+
+    def test_falls_back_to_client_default(self):
+        client = FakeClient(["ok:x"])
+        vlm, _logs, _clock = make([client], max_tokens=777)
+        vlm.chat("sys", "hi")
+        assert client.last_kwargs["max_tokens"] == 777
+
+    def test_call_structured_forwards_module_budget(self):
+        """rerank 這種「每個候選都要一段輸出」的任務，budget 傳不到就必然截斷。"""
+        from pydantic import BaseModel
+
+        from memeradar.understanding.nvidia_vlm import call_structured
+
+        class _Out(BaseModel):
+            ok: bool
+
+        client = FakeClient(['ok:{"ok": true}'])
+        vlm, _logs, _clock = make([client])
+        call_structured(vlm, _Out, "sys", "user", max_tokens=2000)
+        assert client.last_kwargs["max_tokens"] == 2000
+
+
+class TestTruncationIsVisible:
+    """撞 max_tokens 的回應必須在 vlm_calls 標成 truncated，不能混在 ok 裡。
+
+    2026-07-31：rerank 輸出被截斷成半截 JSON，下游只記錄「解析失敗」，在 vlm_calls
+    看起來卻全是 status=ok，害「查梗圖要 30 秒」這個問題繞了一大圈才定位。
+    """
+
+    def _record(self, action):
+        vlm, logs, _ = make([FakeClient([action])])
+        vlm.chat("s", "u", task="rerank")
+        return logs[0]
+
+    def test_hitting_the_limit_is_recorded_as_truncated(self):
+        record = self._record("len:{\"scores\": [{\"candidate_id\": 1,")
+        assert record["status"] == "truncated"
+        assert "max_tokens" in record["error"]
+
+    def test_normal_completion_stays_ok(self):
+        record = self._record("ok:{}")
+        assert record["status"] == "ok"
+        assert record["error"] is None

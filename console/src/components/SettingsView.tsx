@@ -123,6 +123,7 @@ function UsagePanel() {
   const statusLabel: Record<string, string> = {
     ok: "成功",
     rate_limited: "限流",
+    truncated: "輸出截斷",
     error: "錯誤",
     parse_fail: "解析失敗",
   };

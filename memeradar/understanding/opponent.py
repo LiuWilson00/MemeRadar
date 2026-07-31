@@ -19,6 +19,8 @@ from memeradar.shared.imaging import downscale_for_vlm
 from memeradar.shared.prompt_lang import OUTPUT_ZH_TW
 from memeradar.understanding.nvidia_vlm import call_structured
 
+MAX_OUTPUT_TOKENS = 1024  # 只回四個短欄位，通用預設就夠
+
 
 class OpponentMemeRefusedError(RuntimeError):
     """模型基於安全政策拒絕解析對方梗圖時拋出。"""
@@ -59,7 +61,7 @@ def analyze_opponent_meme(
     image_b64 = base64.standard_b64encode(image_bytes).decode("ascii")
     result = call_structured(
         vlm, OpponentMeme, build_system_prompt(), "請理解對方丟來的這張梗圖，只回 JSON。",
-        image_b64=image_b64, media_type=media_type, task="opponent", model=model, log=log,
+        image_b64=image_b64, media_type=media_type, task="opponent", model=model, log=log, max_tokens=MAX_OUTPUT_TOKENS,
     )
     if result is None:
         raise OpponentMemeRefusedError("模型無法解析對方梗圖")

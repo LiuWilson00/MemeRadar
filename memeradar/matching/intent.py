@@ -165,7 +165,7 @@ def analyze_conversation(
 
     result = call_structured(
         vlm, IntentResult, build_system_prompt(), serialize_conversation(conversation),
-        task="intent", model=model, log=log,
+        task="intent", model=model, log=log, max_tokens=MAX_OUTPUT_TOKENS,
     )
     if result is None:
         raise IntentRefusedError("模型無法分析此對話")

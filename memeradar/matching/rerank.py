@@ -182,7 +182,7 @@ def rank_candidates(
 
     result = call_structured(
         vlm, RerankResult, build_system_prompt(), build_user_content(intent, pool),
-        task="rerank", model=model, log=log,
+        task="rerank", model=model, log=log, max_tokens=MAX_OUTPUT_TOKENS,
     )
     if result is None:
         raise RerankRefusedError("模型無法重排序")

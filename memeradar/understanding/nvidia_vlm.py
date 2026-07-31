@@ -131,13 +131,15 @@ class NvidiaVlm:
         meme_id: str | None = None,
         log: Callable[[dict], None] | None = None,
         model: str | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         """送圖 + prompt 給 VLM，回傳原始文字（結構化解析由呼叫端負責）。"""
         content = [
             {"type": "text", "text": user_text},
             {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{image_b64}"}},
         ]
-        return self._complete(system, content, task=task, meme_id=meme_id, log=log, model=model)
+        return self._complete(system, content, task=task, meme_id=meme_id, log=log,
+                              model=model, max_tokens=max_tokens)
 
     def chat(
         self,
@@ -148,11 +150,14 @@ class NvidiaVlm:
         meme_id: str | None = None,
         log: Callable[[dict], None] | None = None,
         model: str | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         """純文字 prompt（意圖 / rerank 等無圖任務用），回傳原始文字。"""
-        return self._complete(system, user_text, task=task, meme_id=meme_id, log=log, model=model)
+        return self._complete(system, user_text, task=task, meme_id=meme_id, log=log,
+                              model=model, max_tokens=max_tokens)
 
-    def _complete(self, system, user_content, *, task, meme_id, log, model) -> str:
+    def _complete(self, system, user_content, *, task, meme_id, log, model,
+                  max_tokens=None) -> str:
         """核心：多把 key 輪替 + 撞 429 冷卻換 key + 全冷卻就等。
 
         ``user_content`` 可為字串（純文字）或 content 陣列（含圖）。
@@ -160,6 +165,9 @@ class NvidiaVlm:
         """
         sink = log or self._log
         use_model = model or self._model
+        # 各任務自報所需輸出上限（rerank 每個候選都要一段理由，遠超通用預設）；
+        # 沒傳就用 client 預設。傳不到的話輸出會被截斷成無效 JSON——見 2026-07-31 事故。
+        use_max_tokens = max_tokens or self._max_tokens
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user_content},
@@ -180,13 +188,23 @@ class NvidiaVlm:
                 resp = self._clients[i].chat.completions.create(
                     model=use_model,
                     messages=messages,
-                    max_tokens=self._max_tokens,
+                    max_tokens=use_max_tokens,
                     temperature=self._temperature,
                     **({"extra_body": self._extra_body} if self._extra_body else {}),
                 )
                 usage = getattr(resp, "usage", None)
-                self._emit(sink, i, task, meme_id, use_model, "ok", t0, usage=usage)
-                return resp.choices[0].message.content or ""
+                choice = resp.choices[0]
+                # 撞到 max_tokens 的回應是半截 JSON，下游只會看到「解析失敗」然後原封不動
+                # 重試（同樣的請求必然再截斷一次）。把它獨立標成 truncated，才能在 vlm_calls
+                # 一眼看出是輸出上限不夠、而不是模型不聽話（2026-07-31 rerank 事故）。
+                truncated = getattr(choice, "finish_reason", None) == "length"
+                self._emit(
+                    sink, i, task, meme_id, use_model,
+                    "truncated" if truncated else "ok", t0, usage=usage,
+                    error=f"finish_reason=length（輸出撞上 max_tokens={use_max_tokens}）"
+                    if truncated else None,
+                )
+                return choice.message.content or ""
             except Exception as exc:  # noqa: BLE001 — 依 status_code 分流
                 status = getattr(exc, "status_code", None)
                 if status in _PERMANENT_STATUSES:
@@ -259,6 +277,7 @@ def call_structured(
     log: Callable[[dict], None] | None = None,
     model: str | None = None,
     retries: int = 2,
+    max_tokens: int | None = None,
 ):
     """呼叫 VLM 並解析為 ``result_model``（pydantic）；格式/驗證失敗重試，耗盡回 None。
 
@@ -272,10 +291,11 @@ def call_structured(
         if image_b64 is not None:
             raw = vlm.annotate(
                 image_b64, media_type or "image/png", system, user_text,
-                task=task, meme_id=meme_id, log=log, model=model,
+                task=task, meme_id=meme_id, log=log, model=model, max_tokens=max_tokens,
             )
         else:
-            raw = vlm.chat(system, user_text, task=task, meme_id=meme_id, log=log, model=model)
+            raw = vlm.chat(system, user_text, task=task, meme_id=meme_id, log=log,
+                           model=model, max_tokens=max_tokens)
         fragment = extract_json(raw)
         if fragment is not None:
             try:

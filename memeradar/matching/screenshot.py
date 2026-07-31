@@ -88,7 +88,7 @@ def parse_screenshot(
     image_b64 = base64.standard_b64encode(image_bytes).decode("ascii")
     result = call_structured(
         vlm, ScreenshotParseResult, build_system_prompt(), "請解析這張對話截圖，只回 JSON。",
-        image_b64=image_b64, media_type=media_type, task="screenshot", model=model, log=log,
+        image_b64=image_b64, media_type=media_type, task="screenshot", model=model, log=log, max_tokens=MAX_OUTPUT_TOKENS,
     )
     if result is None:
         raise ScreenshotParseError("模型無法解析此截圖")
