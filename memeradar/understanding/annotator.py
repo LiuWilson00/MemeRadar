@@ -29,10 +29,19 @@ from memeradar.shared.models import Meme, MemeAnnotation, MemeSource
 from memeradar.shared.prompt_lang import OUTPUT_ZH_TW
 from memeradar.shared.taxonomy import get_taxonomy
 
-ANNOTATION_PROMPT_VERSION = "labeler-v1"
-# 2026-07-30 改走 OpenRouter；預設模型見 config.vlm_model，Console 可分任務切換。
-# 標註不吃延遲，用 OCR 最完整的那顆（實測看圖 10.2s，是 7/20 前一直在用的模型）。
-DEFAULT_ANNOTATION_MODEL = "qwen/qwen3.5-122b-a10b"
+# v2（2026-07-31）：emotions 從「限用字典」加上「至少 3 個 + 字典外會被靜靜丟棄」。
+# 情緒是檢索的命中標籤，貼太少等於少掉命中機會。版本號只是紀錄，沒有任何地方會因為
+# 版本不同就自動重標——但有了它，日後才分得出哪些標註出自哪版 prompt。
+ANNOTATION_PROMPT_VERSION = "labeler-v2"
+# 標註模型就是 config.vlm_model（目前 qwen3.5-flash），Console 可分任務切換。
+#
+# 這裡曾有一個 DEFAULT_ANNOTATION_MODEL = "qwen/qwen3.5-122b-a10b"，但它從來沒被任何
+# 地方引用過——標註其實一路都跑 flash。2026-07-31 拿線上實際產出比對了兩者（flash 728
+# 張 vs 122b 421 張、同一套 prompt）：信心 0.946/0.944、描述 107/111 字、用途 2.99/3.00
+# 幾乎沒有差別，flash 的空 OCR 還更少（3.4% vs 5.0%）。122b 唯一明顯領先的是 franchise
+# 填得比較滿（無出處 38.5% vs 52.1%），但抽樣可見它有亂猜（把 Hirohito 諧音圖標成
+# 「七龍珠」），填得滿不等於填得準。而 122b 貴 6.2 倍（每千張 $1.33 vs $0.21）。
+# 結論：刻意用 flash。要改請改 VLM_MODEL，別再放一個沒人讀的常數在這裡。
 # 2026-07 依積壓佇列實證下調（原 0.7）：模型對正常梗圖多給 0.6（92 張積壓中
 # 79 張剛好 0.6、全 is_meme=true），0.7 門檻把好圖灌爆複核佇列。0.5 只攔真正很低者。
 CONFIDENCE_REVIEW_THRESHOLD = 0.5
@@ -101,7 +110,7 @@ def build_system_prompt() -> str:
 - ocr_text：抄錄圖中所有文字，保留原文原樣（含錯字、諧音、注音文），不要改寫。若文字是諧音或網路用語，在 description 中解釋原意。
 - description：客觀描述畫面（人物、表情、動作、構圖），不加入使用建議。
 - usage_hints：最重要的欄位。寫 1–3 條**完整的情境句子**描述「這張圖通常什麼時候丟出來」，每條以動作語彙開頭、帶出具體情境（例如「被指責能力不足時，理直氣壯地自嘲認了」），並對齊以下回應策略：{strategies}。**不可只寫策略詞**（例如只寫「嗆聲反擊」「擺爛」是不合格的），每條都要是完整的使用時機描述。
-- emotions：限用固定字典：{emotions}。
+- emotions：限用固定字典：{emotions}。**至少挑 3 個**，依貼切程度由高到低排。字典外的詞會被直接丟棄（不是報錯，是靜靜消失），所以不要自創。情緒是檢索時的命中標籤，多貼幾個相近的能讓這張圖在更多對話情境被撈出來；除非這張圖真的只表達一種情緒，否則不要少於 3 個。
 - categories：媒材類型（通常單選）。優先沿用既有分類：{categories}；只有都不合適時才自創一個簡短新分類詞（例如「運動賽事」「音樂」）。宗教、佛法、勸世語錄類請用「宗教心靈」；政治、時事、爭議公眾人物一律用「名人政治」。
 - franchise：作品來源；不確定時給 null，不要猜。
 - template_name：僅在是廣為流傳的知名模板時填寫，否則 null。
