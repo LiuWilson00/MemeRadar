@@ -9,12 +9,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from memeradar.understanding.nvidia_vlm import NvidiaVlm, VlmExhaustedError
+from memeradar.understanding.nvidia_vlm import (
+    NvidiaVlm,
+    VlmExhaustedError,
+    VlmInputRejectedError,
+)
 
 
 class FakeErr(Exception):
-    def __init__(self, status: int):
-        super().__init__(f"HTTP {status}")
+    def __init__(self, status: int, body: str = ""):
+        super().__init__(f"HTTP {status}{(' ' + body) if body else ''}")
         self.status_code = status
 
 
@@ -36,6 +40,10 @@ class FakeClient:
             raise FakeErr(429)
         if action == "err":
             raise FakeErr(500)
+        if action == "reject":
+            raise FakeErr(400, '{"error":{"code":"data_inspection_failed"}}')
+        if action == "400":
+            raise FakeErr(400, '{"error":{"message":"temporarily unavailable"}}')
         if action.startswith("perm:"):
             raise FakeErr(int(action.split(":", 1)[1]))
         kind, text = action.split(":", 1)
@@ -444,3 +452,33 @@ class TestTruncationIsVisible:
         record = self._record("ok:{}")
         assert record["status"] == "ok"
         assert record["error"] is None
+
+
+class TestInputRejectionIsNotRetried:
+    """內容審查退件（HTTP 400 data_inspection_failed）對同一張圖是必然重現的。
+
+    2026-07-31 回填爬蟲：每被退一張，客戶端就把它當暫時性錯誤，輪完所有 key 再等滿
+    max_wait 180 秒才放棄。約 6% 的圖會被退 → 整個回填時間變成三倍以上。
+    """
+
+    def test_gives_up_immediately_instead_of_waiting_out_the_budget(self):
+        vlm, logs, clock = make([FakeClient(["reject"]), FakeClient(["reject"])],
+                                max_wait_s=180.0)
+        t0 = clock.now()
+
+        with pytest.raises(VlmInputRejectedError):
+            call(vlm)
+
+        assert clock.now() - t0 == 0.0, "不該為了退件而等待"
+        assert len(logs) == 1, "不該再輪下一把 key"
+        assert logs[0]["status"] == "rejected"
+
+    def test_a_plain_400_is_still_treated_as_transient(self):
+        """只有內容審查退件是必然重現的；其他 400 可能只是一時的，維持原本的重試邏輯。"""
+        vlm, logs, _ = make([FakeClient(["400", "ok:{}"])], max_wait_s=60.0)
+
+        assert call(vlm) == "{}"  # 重試後成功，沒有被當成永久錯誤
+
+    def test_rejection_is_still_a_vlm_exhausted_error(self):
+        """呼叫端（爬蟲 / API）既有的 VlmExhaustedError 攔截不能因此漏接。"""
+        assert issubclass(VlmInputRejectedError, VlmExhaustedError)

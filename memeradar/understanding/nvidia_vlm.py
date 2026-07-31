@@ -43,8 +43,20 @@ class VlmConfigError(VlmExhaustedError):
     """
 
 
+class VlmInputRejectedError(VlmExhaustedError):
+    """供應商的內容審查退了這筆輸入——同一張圖換 key 或再等都是一樣的結果。
+
+    與 ``VlmConfigError`` 一樣刻意繼承 ``VlmExhaustedError``，呼叫端不必改；
+    差別只在這裡會立刻放棄，不把等待預算浪費在必然重現的失敗上。
+    """
+
+
 # 這些狀態碼換 key 或再等都不會好（模型 EOL 回 410、未開通回 404、認證 401/403）
 _PERMANENT_STATUSES = frozenset({401, 403, 404, 410})
+#: HTTP 400 通常是暫時性的，但供應商的內容審查退件是**對同一筆輸入必然重現**的。
+#: 不特別認出來的話，每被退一張圖就要輪完所有 key 再等滿 max_wait 才放棄
+#: （2026-07-31 回填爬蟲：約 6% 的圖被退，每張白等 180 秒，整體慢三倍以上）。
+_INPUT_REJECTED_MARKERS = ("data_inspection_failed",)
 
 
 def build_clients(
@@ -207,6 +219,13 @@ class NvidiaVlm:
                 return choice.message.content or ""
             except Exception as exc:  # noqa: BLE001 — 依 status_code 分流
                 status = getattr(exc, "status_code", None)
+                if status == 400 and any(m in str(exc) for m in _INPUT_REJECTED_MARKERS):
+                    self._emit(sink, i, task, meme_id, use_model, "rejected", t0,
+                               error=str(exc)[:200])
+                    raise VlmInputRejectedError(
+                        f"供應商的內容審查退了這筆輸入（{use_model}）"
+                        f"——換 key 或重試都是一樣的結果：{exc}"[:500]
+                    ) from exc
                 if status in _PERMANENT_STATUSES:
                     # 模型下架 / 未開通 / 認證錯 → 換 key 或再等都不會好。立刻原文拋出，
                     # 別收斂成「限流耗盡」害人往配額方向查（2026-07-30：qwen 下架回 410，
