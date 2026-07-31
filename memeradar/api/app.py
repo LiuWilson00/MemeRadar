@@ -69,7 +69,7 @@ from memeradar.shared.models import Embedding, FeedbackEvent, new_id
 from memeradar.shared.taxonomy import get_taxonomy
 from memeradar.understanding.annotator import annotate_meme, load_meme_image_bytes
 from memeradar.understanding.embedding import Embedder, embed_pending_memes, embedding_signature
-from memeradar.understanding.nvidia_vlm import VlmExhaustedError
+from memeradar.understanding.nvidia_vlm import VlmExhaustedError, VlmInputRejectedError
 from memeradar.understanding.opponent import OpponentMemeRefusedError
 from memeradar.understanding.retrieval_doc import build_retrieval_document
 
@@ -404,6 +404,14 @@ def annotate_one_pending(deps: Deps, conn: psycopg.Connection) -> bool:
     t0 = time.monotonic()
     try:
         annotation = annotate_meme(conn, deps.vlm, meme, data_dir=deps.data_dir)
+    except VlmInputRejectedError as exc:
+        # 內容審查退件對同一張圖必然重現，不能歸類成「暫時性」——它繼承自
+        # VlmExhaustedError，所以必須擋在下面那個 except 之前，否則會被 re-raise、
+        # 狀態維持 active，下一輪 worker 又撈到同一張。2026-07-31 線上實測：一張被退
+        # 的圖 30 分鐘內被重打 146 次，排在它後面的 89 張一張都沒動。
+        repo.set_status(conn, meme.meme_id, "pending_review")
+        logger.warning("[annotate] %s 被內容審查退件，轉 pending_review：%r", meme.meme_id, exc)
+        return True
     except VlmExhaustedError:
         raise  # 限流耗盡＝暫時性：維持 active，交給 worker 等下輪重試
     except Exception as exc:  # noqa: BLE001 永久性錯誤（圖檔遺失/損毀等）

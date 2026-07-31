@@ -1934,3 +1934,46 @@ class TestRenamedEnvIsNotSilent:
 
         fields = set(Settings.model_fields)
         assert {new.lower() for new in _RENAMED_ENV.values()} <= fields
+
+
+class TestContentRejectionDoesNotBlockTheQueue:
+    """內容審查退件對同一張圖是必然重現的——留在 active 就是無限重試。
+
+    2026-07-31 線上實測：一張被 Alibaba 退件的圖在 30 分鐘內被重打 146 次，
+    而排在它後面的 89 張待標註梗圖一張都沒動——整條佇列被這一張卡死。
+    成因是 VlmInputRejectedError 繼承 VlmExhaustedError，被當成「限流＝暫時性」
+    而 re-raise，狀態維持 active，下一輪 worker 又撈到同一張。
+    """
+
+    def test_rejected_meme_leaves_the_queue_instead_of_retrying_forever(self, tmp_path):
+        import base64
+
+        from memeradar.api.app import annotate_one_pending
+        from memeradar.understanding.nvidia_vlm import VlmInputRejectedError
+
+        class RejectingVlm(StubVlm):
+            def annotate(self, *a, **kw):
+                raise VlmInputRejectedError("供應商的內容審查退了這筆輸入")
+
+        db_path = tmp_path / "db.sqlite3"
+        conn = connect(db_path)
+        migrate(conn)
+        meme_id = new_id("m")
+        repo.insert_meme(
+            conn, Meme(meme_id=meme_id, image_uri=f"images/{meme_id}.png", sha256="e" * 64)
+        )
+        images = tmp_path / "images"  # 圖要讀得到，才會真的走到 VLM 那一步
+        images.mkdir(exist_ok=True)
+        (images / f"{meme_id}.png").write_bytes(base64.standard_b64decode(_png_b64(9)))
+        deps = Deps(
+            client=DualStubClient(), vlm=RejectingVlm(), embedder=FakeEmbedder(),
+            db_path=db_path, data_dir=tmp_path,
+        )
+        assert repo.count_active_unannotated(conn) == 1
+
+        did = annotate_one_pending(deps, conn)
+
+        assert did is True, "要算「有處理到」，否則 worker 會立刻回頭再撈同一張"
+        assert repo.count_active_unannotated(conn) == 0, "佇列必須前進"
+        assert repo.get_meme(conn, meme_id).status == "pending_review"
+        conn.close()
