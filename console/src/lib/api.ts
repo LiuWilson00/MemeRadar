@@ -343,10 +343,6 @@ export async function googleLogin(credential: string): Promise<{ token: string; 
   return unwrap<{ token: string; user: User }>(response);
 }
 
-/** 取目前登入使用者（需帶有效 Bearer）；未登入回 401。 */
-export async function fetchMe(): Promise<User> {
-  return unwrap<User>(await apiFetch("/auth/me"));
-}
 
 /** 登入使用者設定顯示暱稱。 */
 export async function setNickname(nickname: string): Promise<void> {

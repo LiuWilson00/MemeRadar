@@ -50,10 +50,6 @@ export function getDeviceNickname(): string {
   return name;
 }
 
-export function setDeviceNickname(name: string): void {
-  if (typeof localStorage !== "undefined") localStorage.setItem(KEY, name);
-}
-
 /** 目前該顯示的暱稱：登入且有設 → 用它；否則用裝置暱稱。 */
 export function displayName(user: User | null): string {
   return user?.nickname?.trim() || getDeviceNickname();

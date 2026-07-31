@@ -56,6 +56,12 @@ def ensure_live(conn, *, connect=None):
     return connect()
 
 
+# 向量化的 checkpoint。標註是每張即 commit，但向量化要主緒批次做，所以這個數字就是
+# 「被中途砍掉時最多有幾張會停在標註好但沒向量」——那種圖永久搜不到。25 太大了：
+# 2026-07-31 我用 timeout 砍了五、六趟回填，留下 28 張搜不到的圖。
+EMBED_EVERY = 5
+
+
 def _import_one(conn, cand, content: bytes, data_dir, *, vlm=None, embedder=None) -> str:
     """單張匯入：去重 → import_image_bytes（帶 attribution）→ 落 R2/DB → 登記 phash。
 
@@ -169,6 +175,12 @@ def _process_parallel(cands, imported_urls, *, conn, data_dir, vlm, embedder, wo
     new, dup = _split_new(cands, imported_urls)
     counts = {"imported": 0, "duplicate": dup, "filtered": 0, "failed": 0}
     total = len(cands)
+    if embedder is not None:
+        # 自癒：上一趟若被中途砍掉（逾時 / Ctrl-C），會留下「標註好但沒向量」的圖，
+        # 而那種圖是永久搜不到的——沒有任何背景任務會回頭撿它們。開跑前先補一輪。
+        healed = embed_pending_memes(conn, embedder)
+        if healed:
+            print(f"🩹 補上前次中斷遺留的 {healed} 張未向量化梗圖")
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futs = {pool.submit(_import_worker, c, vlm, data_dir): c for c in new}
         for j, fut in enumerate(as_completed(futs), 1):
@@ -181,9 +193,9 @@ def _process_parallel(cands, imported_urls, *, conn, data_dir, vlm, embedder, wo
                     print(f"  ✗ {cand.post_id}：{exc!r}")
                 continue
             _tally(result, counts)
+            if embedder is not None and j % EMBED_EVERY == 0:
+                embed_pending_memes(conn, embedder)
             if j % 25 == 0:
-                if embedder is not None:
-                    embed_pending_memes(conn, embedder)
                 _print_progress(sum(counts.values()), total, counts)
     if embedder is not None:
         embed_pending_memes(conn, embedder)  # 收尾：把工作緒設 active 卻還沒向量化的補上
@@ -211,6 +223,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="覆寫 --local-annotate 的標註模型（預設沿用背景 worker 的設定）")
     parser.add_argument("--ignore-watermark", action="store_true",
                         help="忽略水位、從最新往回爬（回填舊圖用；去重擋掉已入庫的）")
+    parser.add_argument("--skip", type=int, default=0,
+                        help="跳過最新的前 N 筆（回填分段用；那批早已入庫，連 API 都不打）")
     parser.add_argument("--workers", type=int, default=1,
                         help="並行標註緒數（local-annotate 時 VLM 為瓶頸，>1 大幅加速）")
     args = parser.parse_args(argv)
@@ -219,9 +233,9 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.reconfigure(encoding="utf-8")
 
     contests = [int(c) for c in args.contests.split(",") if c.strip()]
-    adapters = [MemesTwAdapter(max_items=args.count, request_delay=args.delay)]
+    adapters = [MemesTwAdapter(max_items=args.count, request_delay=args.delay, skip=args.skip)]
     adapters += [
-        MemesTwAdapter(max_items=args.count, contest=c, request_delay=args.delay)
+        MemesTwAdapter(max_items=args.count, contest=c, request_delay=args.delay, skip=args.skip)
         for c in contests
     ]
 

@@ -11,7 +11,6 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-MEME_STATUSES = ("active", "pending_review", "removed")
 EMBEDDING_KINDS = ("text_retrieval", "image_dedup")
 RATINGS = ("up", "down")
 

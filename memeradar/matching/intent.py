@@ -26,11 +26,8 @@ from pydantic import BaseModel, Field, field_validator
 from memeradar.shared.prompt_lang import OUTPUT_ZH_TW
 from memeradar.shared.taxonomy import get_taxonomy
 
-INTENT_PROMPT_VERSION = "intent-v1"
-# 2026-07-11 團隊決策：成本考量採 sonnet 級為預設
-# 2026-07 成本優化：意圖分析改用 haiku-4.5（實測品質相當、成本約 sonnet 的 1/3）；
-# 需要更高品質時以 --model / model= 覆寫回 sonnet-5。
-DEFAULT_INTENT_MODEL = "claude-haiku-4-5"
+# 模型同 rerank：DB settings 覆寫優先，否則 config.vlm_model。原本的
+# INTENT_PROMPT_VERSION / DEFAULT_INTENT_MODEL 皆無人引用，已於 2026-08-01 移除。
 MAX_OUTPUT_TOKENS = 1500
 
 _CONVO_OPEN = "<conversation>"

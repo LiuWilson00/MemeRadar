@@ -18,7 +18,8 @@ from pydantic import BaseModel, Field
 from memeradar.shared.imaging import downscale_for_vlm
 from memeradar.shared.prompt_lang import OUTPUT_ZH_TW
 
-DEFAULT_PARSE_MODEL = "claude-sonnet-5"
+# 模型同 rerank：DB settings 覆寫優先，否則 config.vlm_model。原本的
+# DEFAULT_PARSE_MODEL = "claude-sonnet-5" 無人引用，已於 2026-08-01 移除。
 MAX_OUTPUT_TOKENS = 2000
 
 _MAGIC = [

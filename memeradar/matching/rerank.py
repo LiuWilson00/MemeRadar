@@ -26,11 +26,10 @@ from memeradar.matching.retrieval import Candidate
 from memeradar.matching.search import _cosine
 from memeradar.shared.models import MemeAnnotation
 
-RERANK_PROMPT_VERSION = "rerank-v1"
-# 2026-07-11 團隊決策：成本考量採 sonnet 級為預設
-# 2026-07 成本優化：rerank 改用 haiku-4.5（實測 A/B：top 推薦與 sonnet 相同、
-# 快 ~17%、成本約 1/3）；需要更高品質時以 model= 覆寫回 sonnet-5。
-DEFAULT_RERANK_MODEL = "claude-haiku-4-5"
+# rerank 用哪個模型不在這裡決定：DB settings 表的分任務覆寫（repo.get_task_models）
+# 優先，否則用 config.vlm_model。這裡曾有 RERANK_PROMPT_VERSION 與
+# DEFAULT_RERANK_MODEL = "claude-haiku-4-5"，但兩者從來沒被任何地方引用過，只是讓人
+# 誤以為 rerank 跑在 haiku 上（實際是 qwen flash）。2026-08-01 移除。
 MAX_OUTPUT_TOKENS = 2000
 _DESCRIPTION_SNIPPET = 60  # 候選摘要中畫面描述的截斷長度
 

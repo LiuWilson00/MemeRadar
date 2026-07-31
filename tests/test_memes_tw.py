@@ -151,3 +151,55 @@ class TestConnectionRevival:
 
         conn = _Live()
         assert ensure_live(conn, connect=lambda: pytest.fail("不該重連")) is conn
+
+
+class TestSkip:
+    """``skip``：回填時直接跳過前 N 筆已匯入的，連 API 都不必打。
+
+    2026-07-31 回填實測：每一段都得從最新往回重掃 ~2600 筆已入庫的圖才碰得到新的，
+    等於每段白打 130 次 API（還把 memes.tw 打到 read timeout）。
+    """
+
+    def test_skips_whole_pages_without_requesting_them(self):
+        pages = {1: [_meme(120), _meme(119)], 2: [_meme(118), _meme(117)],
+                 3: [_meme(116), _meme(115)]}
+        asked: list[int] = []
+
+        def get(url: str) -> list:
+            page = int(up.parse_qs(up.urlparse(url).query).get("page", ["1"])[0])
+            asked.append(page)
+            return pages.get(page, [])
+
+        adapter = MemesTwAdapter(http_get=get, sleep=lambda s: None, request_delay=0,
+                                 max_items=10, page_size=2, skip=4)
+        cands, _ = adapter.fetch(None)
+
+        assert [c.post_id for c in cands] == ["116", "115"]
+        assert asked[0] == 3, "應直接從第 3 頁開始"
+        assert 1 not in asked and 2 not in asked, "跳掉的頁不該被請求"
+
+    def test_partial_page_offset_is_dropped(self):
+        pages = {1: [_meme(120), _meme(119)], 2: [_meme(118), _meme(117)]}
+        adapter = MemesTwAdapter(http_get=_fake_api(pages), sleep=lambda s: None,
+                                 request_delay=0, max_items=10, page_size=2, skip=3)
+        cands, _ = adapter.fetch(None)
+
+        assert [c.post_id for c in cands] == ["117"], "第 2 頁的前 1 筆要丟掉"
+
+    def test_skip_does_not_move_the_watermark(self):
+        """跳過的那些是最新的——沒看過就不能宣稱涵蓋，否則水位會倒退。"""
+        pages = {1: [_meme(120), _meme(119)], 2: [_meme(118), _meme(117)]}
+        adapter = MemesTwAdapter(http_get=_fake_api(pages), sleep=lambda s: None,
+                                 request_delay=0, max_items=10, page_size=2, skip=2)
+
+        cands, wm = adapter.fetch("50")
+
+        assert [c.post_id for c in cands] == ["118", "117"]
+        assert wm == "50", "水位維持原值，不可被較舊的 id 拉低"
+
+    def test_no_skip_keeps_current_behaviour(self):
+        pages = {1: [_meme(120), _meme(119)]}
+        cands, wm = _adapter(pages, max_items=10).fetch(None)
+
+        assert [c.post_id for c in cands] == ["120", "119"]
+        assert wm == "120"

@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from memeradar.ingestion.base import Candidate, _now_iso
 
 API_URL = "https://memes.tw/wtf/api"
+PAGE_SIZE = 20  # API 固定每頁筆數；skip 靠它換算成頁碼
 USER_AGENT = "MemeRadar/1.0 (meme ingestion; +https://memeradar.zeabur.app)"
 
 
@@ -51,6 +52,8 @@ class MemesTwAdapter:
         request_delay: float = 1.0,
         http_get: Callable[[str], list] | None = None,
         sleep: Callable[[float], None] | None = None,
+        page_size: int = PAGE_SIZE,
+        skip: int = 0,
     ):
         # 不同來源（全站 vs 各 contest）用不同 name → 各自獨立水位、可增量
         self.name = "memes_tw" if contest is None else f"memes_tw_c{contest}"
@@ -59,6 +62,8 @@ class MemesTwAdapter:
         self._delay = request_delay
         self._get = http_get
         self._sleep = sleep or time.sleep
+        self._page_size = page_size
+        self._skip = max(0, skip)
 
     def _page(self, page: int, *, retries: int = 3) -> list:
         """抓一頁；瞬時失敗會退避重試。
@@ -91,11 +96,17 @@ class MemesTwAdapter:
         since = int(watermark) if watermark and str(watermark).isdigit() else 0
         out: list[Candidate] = []
         max_id = since
-        page = 1
+        # skip：回填時前 N 筆早就入庫了，連請求都省下來——分頁是 ?page=N 且每頁固定
+        # 筆數，所以能直接跳到該落地的那一頁，只丟掉該頁的前 offset 筆。
+        page = self._skip // self._page_size + 1
+        offset = self._skip % self._page_size
         while len(out) < self._max:
             batch = self._page(page)
             if not batch:
                 break
+            if offset:
+                batch = batch[offset:]
+                offset = 0
             reached_seen = False
             for m in batch:
                 try:
@@ -115,4 +126,8 @@ class MemesTwAdapter:
                 break
             page += 1
             self._sleep(self._delay)
+        if self._skip:
+            # 跳過的正是「最新的那批」。沒看過就不能宣稱涵蓋到它們，硬報水位會被
+            # 較舊的 id 拉低（＝倒退），下次增量又得重掃一遍。維持原水位。
+            return out, watermark
         return out, (str(max_id) if max_id else watermark)

@@ -42,6 +42,7 @@ ANNOTATION_PROMPT_VERSION = "labeler-v2"
 # 填得比較滿（無出處 38.5% vs 52.1%），但抽樣可見它有亂猜（把 Hirohito 諧音圖標成
 # 「七龍珠」），填得滿不等於填得準。而 122b 貴 6.2 倍（每千張 $1.33 vs $0.21）。
 # 結論：刻意用 flash。要改請改 VLM_MODEL，別再放一個沒人讀的常數在這裡。
+
 # 2026-07 依積壓佇列實證下調（原 0.7）：模型對正常梗圖多給 0.6（92 張積壓中
 # 79 張剛好 0.6、全 is_meme=true），0.7 門檻把好圖灌爆複核佇列。0.5 只攔真正很低者。
 CONFIDENCE_REVIEW_THRESHOLD = 0.5
@@ -300,7 +301,7 @@ def build_default_vlm(*, fast_fail: bool = False, model: str | None = None):
         # 意圖分析（純文字、輸出僅 186 tokens）要 23.2 / 24.9 / 31.8 秒——同一支 prompt
         # 半小時前只要 5.2～6.2 秒。逾時必須蓋得住觀測到的最慢值，否則每次搜尋都必死。
         # ⚠️ 這是在賭免費層當天的壅塞程度，不是穩定解。真正的解是把 intent/rerank
-        #    這類「純文字、延遲敏感」的呼叫移出免費層（見 intent.DEFAULT_INTENT_MODEL）。
+        #    這類「純文字、延遲敏感」的呼叫移出免費層。
         clients, key_ids = build_clients(keys, base_url=base_url, timeout=20.0)
         return NvidiaVlm(
             clients, key_ids, model or settings.vlm_model,
