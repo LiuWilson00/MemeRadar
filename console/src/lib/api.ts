@@ -36,14 +36,21 @@ import type { UploadOutcome } from "./uploadQueue";
 // API base：跨源部署時設 VITE_API_BASE_URL（build 期注入）；本地 / 同源部署留空＝相對路徑。
 const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "";
 
-/** 認證標頭：前台使用者已登入 → Bearer（優先）；否則帶後台 admin 的 Basic（若有）。
- * 兩者不會同時需要（前台無 admin 帳密、後台無 Google 登入），故單一 Authorization 即可。 */
+/** 認證標頭：依**目前所在的介面**決定，判斷依據與 main.tsx 決定掛哪個 App 一致。
+ * - `/admin*`（後台）→ admin 的 Basic；沒有就不帶，讓 AdminGate 探測拿到 401 顯示登入頁。
+ * - 其餘（前台）→ 使用者的 Bearer。
+ *
+ * 不可改回「有 token 就 Bearer、否則 Basic」：前後台合併成同一個 SPA、同一個 origin 之後，
+ * localStorage 的前台 token 在後台頁面也讀得到，Basic 會永遠被 Bearer 蓋掉——結果是只要
+ * 你在前台用 Google 登入過，後台密碼打對也一直被回「帳號或密碼錯誤」（2026-07-31）。 */
 function authHeaders(): Record<string, string> {
+  if (typeof location !== "undefined" && location.pathname.startsWith("/admin")) {
+    if (typeof sessionStorage === "undefined") return {};
+    const creds = sessionStorage.getItem("memeradar.adminAuth");
+    return creds ? { Authorization: `Basic ${creds}` } : {};
+  }
   const token = getUserToken();
-  if (token) return { Authorization: `Bearer ${token}` };
-  if (typeof sessionStorage === "undefined") return {};
-  const creds = sessionStorage.getItem("memeradar.adminAuth");
-  return creds ? { Authorization: `Basic ${creds}` } : {};
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 /** 統一 fetch：補 API base + admin 認證標頭 + 失敗自動留麵包屑。所有 API 呼叫都走這個。 */
