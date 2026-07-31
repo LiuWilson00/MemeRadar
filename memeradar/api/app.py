@@ -456,6 +456,27 @@ def _check_basic_auth(header: str | None, user: str, password: str) -> bool:
     return secrets.compare_digest(got_user, user) and secrets.compare_digest(got_pass, password)
 
 
+#: 改過名的環境變數 → 現在的名字。Settings 是 ``extra="ignore"``，舊名不會報錯、
+#: 也不會生效，改了半天沒反應（2026-07-30：NVIDIA_VLM_MODEL 在 Zeabur 上留著，
+#: 以為在控制標註模型，其實整個被忽略）。啟動時吼一聲，讓它不再是啞的。
+_RENAMED_ENV = {"NVIDIA_VLM_MODEL": "VLM_MODEL"}
+
+
+def warn_renamed_env(environ: dict[str, str] | None = None) -> list[str]:
+    """回報仍設著舊名的環境變數（同時寫 WARNING log）；回傳訊息供測試斷言。"""
+    import os
+
+    env = os.environ if environ is None else environ
+    warnings = [
+        f"環境變數 {old} 已更名為 {new}，目前設的值不會生效——請改設 {new} 並刪掉 {old}"
+        for old, new in _RENAMED_ENV.items()
+        if env.get(old)
+    ]
+    for message in warnings:
+        logging.getLogger("memeradar.api").warning(message)
+    return warnings
+
+
 def _configure_logging() -> None:
     """讓 memeradar.* 的 log 確實進 stdout（Zeabur runtime log 看得到）。
 
@@ -518,6 +539,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
     app = FastAPI(title="MemeRadar API", version="0.1.0")
 
     _configure_logging()
+    warn_renamed_env()
 
     @app.middleware("http")
     async def _timing(request: Request, call_next):

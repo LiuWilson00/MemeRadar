@@ -256,8 +256,14 @@ def build_hosted_embedder(settings=None) -> Embedder:
         settings = get_settings()
     chain: list[Embedder] = []
     keyless: list[HostedProvider] = []
+    unconfigured: list[str] = []  # 列在鏈上但少了必要設定 → 略過，湊不出任何一家才報錯
     for name in settings.embedding_provider_list():
         if name == SELFHOST:
+            if not settings.embedding_selfhost_url.strip():
+                # 比照「沒設 key 的供應商自動略過」：預設鏈含 selfhost，沒自架的人
+                # （本機開發）不該因此整條鏈都組不起來，往後退到下一家即可。
+                unconfigured.append("EMBEDDING_SELFHOST_URL")
+                continue
             provider = _selfhost_provider(settings)
             # 自架服務多半不開認證（TEI 未加 --api-key 時不驗）；有設就照送
             keys = settings.csv_list(provider.keys_env) or ["not-needed"]
@@ -273,7 +279,8 @@ def build_hosted_embedder(settings=None) -> Embedder:
             continue
         chain.append(HostedBgeM3Embedder(provider, keys))
     if not chain:
-        wanted = "、".join(p.keys_env.upper() for p in keyless) or "EMBEDDING_PROVIDERS"
+        missing = [p.keys_env.upper() for p in keyless] + unconfigured
+        wanted = "、".join(missing) or "EMBEDDING_PROVIDERS"
         raise RuntimeError(
             f"沒有可用的 embedding 供應商：請設定 {wanted}（或設 EMBEDDING_BACKEND=bge-m3 走本地）"
         )

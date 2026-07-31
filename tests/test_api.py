@@ -1908,3 +1908,29 @@ class TestTaskErrorCopy:
         body = client.get(f"/tasks/{tid}").json()
         assert body["status"] == "done"
         assert not body["error"] and not body["error_detail"]
+
+
+class TestRenamedEnvIsNotSilent:
+    """Settings 是 extra="ignore"：舊名的環境變數不報錯也不生效，改了沒反應還查不出來。"""
+
+    def test_stale_name_produces_a_warning_naming_the_new_one(self):
+        from memeradar.api.app import warn_renamed_env
+
+        warnings = warn_renamed_env({"NVIDIA_VLM_MODEL": "qwen/qwen3.5-122b-a10b"})
+
+        assert len(warnings) == 1
+        assert "NVIDIA_VLM_MODEL" in warnings[0]
+        assert "VLM_MODEL" in warnings[0]
+
+    def test_current_name_is_not_warned_about(self):
+        from memeradar.api.app import warn_renamed_env
+
+        assert warn_renamed_env({"VLM_MODEL": "qwen/qwen3.5-flash-02-23"}) == []
+
+    def test_every_stale_name_maps_to_a_real_settings_field(self):
+        """舊名對應的新名必須真的是 Settings 的欄位，否則這張表本身就是新的謊言。"""
+        from memeradar.api.app import _RENAMED_ENV
+        from memeradar.shared.config import Settings
+
+        fields = set(Settings.model_fields)
+        assert {new.lower() for new in _RENAMED_ENV.values()} <= fields

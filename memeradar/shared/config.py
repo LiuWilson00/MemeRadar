@@ -59,9 +59,12 @@ class Settings(BaseSettings):
     # embedding 後端：hosted-bge-m3（免容器 torch；舊名 nvidia-bge-m3 等效）或 bge-m3（本地離線）。
     embedding_backend: str = "nvidia-bge-m3"
     # hosted embedding 供應商優先序（逗號分隔，前者掛了自動換後者）。各家服務同一份
-    # BAAI/bge-m3 權重 → 向量互通、不必重建索引。可用：nvidia、deepinfra、siliconflow。
-    # 2026-07-27 NVIDIA 端 bge-m3 全面 500 停擺，故務必設第二家備援。
-    embedding_providers: str = "nvidia"
+    # BAAI/bge-m3 權重 → 向量互通、不必重建索引。
+    # 可用：selfhost、openrouter、nvidia、deepinfra、siliconflow。
+    # 預設**不含 nvidia**：其 baai/bge-m3 自 2026-07-27 起全面 500 至今未修，放進預設等於
+    # 「沒設這個變數的部署一定壞」。鏈中缺 URL / 缺 key 的供應商會自動略過，故這組預設
+    # 對只有 OpenRouter 的本機開發同樣可用。
+    embedding_providers: str = "selfhost,openrouter"
     deepinfra_api_keys: str = ""
     siliconflow_api_keys: str = ""
     # 自架 bge-m3（HuggingFace TEI 等）的 OpenAI 相容端點，例：https://embed.example.com/v1

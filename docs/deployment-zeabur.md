@@ -188,7 +188,7 @@ API 端 Basic Auth 已做好、也測過（帳密對才放行）。缺的是後�
 | `OPENROUTER_API_KEY` | `sk-or-v1-…` | 線上 LLM/VLM；2026-07-30 起改走 OpenRouter |
 | `VLM_MODEL` | （選填，預設 `qwen/qwen3.5-flash-02-23`） | 換模型只改這個 |
 | `VLM_BASE_URL` | （選填，預設 OpenRouter） | 換供應商只改這個 |
-| `EMBEDDING_PROVIDERS` | `selfhost,openrouter` | **至少兩家**；別放 nvidia（其 bge-m3 自 2026-07-27 起持續 500） |
+| `EMBEDDING_PROVIDERS` | （選填，預設 `selfhost,openrouter`） | 預設已是建議值，通常不必設；**別放 nvidia**（其 bge-m3 自 2026-07-27 起持續 500） |
 | `DEEPINFRA_API_KEYS` | `…` | 備援供應商金鑰 |
 | `ANTHROPIC_API_KEY` | （選填，目前推薦路徑全 NVIDIA） | 未用可留空 |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | 自訂 | **兩者皆填**才啟用後台登入 |
@@ -347,7 +347,7 @@ embed.你的網域 {
 然後 Zeabur 的 api 服務設：
 
 ```
-EMBEDDING_PROVIDERS=selfhost,nvidia
+# EMBEDDING_PROVIDERS 預設就是 selfhost,openrouter，不必設；只有要改順序才設
 EMBEDDING_SELFHOST_URL=https://embed.你的網域/v1      # 要含 /v1，且不是 API 自己的網域
 EMBEDDING_SELFHOST_KEYS=<上面 --api-key 產生的那串>
 ```
@@ -382,7 +382,8 @@ curl -sS -X POST https://embed.你的網域/v1/embeddings \
 **務必不要把 TEI 公開上網**：綁 `127.0.0.1` + 反向代理或防火牆只放行 Zeabur 出口 IP，
 或加 TEI 的 `--api-key` 並設 `EMBEDDING_SELFHOST_KEYS`。
 
-建議鏈：`EMBEDDING_PROVIDERS=selfhost,nvidia` —— 自架為主，NVIDIA 留著，哪天它修好就自動多一層備援。
+建議鏈就是預設值 `selfhost,openrouter` —— 自架為主，OpenRouter 備援。**不要把 nvidia 放進來**：
+它的 baai/bge-m3 自 2026-07-27 起持續 500，排在鏈上只會讓每次 embedding 先白等一輪逾時。
 
 #### 9.1.1 也可以直接在 Zeabur 開一個 TEI 服務（走私有網路，最省事）
 

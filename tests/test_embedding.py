@@ -418,3 +418,35 @@ class TestEmbedPendingMemes:
         embedder = FakeEmbedder()
         assert embed_pending_memes(conn, embedder, limit=2) == 2
         assert embed_pending_memes(conn, embedder) == 1  # 補完剩下一張
+
+
+class TestProviderDefaults:
+    """預設值不可以指向已知掛掉的服務。
+
+    2026-07-27 NVIDIA 的 baai/bge-m3 全面 500 至今未修，但預設值一直留著 nvidia——
+    等於「沒設 EMBEDDING_PROVIDERS 的部署一定壞」，而且壞在啟動之後才看得出來。
+    """
+
+    def test_default_chain_avoids_the_dead_nvidia_bge_m3(self):
+        settings = Settings(_env_file=None)
+
+        assert "nvidia" not in settings.embedding_provider_list()
+
+    def test_default_chain_is_selfhost_then_openrouter(self):
+        settings = Settings(_env_file=None)
+
+        assert settings.embedding_provider_list() == ["selfhost", "openrouter"]
+
+    def test_selfhost_without_url_is_skipped_so_the_rest_of_the_chain_still_builds(self):
+        """預設鏈含 selfhost，但沒自架的人（本機開發）不該因此整條鏈都組不起來。
+
+        比照「沒設 key 的供應商自動略過」，缺 URL 的 selfhost 也略過往後退。
+        """
+        settings = Settings(
+            _env_file=None,
+            embedding_providers="selfhost,openrouter",
+            openrouter_api_key="or1",
+        )
+        embedder = build_hosted_embedder(settings)
+
+        assert embedder.provider.name == "openrouter"

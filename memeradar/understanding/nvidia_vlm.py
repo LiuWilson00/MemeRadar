@@ -215,7 +215,7 @@ class NvidiaVlm:
                                error=str(exc)[:200])
                     raise VlmConfigError(
                         f"NVIDIA VLM 模型 {use_model!r} 不可用（HTTP {status}）：{exc}"
-                        "——重試無用，請檢查 NVIDIA_VLM_MODEL 是否已下架或未對此帳號開通"
+                        "——重試無用，請檢查 VLM_MODEL 是否已下架或未對此帳號開通"
                     ) from exc
                 last_error = f"HTTP {status}: {exc}" if status else str(exc)
                 if status == 429:
