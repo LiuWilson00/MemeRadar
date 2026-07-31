@@ -4,7 +4,7 @@
 無冷啟動，單一模型自動處理繁中/簡中/日/韓/英/俄（比 PaddleOCR 快 ~28×，且
 PaddleOCR hosted 實測只認拉丁字、讀不出中文）。多把 key 輪流、失敗換 key 重試。
 
-回應形狀已用真 key 驗證（scripts/smoke_ocr_nvclip.py）：
+回應形狀已用真 key 驗證（scripts/smoke_ocr.py）：
 ``data[0].text_detections[].text_prediction.text`` + ``bounding_box.points``。
 ``_extract_text`` 依邊界框由上到下、左到右組回；未知形狀退回遞迴撈字（保險）。
 """

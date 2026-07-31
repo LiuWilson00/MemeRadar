@@ -1,7 +1,7 @@
 """NvidiaOcr（PaddleOCR hosted）單元測試。
 
 注意：這些測試用 stub transport 驗證「解析與排序邏輯」，*不*證明真實 API 的
-回應欄位命名正確——真實形狀須用真 key 跑 scripts/smoke_ocr_nvclip.py 確認
+回應欄位命名正確——真實形狀須用真 key 跑 scripts/smoke_ocr.py 確認
 （見 memory：stub 可能掩蓋真實 SDK/API 漂移）。
 """
 

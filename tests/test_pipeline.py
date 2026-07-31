@@ -239,3 +239,33 @@ class TestPipeline:
         assert source.post_title == "貼文 p1"
         assert source.top_comments == ["笑死"]
         assert source.upvotes == 500
+
+
+class TestFastIntentRationale:
+    """快速模式的策略說明會餵進 rerank 的 prompt，寫錯就是在誤導重排序。
+
+    2026-08-01：分支條件寫的是 `source == "nvclip"`，但 NV-CLIP 早已下線、
+    `source` 只可能是 text / ocr / vlm——沒字圖走小 VLM 標籤那條因此掉進 else，
+    說明變成「OCR 文字直接語意檢索」，而它正是因為**沒有** OCR 文字才走到那裡的。
+    """
+
+    def test_textless_image_says_it_used_labels_not_ocr(self):
+        from memeradar.api.pipeline import _fast_intent
+
+        intent = _fast_intent("擺爛 無奈", "vlm", ["擺爛", "無奈"])
+
+        rationale = intent.strategies[0].rationale
+        assert "OCR" not in rationale, "沒有 OCR 文字，不能說是靠 OCR 檢索"
+        assert "擺爛" in rationale and "無奈" in rationale
+
+    def test_ocr_path_still_says_ocr(self):
+        from memeradar.api.pipeline import _fast_intent
+
+        intent = _fast_intent("我就爛", "ocr", [])
+
+        assert "OCR" in intent.strategies[0].rationale
+
+    def test_no_query_means_no_strategy(self):
+        from memeradar.api.pipeline import _fast_intent
+
+        assert _fast_intent("", "vlm", []).strategies == []

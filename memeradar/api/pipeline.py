@@ -310,11 +310,17 @@ def _persist_textless_sample(conn, classification: Classification, client_id: st
 
 
 def _fast_intent(query: str, source: str, labels: list[str]) -> IntentResult:
-    """快速模式的極簡意圖：單一策略（query 為 OCR 文字或 CLIP 標籤）；無 query 則無策略。"""
+    """快速模式的極簡意圖：單一策略（query 為 OCR 文字或小 VLM 標籤）；無 query 則無策略。
+
+    rationale 會進 rerank 的 prompt，所以必須誠實描述 query 是怎麼來的。原本這裡比對的是
+    ``source == "nvclip"``，但 NV-CLIP 早已下線、source 只可能是 text / ocr / vlm——沒字圖
+    那條因此掉進 else，說明變成「OCR 文字直接語意檢索」，而它正是因為**沒有** OCR 文字才
+    走到那裡的（2026-08-01 修）。
+    """
     strategies: list[StrategyPlan] = []
     if query:
-        if source == "nvclip":
-            name, rationale = "快速情緒", "NV-CLIP 圖片情緒／類別：" + "、".join(labels)
+        if source == "vlm":
+            name, rationale = "快速情緒", "沒字圖，由小 VLM 判讀情緒／類別：" + "、".join(labels)
         else:
             name, rationale = "快速檢索", "OCR 文字直接語意檢索"
         strategies = [StrategyPlan(name=name, rationale=rationale, query=query)]
