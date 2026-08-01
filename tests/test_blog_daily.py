@@ -122,3 +122,47 @@ class TestResearchFailure:
         monkeypatch.setattr("memeradar.blog.daily.research_meme", lambda *a, **k: None)
         assert generate_for_day(deps, conn, day="2026-08-02") is None
         assert blog_repo.get_post_for_day(conn, "2026-08-02") is None
+
+
+class TestLongCallDoesNotHoldATransaction:
+    """調研要 30~60 秒；期間若還開著交易，PG 的 idle_in_transaction_session_timeout
+    （connect() 設 60s）會把連線砍掉，每日任務必死。
+
+    2026-08-02 首次實跑就是這樣掛的（IdleInTransactionSessionTimeout），所以把
+    「呼叫調研時連線必須不在交易中」釘成不變量。
+    """
+
+    def test_connection_is_idle_while_researching(self, env, monkeypatch):
+        from psycopg.pq import TransactionStatus
+
+        conn, deps, _ = env
+        deps.blog_vlm = object()
+        seen: list[int] = []
+
+        def fake_research(vlm, image, **kw):
+            seen.append(conn.info.transaction_status)
+            return _result()
+
+        monkeypatch.setattr("memeradar.blog.daily.research_meme", fake_research)
+        generate_for_day(deps, conn, day="2026-08-02")
+
+        assert seen and seen[0] == TransactionStatus.IDLE, (
+            "呼叫調研前必須先 commit，否則連線會閒置在交易中被 PG 砍掉"
+        )
+
+    def test_usage_is_still_recorded_after_research(self, env, monkeypatch):
+        """用量紀錄改成調研後補寫，不能因此就不寫了——成本追蹤靠它。"""
+        conn, deps, _ = env
+        deps.blog_vlm = object()
+
+        def fake_research(vlm, image, **kw):
+            kw["log"]({"key_id": "k", "model": "m", "task": "research", "meme_id": None,
+                       "status": "ok", "latency_ms": 1000, "prompt_tokens": 10,
+                       "completion_tokens": 20, "error": None})
+            return _result()
+
+        monkeypatch.setattr("memeradar.blog.daily.research_meme", fake_research)
+        generate_for_day(deps, conn, day="2026-08-02")
+
+        n = conn.execute("SELECT COUNT(*) AS n FROM vlm_calls WHERE task='research'").fetchone()
+        assert n["n"] == 1

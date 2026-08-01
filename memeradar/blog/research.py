@@ -24,7 +24,10 @@ from memeradar.shared.imaging import downscale_for_vlm
 from memeradar.shared.prompt_lang import OUTPUT_ZH_TW
 
 RESEARCH_PROMPT_VERSION = "research-v1"
-MAX_OUTPUT_TOKENS = 4000
+# sonnet 開著 thinking（調研需要推理，不像標註可以關掉），推理會吃掉輸出預算：
+# 2026-08-02 實測 out=3572 之中正文只有 ~1200 字元，其餘全是 reasoning。4000 太緊，
+# 首次實跑就被截斷成半截 JSON。
+MAX_OUTPUT_TOKENS = 8000
 #: 網路搜尋抓幾筆。PoC 實測 5 筆時 sonnet 單次 input 曾衝到 75k tokens（$0.23 一篇），
 #: 搜尋結果整包塞進 context 是成本主因。3 筆足夠佐證，貴的那 2 筆通常是雜訊。
 WEB_MAX_RESULTS = 3
@@ -82,7 +85,22 @@ def build_system_prompt() -> str:
 繁體中文、250~450 字、口語但有考據感。只陳述你有把握的事；沒把握的一律不要寫進去。
 不要寫「根據網路資料顯示」這種空話，要嘛講清楚出處，要嘛承認查不到。
 
-只輸出一個 JSON 物件，不要圍欄。""" + OUTPUT_ZH_TW
+## 輸出格式
+
+只輸出一個 JSON 物件，不要圍欄、不要多餘文字。**欄位名稱必須完全照下面寫，不可自創**：
+
+- verdict：字串，"identified" / "partial" / "unknown" 三選一
+- origin：物件，五個字串欄位 work（作品名）、year（年份）、scene（橋段）、
+  characters（角色/人物）、region（地區或語系）。不確定的欄位給空字串，不要省略欄位。
+- caption_is_original：true / false / null——圖上的文字是否為原作品台詞
+- caption_note：字串，說明圖上文字的來歷（原台詞／二創／改編／不明）
+- sources：物件陣列，每個含 title（標題）、url（實際查到的真實網址）、
+  supports（這個來源支撐了文中哪一句話）。查不到就給空陣列 []
+- confidence：0~1 的數字，整體考據信心
+- unverified_claims：字串陣列，你想講但查不到證據的事。沒有就給 []
+- title：字串，文章標題 20 字內，不要標題農場口吻
+- article_html：字串，繁體中文短文 250~450 字，可用 <p><h3><strong> 等基本標籤
+""" + OUTPUT_ZH_TW
 
 
 def build_user_text(*, ocr_text: str, description: str, franchise: str | None) -> str:

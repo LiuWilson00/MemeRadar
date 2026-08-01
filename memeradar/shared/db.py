@@ -108,3 +108,26 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def ensure_live(conn, *, connect_fn=None):
+    """回傳一條活著的連線；原本那條若已斷就重連。
+
+    長時間不碰 DB 的階段（大批回填翻頁、每日一梗的調研呼叫）之後必須先過這一關。
+    兩種死法都要擋：連線被對端斷掉，以及**閒置在交易中**被
+    ``idle_in_transaction_session_timeout``（connect() 設 60s）主動砍掉。
+    後者尤其陰險：呼叫端以為只是「慢」，實際上連線已經沒了。
+
+    2026-07-30：3000 筆回填因此全軍覆沒（重複 2099 / 失敗 901 / 入庫 0）。
+    2026-08-02：每日一梗的調研要跑 30~60 秒，若期間還開著交易則必死——所以呼叫端除了
+    用這個函式，更要在長呼叫**之前** commit，讓連線是 idle 而非 idle-in-transaction。
+    """
+    if connect_fn is None:
+        connect_fn = connect
+    try:
+        if not getattr(conn, "closed", False):
+            conn.execute("SELECT 1")
+            return conn
+    except Exception:  # noqa: BLE001 連線已死 → 重連
+        pass
+    return connect_fn()

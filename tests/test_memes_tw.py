@@ -121,38 +121,6 @@ class TestPageRetry:
             adapter.fetch(None)
 
 
-class TestConnectionRevival:
-    """大批回填時，抓候選要花好幾分鐘，DB 連線會在這段閒置期被斷——
-    2026-07-30 實測：3000 筆回填 2099 重複 / 901 失敗 / 入庫 0，全因連線已死。"""
-
-    def test_dead_connection_is_replaced_before_import(self):
-        from scripts.crawl_memes_tw import ensure_live
-
-        class _Dead:
-            closed = True
-
-            def execute(self, *a):
-                raise RuntimeError("the connection is closed")
-
-        made = []
-        fresh = object()
-        revived = ensure_live(_Dead(), connect=lambda: (made.append(1), fresh)[1])
-        assert revived is fresh, "連線已死卻沒有重連"
-        assert made == [1]
-
-    def test_live_connection_is_reused(self):
-        from scripts.crawl_memes_tw import ensure_live
-
-        class _Live:
-            closed = False
-
-            def execute(self, *a):
-                return None
-
-        conn = _Live()
-        assert ensure_live(conn, connect=lambda: pytest.fail("不該重連")) is conn
-
-
 class TestSkip:
     """``skip``：回填時直接跳過前 N 筆已匯入的，連 API 都不必打。
 

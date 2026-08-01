@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from memeradar.blog import repository as blog_repo
 from memeradar.blog.research import research_meme, should_auto_publish
 from memeradar.blog.selection import MemeCandidate, pick_for_day
+from memeradar.shared.db import ensure_live
 from memeradar.shared.models import new_id
 
 logger = logging.getLogger("memeradar.blog")
@@ -116,12 +117,26 @@ def generate_for_day(deps, conn, *, day: str | None = None, force: bool = False)
     settings = get_settings()
     logger.info("[blog] %s 選中 %s（score=%.3f %s）開始調研",
                 day, meme_id, picked.score, picked.breakdown)
+
+    # ⚠️ 調研要跑 30~60 秒（含網路搜尋），這段期間**不能開著交易**：connect() 設了
+    # idle_in_transaction_session_timeout=60s，PG 會直接把連線砍掉，整個每日任務必死
+    # （2026-08-02 首次實跑就是這樣掛的：IdleInTransactionSessionTimeout）。
+    # 先 commit 讓連線只是 idle；vlm_calls 的紀錄先進記憶體，等調研回來再一起寫。
+    conn.commit()
+    call_log: list[dict] = []
     result = research_meme(
         deps.blog_vlm, image,
         ocr_text=annotation.ocr_text, description=annotation.description,
         franchise=annotation.franchise, meme_id=meme_id,
-        log=lambda rec: repo.insert_vlm_call(conn, rec),
+        log=call_log.append,
     )
+    conn = ensure_live(conn)  # 調研期間連線仍可能被對端斷掉
+    for rec in call_log:
+        try:
+            repo.insert_vlm_call(conn, rec)
+        except Exception:  # noqa: BLE001 用量紀錄失敗不該讓文章生不出來
+            logger.warning("[blog] vlm_calls 寫入失敗，略過該筆用量紀錄")
+    conn.commit()
     if result is None:
         logger.warning("[blog] %s 調研失敗（模型未回可解析的 JSON），今天不產文", day)
         return None

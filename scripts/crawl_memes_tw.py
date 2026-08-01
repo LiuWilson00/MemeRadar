@@ -37,24 +37,7 @@ def _download(url: str, *, timeout: float = 20.0) -> bytes:
     return resp.content
 
 
-def ensure_live(conn, *, connect=None):
-    """回傳一條活著的連線；原本那條若已斷就重連。
-
-    抓候選（大批回填時可能翻上百頁、數分鐘）期間連線是閒置的，很容易被 Zeabur/PG 端斷掉。
-    2026-07-30 實測：3000 筆回填因此全軍覆沒（重複 2099 / 失敗 901 / 入庫 0），
-    最後還崩在 set_watermark 的 "connection is closed"。
-    """
-    if connect is None:
-        from memeradar.shared.db import connect as connect
-
-    try:
-        if not getattr(conn, "closed", False):
-            conn.execute("SELECT 1")
-            return conn
-    except Exception:  # noqa: BLE001 連線已死 → 重連
-        pass
-    return connect()
-
+from memeradar.shared.db import ensure_live  # noqa: E402
 
 # 向量化的 checkpoint。標註是每張即 commit，但向量化要主緒批次做，所以這個數字就是
 # 「被中途砍掉時最多有幾張會停在標註好但沒向量」——那種圖永久搜不到。25 太大了：
