@@ -30,6 +30,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CURSOR = ROOT / "data" / "backfill_cursor.json"
+#: 同一段連續失敗幾次就跳過。memes.tw 有固定回 500 的頁（如 page 504），
+#: 無上限重試會讓整趟回填卡在原地空轉。
+MAX_SEGMENT_RETRIES = 3
 
 
 def _load_cursor(start: int) -> int:
@@ -70,6 +73,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"回填 memes.tw：深度 {depth} → {args.target_depth}，每段 {args.chunk} 張、"
           f"{args.workers} 緒。中斷後重跑同一指令即可續跑。\n")
     processed = 0
+    fails = 0
+    skipped: list[int] = []
     t_all = time.perf_counter()
     while depth < args.target_depth and processed < args.max_images:
         chunk = min(args.chunk, args.target_depth - depth)
@@ -85,11 +90,25 @@ def main(argv: list[str] | None = None) -> int:
         el = time.perf_counter() - t0
         if result.returncode != 0:
             # 單段失敗（多半是 memes.tw 逾時）不該讓整趟停：退避後重試同一段。
-            print(f"  ⚠ 深度 {depth} 這段失敗（{el:.0f}s），30 秒後重試："
-                  f"{(result.stderr or '').strip().splitlines()[-1:] or ['(無 stderr)']}",
-                  flush=True)
-            time.sleep(30)
+            # 但**不能無限重試**——memes.tw 有些頁是固定回 500 的（2026-08-02：page 504
+            # 每次都 500），那種段落重試幾次都一樣，會把整趟回填卡死在原地空轉。
+            # 重試上限到了就跳過該段、把游標推進，並大聲記下來。
+            fails += 1
+            tail_err = (result.stderr or "").strip().splitlines()[-1:] or ["(無 stderr)"]
+            if fails < MAX_SEGMENT_RETRIES:
+                print(f"  ⚠ 深度 {depth} 失敗（{el:.0f}s，第 {fails} 次），30 秒後重試："
+                      f"{tail_err[0][:120]}", flush=True)
+                time.sleep(30)
+                continue
+            print(f"  ⏭ 深度 {depth}→{depth + chunk} 連續失敗 {fails} 次，跳過這一段："
+                  f"{tail_err[0][:120]}", flush=True)
+            skipped.append(depth)
+            depth += chunk
+            processed += chunk
+            fails = 0
+            _save_cursor(depth)
             continue
+        fails = 0
         print(f"  深度 {depth:>6} → {depth + chunk:<6} {el:>5.0f}s  "
               f"{tail[0].strip() if tail else '(無摘要)'}", flush=True)
         depth += chunk
