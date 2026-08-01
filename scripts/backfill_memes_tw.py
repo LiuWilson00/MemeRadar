@@ -119,6 +119,14 @@ def main(argv: list[str] | None = None) -> int:
     done = depth >= args.target_depth
     print(f"\n{'✅ 已達目標深度' if done else '⏸ 本次到此'} {depth}／{args.target_depth}，"
           f"本次處理 {processed} 張、耗時 {mins:.0f} 分。")
+    if skipped:
+        # 靜靜跳過等於謊報覆蓋率：跑完顯示「已達目標深度」，實際上中間有洞。
+        # 一定要把起始深度印出來，日後才知道要補哪幾段。
+        print(f"   ⚠ 有 {len(skipped)} 段連續失敗被跳過，"
+              f"共約 {len(skipped) * args.chunk} 張沒抓到。")
+        print(f"     起始深度：{skipped}")
+        print(f"     單獨補跑：python scripts/backfill_memes_tw.py --start-depth <深度> "
+              f"--target-depth <深度+{args.chunk}> --reset")
     if not done:
         print("   續跑：重新執行同一條指令即可（游標已存 data/backfill_cursor.json）。")
     return 0
