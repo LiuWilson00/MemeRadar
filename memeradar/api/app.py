@@ -57,6 +57,7 @@ from memeradar.api.schemas import (
     ReviewAnnotationRequest,
     UploadMemeRequest,
 )
+from memeradar.blog import repository as blog_repo
 from memeradar.ingestion.dedup import merge_duplicate_into
 from memeradar.ingestion.seed_import import import_image_bytes
 from memeradar.matching.intent import IntentRefusedError
@@ -118,6 +119,11 @@ class Deps:
     # 線上推薦（意圖/rerank）專用的「快速失敗」VLM：短逾時、不等冷卻，卡住就退 fallback，
     # 不讓一次慢搜尋把 API worker/連線占死。None 時退用 vlm（測試/相容）。
     online_vlm: Any = None
+    # 每日一梗調研專用的 VLM：貴模型 + 開網路搜尋 + 長逾時（見 blog/research.py）。
+    # 與 vlm 分開，避免每天一次的昂貴呼叫用到標註那組設定。None = 停用每日一梗。
+    blog_vlm: Any = None
+    # 是否啟動每日一梗排程執行緒；測試預設關（不要跑去花錢）。
+    enable_blog_worker: bool = False
 
 
 logger = logging.getLogger("memeradar.api")
@@ -159,9 +165,20 @@ def _default_deps() -> Deps:
         anon_daily_quota=settings.anon_daily_quota,
         user_upload_daily_quota=settings.user_upload_daily_quota,
         enable_annotation_worker=True,
+        blog_vlm=_build_blog_vlm(settings),
+        enable_blog_worker=settings.blog_daily_enabled,
         ocr=ocr,
         classifier=classifier,
     )
+
+
+def _build_blog_vlm(settings):
+    """每日一梗的調研 client；沒有 key 就回 None（功能靜靜關掉，不讓 API 起不來）。"""
+    if not settings.vlm_keys():
+        return None
+    from memeradar.blog.research import build_research_vlm
+
+    return build_research_vlm()
 
 
 def _build_fast_clients(settings, vlm):
@@ -204,6 +221,9 @@ def _is_public(method: str, path: str) -> bool:
         return True
     # 分享頁 /m/{id}（OG 預覽 + 導向）：公開（僅 GET）
     if method == "GET" and re.match(r"^/m/[^/]+$", path) is not None:
+        return True
+    # 每日一梗專欄：列表與單篇公開（僅 GET）。草稿/發布/退稿走 /admin/blog/*，不在此列。
+    if method == "GET" and re.match(r"^/blog(/[^/]+)?$", path) is not None:
         return True
     # 檢舉：前台任何人都能檢舉一張梗圖（僅 POST）
     if method == "POST" and re.match(r"^/memes/[^/]+/report$", path) is not None:
@@ -450,6 +470,32 @@ def _annotation_worker(deps: Deps) -> None:
         time.sleep(1.0 if did else 8.0)  # 有活就快點跑；沒活就緩一緩
 
 
+def _blog_daily_worker(deps: Deps) -> None:
+    """常駐執行緒：確保「今天有一篇每日一梗」。
+
+    Zeabur 沒有內建 cron，所以排程做在 process 內。每小時醒一次而不是每天算到午夜——
+    重啟、部署、當機都可能錯過那一刻，每小時檢查一次就自然補上，冪等由
+    blog_posts.featured_on 保證（同一天不會產第二篇，也就不會重複付費）。
+    """
+    from memeradar.blog.daily import generate_for_day
+
+    conn = None
+    while True:
+        try:
+            if conn is None or conn.closed:
+                conn = connect(deps.db_path)
+            generate_for_day(deps, conn)
+        except Exception:  # noqa: BLE001 出錯就丟掉連線重來，別讓執行緒掛掉
+            logger.exception("[blog] 每日一梗產文失敗，一小時後重試")
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                conn = None
+        time.sleep(3600.0)
+
+
 def _check_basic_auth(header: str | None, user: str, password: str) -> bool:
     import binascii
     import secrets
@@ -543,6 +589,9 @@ def create_app(deps: Deps | None = None) -> FastAPI:
     # 背景標註 worker：大量匯入時「先入庫、標註丟背景」，這條常駐執行緒慢慢消化佇列。
     if deps.enable_annotation_worker:
         threading.Thread(target=_annotation_worker, args=(deps,), daemon=True).start()
+    # 每日一梗：要有調研 client 才啟動（沒設 key 就安靜不跑，不要每小時噴例外）
+    if deps.enable_blog_worker and deps.blog_vlm is not None:
+        threading.Thread(target=_blog_daily_worker, args=(deps,), daemon=True).start()
 
     app = FastAPI(title="MemeRadar API", version="0.1.0")
 
@@ -888,6 +937,84 @@ def create_app(deps: Deps | None = None) -> FastAPI:
     def list_chat_feedback(limit: int = 200, conn: psycopg.Connection = Depends(get_conn)):
         """後台：梗友回覆評價（新到舊），供優化選圖。"""
         return repo.list_chat_feedback(conn, limit=min(max(1, limit), 500))
+
+    # ── 每日一梗專欄（docs：blog）────────────────────────────────────
+    # 公開：列表 + 單篇。後台：草稿審核、發布/退稿、手動產文。
+    # 「公開的只看得到 published」這條線由 list/get 各自把關，不靠 middleware。
+
+    def _public_post(post: dict) -> dict:
+        """公開版：拿掉只有審核者需要的欄位（未證實清單不該給讀者當事實看）。"""
+        return {
+            k: post[k] for k in (
+                "slug", "meme_id", "title", "article_html", "verdict", "confidence",
+                "origin", "caption_is_original", "caption_note", "sources",
+                "featured_on", "published_at",
+            ) if k in post
+        }
+
+    @app.get("/blog")
+    def list_blog(limit: int = 30, offset: int = 0,
+                  conn: psycopg.Connection = Depends(get_conn)):
+        """已發布的每日一梗（新到舊）。列表不夾帶全文，省流量。"""
+        posts = blog_repo.list_posts(conn, status="published",
+                                     limit=min(limit, 100), offset=offset)
+        return [
+            {"slug": p["slug"], "meme_id": p["meme_id"], "title": p["title"],
+             "featured_on": p["featured_on"], "published_at": p["published_at"],
+             "origin": p["origin"], "verdict": p["verdict"]}
+            for p in posts
+        ]
+
+    @app.get("/blog/{slug}")
+    def get_blog(slug: str, conn: psycopg.Connection = Depends(get_conn)):
+        post = blog_repo.get_post_by_slug(conn, slug)
+        if post is None or post["status"] != "published":
+            raise HTTPException(status_code=404, detail="文章不存在")
+        return _public_post(post)
+
+    @app.get("/admin/blog")
+    def admin_list_blog(status: str | None = None, limit: int = 50,
+                        conn: psycopg.Connection = Depends(get_conn)):
+        """後台：全部文章（含草稿），審核列表用。"""
+        return blog_repo.list_posts(conn, status=status, limit=min(limit, 200))
+
+    @app.post("/admin/blog/{post_id}/status")
+    def admin_set_blog_status(post_id: str, body: dict,
+                              conn: psycopg.Connection = Depends(get_conn)):
+        """審核：published / draft / rejected。"""
+        status = (body or {}).get("status")
+        if status not in ("published", "draft", "rejected"):
+            raise HTTPException(status_code=422, detail="status 必須為 published/draft/rejected")
+        post = blog_repo.set_status(conn, post_id, status)
+        if post is None:
+            raise HTTPException(status_code=404, detail="文章不存在")
+        return post
+
+    @app.put("/admin/blog/{post_id}")
+    def admin_edit_blog(post_id: str, body: dict,
+                        conn: psycopg.Connection = Depends(get_conn)):
+        """人工修訂標題／內文（調研欄位不動，那是模型的原始輸出，要留著對照）。"""
+        post = blog_repo.update_content(
+            conn, post_id, title=(body or {}).get("title"),
+            article_html=(body or {}).get("article_html"))
+        if post is None:
+            raise HTTPException(status_code=404, detail="文章不存在")
+        return post
+
+    @app.post("/admin/blog/generate")
+    def admin_generate_blog(body: dict | None = None,
+                            conn: psycopg.Connection = Depends(get_conn)):
+        """手動產出某天的文章（排程之外的補救/預覽）。force=true 才會重複付費。"""
+        from memeradar.blog.daily import generate_for_day
+
+        if deps.blog_vlm is None:
+            raise HTTPException(status_code=503, detail="未設定調研模型（缺 OPENROUTER_API_KEY）")
+        body = body or {}
+        post = generate_for_day(deps, conn, day=body.get("day"),
+                                force=bool(body.get("force")))
+        if post is None:
+            raise HTTPException(status_code=409, detail="沒有可用候選梗圖，或調研失敗")
+        return post
 
     @app.get("/gallery")
     def gallery(client_id: str = "", seed: str = "", offset: int = 0, limit: int = 24,

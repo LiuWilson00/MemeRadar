@@ -13,13 +13,17 @@ import os
 import pytest
 from testcontainers.postgres import PostgresContainer
 
-# 依外鍵順序無關；TRUNCATE ... CASCADE 一次清空
-_TABLES = (
-    "memes, meme_annotations, embeddings, meme_sources, recommendation_logs, "
-    "feedback_events, dedup_reviews, vlm_calls, tasks, settings, crawl_state, crawl_health, "
-    "events, users, meme_likes, meme_comments, client_errors, bug_reports, textless_samples, "
-    "meme_favorites"
-)
+# 清空清單改成向 DB 問，不再手寫維護：漏掉一張表不會報錯，只會讓測試之間**默默共用資料**，
+# 症狀是「單獨跑會過、整包跑就掛」這種最難查的假失敗（2026-08-02 新增 blog_posts 時中招）。
+_SKIP_TABLES = {"alembic_version"}
+
+
+def _all_tables(conn) -> str:
+    rows = conn.execute(
+        "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+    ).fetchall()
+    names = sorted(r["tablename"] for r in rows if r["tablename"] not in _SKIP_TABLES)
+    return ", ".join(names)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -32,6 +36,12 @@ def _pg_test_db():
         os.environ["DATABASE_URL"] = url
         # 測試用維度不一的小向量 → 跳過「固定 1024 維 + HNSW」遷移（那純為正式效能優化）
         os.environ["MEMERADAR_SKIP_VECTOR_INDEX"] = "1"
+        # 開發者 .env 裡的**真** R2 憑證會被 Settings 讀進來，於是 load_meme_image_bytes
+        # 走 R2 分支、對正式 bucket 撈測試造的假 meme_id → NoSuchKey，整批圖片相關測試
+        # 在有 .env 的機器上紅、在 CI 上綠。測試一律不碰外部物件儲存。
+        for var in ("R2_ACCOUNT_ID", "R2_BUCKET", "R2_ACCESS_KEY_ID",
+                    "R2_SECRET_ACCESS_KEY", "R2_PUBLIC_BASE_URL"):
+            os.environ[var] = ""
 
         from memeradar.shared.config import get_settings
         from memeradar.shared.db import close_pool, ensure_schema
@@ -49,7 +59,7 @@ def _clean_tables(_pg_test_db):
     from memeradar.shared.db import connect
 
     conn = connect()
-    conn.execute(f"TRUNCATE {_TABLES} RESTART IDENTITY CASCADE")
+    conn.execute(f"TRUNCATE {_all_tables(conn)} RESTART IDENTITY CASCADE")
     conn.commit()
     conn.close()
     yield

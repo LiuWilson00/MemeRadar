@@ -1,5 +1,7 @@
 """P4-1 測試：回饋報表聚合（規格：docs/05 §2.2、docs/06 §3.6、docs/04 §6）。"""
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from memeradar.shared import repository as repo
@@ -171,7 +173,9 @@ class TestDashboard:
             query_id=new_id("q"), conversation=[{"speaker": "other", "text": "x"}],
             params_snapshot={"params": {}}, client_id="c_1",
             timings={"intent": 100, "retrieval": 10, "rerank": 200, "total": 310},
-            created_at="2026-07-14T10:00:00+00:00",
+            # 相對日期：儀表板只統計最近 14 天，寫死日期總有一天會走出視窗
+            # （2026-08-02 就是這樣掛的：原本寫死 2026-07-14，19 天前）。
+            created_at=(datetime.now(UTC) - timedelta(days=1)).isoformat(),
         )
         repo.insert_recommendation_log(conn, log)
         feedback(conn, log, m, rating="up")

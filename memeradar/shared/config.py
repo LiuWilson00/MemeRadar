@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     #   意圖分析 27.8s → 1.85s（15 倍）、看圖 12.0s → 6.4s，輸出 token 砍半，JSON 正確率不變。
     # 這是延遲問題的真正解——先前以為是供應商壅塞，其實是在等我們不需要的推理。
     vlm_disable_reasoning: bool = True
+    # 每日一梗的調研模型。這是全站唯一刻意用貴模型的地方：2026-08-01 PoC 實測，
+    # 便宜模型查不到出處時會編出具體片名/年份/演員，且彼此矛盾；sonnet 是唯一肯回
+    # unknown 的。每天一篇約 $0.08~0.23，月成本 ~$4.7——寫錯考據的代價比這高得多。
+    blog_research_model: str = "anthropic/claude-sonnet-5"
+    # 自動發布門檻：verdict=identified 且信心達標才直接上線，否則進草稿等人工複核。
+    blog_auto_publish_min_confidence: float = 0.6
+    # 每日一梗排程：0 = 關閉（本機開發預設不要自己跑去花錢）
+    blog_daily_enabled: bool = False
     # 後台（admin console）登入：env 帳密；兩者皆填才啟用（空 = 不設防，方便 dev）
     admin_username: str = ""
     admin_password: str = ""

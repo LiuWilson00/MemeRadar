@@ -91,9 +91,18 @@ class TestMigration:
         } <= names
 
     def test_migrate_is_idempotent(self, conn):
-        migrate(conn)  # 重跑不應報錯（Alembic 已在 head 時為 no-op）
+        """重跑不應報錯（Alembic 已在 head 時為 no-op），且確實停在 head。
+
+        head 版本號向 Alembic 問，不寫死：寫死的話每加一個 migration 就要來改這裡一次，
+        而那個失敗看起來像「遷移壞了」，其實只是測試過期（2026-08-02 加 blog_posts 時中招）。
+        """
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        migrate(conn)
         version = conn.execute("SELECT version_num FROM alembic_version").fetchone()
-        assert version["version_num"] == "0013_task_error_detail"  # 最新 head
+        head = ScriptDirectory.from_config(Config("alembic.ini")).get_current_head()
+        assert version["version_num"] == head
 
     def test_migrate_does_not_disable_app_loggers(self):
         """遷移是在 API process 內跑的：alembic env.py 的 fileConfig 若用預設

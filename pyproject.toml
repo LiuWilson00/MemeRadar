@@ -73,6 +73,7 @@ extend-immutable-calls = ["fastapi.Depends"]
 "memeradar/matching/intent.py" = ["E501"]
 "memeradar/matching/rerank.py" = ["E501"]
 "memeradar/matching/screenshot.py" = ["E501"]
+"memeradar/blog/research.py" = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
