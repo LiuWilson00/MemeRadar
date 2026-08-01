@@ -1,6 +1,7 @@
 import { AlertTriangle, LogOut } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import AdminGate, { logout } from "./components/AdminGate";
+import BlogView from "./components/BlogView";
 import BugReportsView from "./components/BugReportsView";
 import ChatFeedbackView from "./components/ChatFeedbackView";
 import ClientErrorsView from "./components/ClientErrorsView";
@@ -28,6 +29,7 @@ type Tab =
   | "library"
   | "upload"
   | "review"
+  | "blog"
   | "reports"
   | "report"
   | "chatfb"
@@ -41,6 +43,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "library", label: "梗圖庫" },
   { id: "upload", label: "上傳" },
   { id: "review", label: "複核" },
+  { id: "blog", label: "每日一梗" },
   { id: "reports", label: "檢舉" },
   { id: "report", label: "報表" },
   { id: "chatfb", label: "梗友回饋" },
@@ -160,6 +163,7 @@ export default function App() {
         <UploadView onDone={() => fetchMeta().then(setMeta).catch(() => {})} />
       )}
       {tab === "review" && <ReviewView meta={meta} />}
+      {tab === "blog" && <BlogView />}
       {tab === "reports" && <ReportsView />}
       {tab === "report" && <ReportView />}
       {tab === "chatfb" && <ChatFeedbackView />}

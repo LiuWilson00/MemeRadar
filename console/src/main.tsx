@@ -22,6 +22,7 @@ if (typeof window !== "undefined") {
   });
 }
 import { useRoute } from "./lib/router";
+import BlogScreen from "./blog/BlogScreen";
 import MobileApp from "./mobile/MobileApp";
 
 /** 單一 SPA 入口：路徑決定前台 / 後台（取代原本 index.html + admin.html 雙入口）。
@@ -30,10 +31,20 @@ function Root() {
   const path = useRoute();
   const isAdmin = path.startsWith("/admin");
   const shareMatch = path.match(/^\/m\/([^/]+)$/); // 分享 deep-link /m/{id}
+  // 每日一梗專欄：/blog（列表）與 /blog/{slug}（單篇）。獨立閱讀頁，不掛底部導覽——
+  // 「讀文章」與「查梗圖回嘴」是兩種心態，共用導覽只會互相干擾。
+  const blogMatch = path === "/blog" || path.startsWith("/blog/")
+    ? path.replace(/^\/blog\/?/, "")
+    : null;
   useEffect(() => {
-    document.title = isAdmin ? "MemeRadar 後台" : "MemeRadar";
-  }, [isAdmin]);
+    document.title = isAdmin
+      ? "MemeRadar 後台"
+      : blogMatch !== null
+        ? "每日一梗 · MemeRadar"
+        : "MemeRadar";
+  }, [isAdmin, blogMatch]);
   if (isAdmin) return <App />;
+  if (blogMatch !== null) return <BlogScreen slug={blogMatch || null} />;
   // 設了 Client ID 才掛 Google 登入 provider；沒設（本地未設定）也能正常跑，只是不顯示登入。
   const app = <MobileApp initialMemeId={shareMatch?.[1] ?? null} />;
   return GOOGLE_CLIENT_ID ? (

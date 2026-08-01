@@ -27,6 +27,9 @@ import type {
   UploadResult,
   User,
   VlmUsageRow,
+  BlogSummary,
+  BlogPost,
+  BlogPostAdmin,
 } from "../types";
 import { getUserToken } from "./auth";
 import { getBreadcrumbs, logBreadcrumb } from "./breadcrumbs";
@@ -748,4 +751,60 @@ export async function parseScreenshot(imageBase64: string): Promise<ScreenshotPa
     body: JSON.stringify({ image: imageBase64 }),
   });
   return unwrap<ScreenshotParse>(response);
+}
+
+// ── 每日一梗專欄 ────────────────────────────────────────────────
+
+export async function fetchBlogList(limit = 30): Promise<BlogSummary[]> {
+  return unwrap<BlogSummary[]>(await apiFetch(`/blog?limit=${limit}`));
+}
+
+export async function fetchBlogPost(slug: string): Promise<BlogPost> {
+  return unwrap<BlogPost>(await apiFetch(`/blog/${encodeURIComponent(slug)}`));
+}
+
+/** 後台：全部文章（含草稿）。 */
+export async function fetchBlogAdmin(status?: string): Promise<BlogPostAdmin[]> {
+  const q = status ? `?status=${encodeURIComponent(status)}` : "";
+  return unwrap<BlogPostAdmin[]>(await apiFetch(`/admin/blog${q}`));
+}
+
+export async function setBlogStatus(
+  postId: string,
+  status: "published" | "draft" | "rejected",
+): Promise<BlogPostAdmin> {
+  return unwrap<BlogPostAdmin>(
+    await apiFetch(`/admin/blog/${encodeURIComponent(postId)}/status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    }),
+  );
+}
+
+export async function editBlogPost(
+  postId: string,
+  patch: { title?: string; article_html?: string },
+): Promise<BlogPostAdmin> {
+  return unwrap<BlogPostAdmin>(
+    await apiFetch(`/admin/blog/${encodeURIComponent(postId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }),
+  );
+}
+
+/** 後台：手動產出某天的文章。force 才會重複付費。 */
+export async function generateBlogPost(
+  day?: string,
+  force = false,
+): Promise<BlogPostAdmin> {
+  return unwrap<BlogPostAdmin>(
+    await apiFetch("/admin/blog/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ day, force }),
+    }),
+  );
 }

@@ -366,3 +366,46 @@ export interface AnnotationPatch {
   nsfw?: boolean;
   is_meme?: boolean;
 }
+
+/** 每日一梗專欄。調研欄位（verdict/sources/unverified_claims）是判斷可信度的依據，
+ * 公開 API 不回 unverified_claims——那是給審核者看的，讀者會誤當成內容。 */
+export interface BlogOrigin {
+  work: string;
+  year: string;
+  scene: string;
+  characters: string;
+  region: string;
+}
+
+export interface BlogSource {
+  title: string;
+  url: string;
+  supports: string;
+}
+
+export interface BlogSummary {
+  slug: string;
+  meme_id: string;
+  title: string;
+  featured_on: string | null;
+  published_at: string | null;
+  origin: BlogOrigin | null;
+  verdict: string | null;
+}
+
+export interface BlogPost extends BlogSummary {
+  article_html: string;
+  confidence: number | null;
+  caption_is_original: boolean | null;
+  caption_note: string | null;
+  sources: BlogSource[] | null;
+}
+
+/** 後台版：多帶審核用欄位。 */
+export interface BlogPostAdmin extends BlogPost {
+  post_id: string;
+  status: "draft" | "published" | "rejected";
+  unverified_claims: string[] | null;
+  model_version: string | null;
+  created_at: string;
+}
