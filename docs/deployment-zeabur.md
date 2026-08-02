@@ -192,6 +192,7 @@ API 端 Basic Auth 已做好、也測過（帳密對才放行）。缺的是後�
 | `DEEPINFRA_API_KEYS` | `…` | 備援供應商金鑰 |
 | `ANTHROPIC_API_KEY` | （選填，目前推薦路徑全 NVIDIA） | 未用可留空 |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | 自訂 | **兩者皆填**才啟用後台登入 |
+| `BOT_API_TOKENS` | 逗號分隔 | bot 專用憑證，**只開 `/recommend`**；bot 服務不必再握後台密碼 |
 | `CORS_ORIGINS` | `https://<frontend>.zeabur.app` | 見 §3.2 |
 | `PORT` | （Zeabur 注入，勿手設） | 容器須聽這個 |
 
@@ -410,3 +411,31 @@ Add Service → Deploy Docker Image → `ghcr.io/huggingface/text-embeddings-inf
   （自訂 start command **必須**接 `_startup`）。frontend 用 `{ "output_dir": "dist" }`。
 - **Zeabur Template（YAML）**：可把整個專案（3 服務 + Volume + 變數）宣告成一份 template 一鍵部署；
   欄位以 `zeabur.com/docs/en-US/template/template-format` 為準（版本間欄位拼法略有差異，提交前對照官方頁）。
+
+## 10. bot 專用憑證（`BOT_API_TOKENS`）
+
+兩支 bot（Telegram / Threads）需要打 `/recommend`，而那是後台端點。**不要**把
+`ADMIN_USERNAME:ADMIN_PASSWORD` 給 bot——bot 服務被攻破就等於整個後台被攻破，而它要的
+只是「查一張梗圖」。
+
+改用 bot 專用憑證：只開 `POST /recommend` 一個端點（見 `_BOT_ALLOWED`），拿去打
+`/vlm/usage`、`/settings/models`、`/admin/blog` 一律 401。
+
+**產生：**
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+**設定：**
+
+| 服務 | 變數 | 值 |
+|---|---|---|
+| api | `BOT_API_TOKENS` | 剛產生的那串（多把用逗號分隔） |
+| bot / threads | `MEMERADAR_BOT_TOKEN` | 同一串 |
+
+bot 端優先用 `MEMERADAR_BOT_TOKEN`，沒設才退回 `MEMERADAR_ADMIN`，所以可以先在 api 設好
+再逐一改各 bot，過程中不會斷線。全部切換完就把各 bot 服務的 `MEMERADAR_ADMIN` 刪掉。
+
+**換發**：`BOT_API_TOKENS` 支援多把並存 —— 先加新的（`舊,新`）、把 bot 改成新的、
+再把舊的從清單移除。全程零停機。

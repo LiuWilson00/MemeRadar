@@ -99,3 +99,44 @@ class TestFailuresAreDistinguishableFromEmptyResults:
         import memeradar.bot.app as bot
 
         assert bot.NO_MATCH_REPLY != bot.FAILURE_REPLY
+
+
+class TestBotTokenPreferredOverAdminPassword:
+    """有 bot 專用憑證就別再送後台管理員密碼——那正是這次要消滅的東西。"""
+
+    def _run(self, monkeypatch, cfg):
+        import memeradar.bot.app as bot
+        seen = {}
+
+        class Resp:
+            status_code = 200
+            text = ""
+            content = b"x"
+
+            def json(self):
+                return {"results": []}
+
+            def raise_for_status(self):
+                pass
+
+        def fake_post(url, **kw):
+            seen.update(auth=kw.get("auth"), headers=kw.get("headers"))
+            return Resp()
+
+        monkeypatch.setattr(bot.requests, "post", fake_post)
+        monkeypatch.setattr(bot.requests, "get", lambda *a, **k: Resp())
+        bot.recommend_meme(cfg, "在幹嘛")
+        return seen
+
+    def test_bot_token_used_and_admin_password_not_sent(self, monkeypatch):
+        seen = self._run(monkeypatch, {"api": "https://x", "admin": "boss:secret",
+                                       "bot_token": "tok-123"})
+        assert seen["headers"] == {"X-Bot-Token": "tok-123"}
+        assert seen["auth"] is None, "有 bot 憑證時不該再送 admin 帳密"
+
+    def test_falls_back_to_admin_when_no_bot_token(self, monkeypatch):
+        """換發期間舊部署還沒設 BOT_TOKEN，不能一改就斷線。"""
+        seen = self._run(monkeypatch, {"api": "https://x", "admin": "boss:secret",
+                                       "bot_token": ""})
+        assert seen["auth"] == ("boss", "secret")
+        assert seen["headers"] is None

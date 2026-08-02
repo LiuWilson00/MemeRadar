@@ -7,7 +7,8 @@
 環境變數：
   TELEGRAM_BOT_TOKEN       必填（@BotFather 給的）
   MEMERADAR_API            MemeRadar API base（預設公開網址；可改私網 http://api.zeabur.internal:8080）
-  MEMERADAR_ADMIN          "user:pass"，/recommend 的後台 Basic auth
+  MEMERADAR_BOT_TOKEN      bot 專用憑證（**建議用這個**；只開 /recommend）
+  MEMERADAR_ADMIN          "user:pass"；僅在沒設 BOT_TOKEN 時退回使用（權限過大）
   TELEGRAM_WEBHOOK_SECRET  webhook 驗證密鑰（Telegram 每次帶在 header；強烈建議設）
   PUBLIC_URL               本服務公開網址（Zeabur 給的 domain）；設了就啟動時自動 setWebhook
 
@@ -52,6 +53,8 @@ def _config() -> dict:
         "token": os.environ.get("TELEGRAM_BOT_TOKEN", ""),
         "api": os.environ.get("MEMERADAR_API", "https://memeradarapi.zeabur.app").rstrip("/"),
         "admin": os.environ.get("MEMERADAR_ADMIN", ""),
+        # bot 專用憑證：只開 /recommend。優先用它，不必再握後台管理員密碼。
+        "bot_token": os.environ.get("MEMERADAR_BOT_TOKEN", ""),
         "secret": os.environ.get("TELEGRAM_WEBHOOK_SECRET", ""),
         "public_url": os.environ.get("PUBLIC_URL", "").rstrip("/"),
     }
@@ -63,7 +66,10 @@ def recommend_meme(cfg: dict, context_text: str) -> RecommendOutcome:
     回 :class:`RecommendOutcome`，把「呼叫失敗」與「查無結果」分開——這兩件事對使用者
     和對維運的意義完全不同，不能共用一個 ``None``。
     """
-    auth = tuple(cfg["admin"].split(":", 1)) if cfg["admin"] else None
+    # 優先用 bot 專用憑證；沒設才退回 admin Basic（換發期間兩者都能通，不斷線）
+    headers = {"X-Bot-Token": cfg["bot_token"]} if cfg.get("bot_token") else None
+    auth = None if headers else (
+        tuple(cfg["admin"].split(":", 1)) if cfg["admin"] else None)
     body = {
         "input_type": "text",
         "conversation": [{"speaker": "other", "text": context_text[:500]}],
@@ -71,14 +77,18 @@ def recommend_meme(cfg: dict, context_text: str) -> RecommendOutcome:
         "client_id": "telegram-bot",
     }
     try:
-        resp = requests.post(f"{cfg['api']}/recommend", json=body, auth=auth, timeout=30)
+        resp = requests.post(f"{cfg['api']}/recommend", json=body,
+                             auth=auth, headers=headers, timeout=30)
     except requests.RequestException as exc:
         detail = f"連不上 API：{type(exc).__name__}"
         print(f"[recommend] {detail}", file=sys.stderr)
         return RecommendOutcome(failed=True, detail=detail)
     if resp.status_code != 200:
-        # 401 幾乎都是 MEMERADAR_ADMIN 沒設或不對——講明白，免得下次又要翻 log 猜
-        hint = "（檢查 MEMERADAR_ADMIN）" if resp.status_code == 401 else ""
+        # 401 幾乎都是憑證沒設或不對——點名**這次實際用的**那個變數，免得照著改錯的
+        hint = ""
+        if resp.status_code == 401:
+            hint = ("（檢查 MEMERADAR_BOT_TOKEN）" if headers
+                    else "（檢查 MEMERADAR_ADMIN）")
         detail = f"HTTP {resp.status_code}{hint}: {resp.text[:160]}"
         print(f"[recommend] {detail}", file=sys.stderr)
         return RecommendOutcome(failed=True, detail=detail)

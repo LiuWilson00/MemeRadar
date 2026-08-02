@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     # 後台（admin console）登入：env 帳密；兩者皆填才啟用（空 = 不設防，方便 dev）
     admin_username: str = ""
     admin_password: str = ""
+    # bot 專用憑證（逗號分隔，可多把以無縫換發）。只開 /recommend，不等於後台管理員。
+    # 產生方式：python -c "import secrets;print(secrets.token_urlsafe(32))"
+    bot_api_tokens: str = ""
     memeradar_data_dir: Path = Path("./data")
     # PostgreSQL 連線（libpq 格式）；本地開發用 docker-compose 起的 pgvector，
     # 上 prod 只換這條字串。圖檔仍存在 memeradar_data_dir/images 下（非 DB）。
@@ -126,6 +129,9 @@ class Settings(BaseSettings):
 
     def embedding_provider_list(self) -> list[str]:
         return [p.strip().lower() for p in self.embedding_providers.split(",") if p.strip()]
+
+    def bot_tokens(self) -> list[str]:
+        return self.csv_list("bot_api_tokens")
 
     def admin_auth_enabled(self) -> bool:
         return bool(self.admin_username and self.admin_password)

@@ -1977,3 +1977,69 @@ class TestContentRejectionDoesNotBlockTheQueue:
         assert repo.count_active_unannotated(conn) == 0, "佇列必須前進"
         assert repo.get_meme(conn, meme_id).status == "pending_review"
         conn.close()
+
+
+class TestBotToken:
+    """給 bot 專用的憑證：只開 /recommend，不等於後台管理員。
+
+    原本兩支 bot 都拿 ADMIN_USERNAME:ADMIN_PASSWORD 打 /recommend，等於 bot 服務握著
+    整個後台的完整權限——bot 被攻破就全站被攻破。bot 要的只是「查一張梗圖」。
+    """
+
+    def _deps(self, tmp_path, tokens=("bot-token-aaaaaaaaaaaaaaaaaaaa",)):
+        db_path = tmp_path / "db.sqlite3"
+        connect(db_path).close()
+        return Deps(
+            client=DualStubClient(), vlm=StubVlm(), embedder=FakeEmbedder(),
+            db_path=db_path, data_dir=tmp_path,
+            admin_username="boss", admin_password="secret",
+            bot_tokens=tuple(tokens),
+        )
+
+    def _body(self):
+        return {"input_type": "text", "fast_mode": True, "client_id": "telegram-bot",
+                "conversation": [{"speaker": "other", "text": "在幹嘛"}]}
+
+    def test_valid_bot_token_may_call_recommend(self, tmp_path):
+        client = TestClient(create_app(self._deps(tmp_path)))
+        r = client.post("/recommend", json=self._body(),
+                        headers={"X-Bot-Token": "bot-token-aaaaaaaaaaaaaaaaaaaa"})
+        assert r.status_code != 401
+
+    def test_bot_token_does_not_unlock_the_rest_of_the_admin_area(self, tmp_path):
+        """這是這個功能的重點：bot 憑證**只**開 /recommend。"""
+        client = TestClient(create_app(self._deps(tmp_path)))
+        h = {"X-Bot-Token": "bot-token-aaaaaaaaaaaaaaaaaaaa"}
+        for path in ("/vlm/usage", "/settings/models", "/report/dashboard", "/admin/blog"):
+            assert client.get(path, headers=h).status_code == 401, f"{path} 不該被 bot 憑證打開"
+
+    def test_wrong_token_is_rejected(self, tmp_path):
+        client = TestClient(create_app(self._deps(tmp_path)))
+        assert client.post("/recommend", json=self._body(),
+                           headers={"X-Bot-Token": "nope"}).status_code == 401
+
+    def test_feature_off_when_no_tokens_configured(self, tmp_path):
+        """沒設就是沒開——不能因為送了標頭就放行。"""
+        client = TestClient(create_app(self._deps(tmp_path, tokens=())))
+        assert client.post("/recommend", json=self._body(),
+                           headers={"X-Bot-Token": ""}).status_code == 401
+        assert client.post("/recommend", json=self._body(),
+                           headers={"X-Bot-Token": "anything"}).status_code == 401
+
+    def test_admin_basic_auth_still_works_on_recommend(self, tmp_path):
+        """相容：憑證換發期間舊 bot 還在用 admin 帳密，不能一改就斷線。"""
+        import base64
+        client = TestClient(create_app(self._deps(tmp_path)))
+        cred = base64.b64encode(b"boss:secret").decode()
+        r = client.post("/recommend", json=self._body(),
+                        headers={"Authorization": f"Basic {cred}"})
+        assert r.status_code != 401
+
+    def test_multiple_tokens_supported_for_rotation(self, tmp_path):
+        """換發要能無縫：新舊 token 同時有效一段時間。"""
+        deps = self._deps(tmp_path, tokens=("old-token-bbbbbbbbbbbbbbbbbbbb",
+                                            "new-token-cccccccccccccccccccc"))
+        client = TestClient(create_app(deps))
+        for tok in ("old-token-bbbbbbbbbbbbbbbbbbbb", "new-token-cccccccccccccccccccc"):
+            assert client.post("/recommend", json=self._body(),
+                               headers={"X-Bot-Token": tok}).status_code != 401

@@ -94,6 +94,9 @@ class Deps:
     data_dir: Path
     admin_username: str = ""  # 後台登入；空 = 不設防
     admin_password: str = ""
+    # bot 專用憑證（可多把，供無縫換發）。**只開 _BOT_ALLOWED 裡的端點**，不等於後台
+    # 管理員——原本兩支 bot 都拿 admin 帳密打 /recommend，等於 bot 被攻破就全站被攻破。
+    bot_tokens: tuple[str, ...] = ()
     cors_origins: tuple[str, ...] = ()  # 允許跨源的前端網域（本地留空＝走 vite proxy）
     r2_public_base_url: str = ""  # 有值 = 圖片改由 R2 CDN 服務（302 導向）
     frontend_base_url: str = "https://memeradar.zeabur.app"  # 分享頁 /m/{id} 導向的 SPA
@@ -148,6 +151,7 @@ def _default_deps() -> Deps:
         data_dir=settings.memeradar_data_dir,
         admin_username=settings.admin_username,
         admin_password=settings.admin_password,
+        bot_tokens=tuple(settings.bot_tokens()),
         cors_origins=tuple(settings.cors_origin_list()),
         r2_public_base_url=settings.r2_public_base_url,
         frontend_base_url=settings.frontend_base_url,
@@ -203,6 +207,20 @@ _PUBLIC_EXACT = {
     "/auth/google", "/auth/me", "/auth/nickname", "/library/memes", "/gallery",
     "/favorites", "/docs", "/openapi.json",
 }
+
+#: bot 憑證能打的端點（method, path）。**刻意只有推薦**：bot 要的就是查一張梗圖，
+#: 給多一個端點就多一分被攻破時的損失。加東西進來前先問「bot 真的需要嗎」。
+_BOT_ALLOWED = frozenset({("POST", "/recommend")})
+
+
+def _check_bot_token(header: str | None, tokens: tuple[str, ...]) -> bool:
+    """比對 bot 憑證。用 compare_digest 避免計時攻擊；沒設 token 就一律不通過。"""
+    import secrets
+
+    if not tokens or not header:
+        return False
+    return any(secrets.compare_digest(header, t) for t in tokens)
+
 
 # /events 接受的事件類型（白名單，防亂塞）
 _ALLOWED_EVENTS = {"download", "category", "search"}
@@ -663,7 +681,12 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         if deps.admin_username and deps.admin_password and request.method != "OPTIONS":
             if not _is_public(request.method, request.url.path):
                 header = request.headers.get("Authorization")
-                if not _check_basic_auth(header, deps.admin_username, deps.admin_password):
+                bot_ok = (
+                    (request.method, request.url.path) in _BOT_ALLOWED
+                    and _check_bot_token(request.headers.get("X-Bot-Token"), deps.bot_tokens)
+                )
+                if not bot_ok and not _check_basic_auth(
+                        header, deps.admin_username, deps.admin_password):
                     return JSONResponse(
                         {"detail": "需要後台登入"},
                         status_code=401,
