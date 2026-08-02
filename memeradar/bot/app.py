@@ -24,6 +24,28 @@ from fastapi import BackgroundTasks, FastAPI, Header, Request, Response
 
 TG_API = "https://api.telegram.org/bot{token}"
 
+#: 使用者看到的兩種結果必須分得出來。原本不管 401、500 還是查無結果都回同一句
+#: 「找不到合適的梗圖」，於是「後端掛了」跟「這句話沒有對應的梗」長得一模一樣——
+#: 2026-08-02 查 bot 故障時，後端明明健康，卻只能翻 Zeabur 的 stderr 才知道真正狀態碼。
+NO_MATCH_REPLY = "找不到合適的梗圖 😅 換句話再試？"
+FAILURE_REPLY = "我的梗圖雷達秀逗了 🛠️ 不是你的問題，等我一下再試。"
+
+
+class RecommendOutcome:
+    """區分三種結果：成功拿到圖 / 查無結果 / 呼叫失敗。
+
+    ``failed`` 才是「我們壞了」；``image is None and not failed`` 是「真的沒梗圖」。
+    ``detail`` 留技術細節（狀態碼、回應片段）給維運，不給使用者看。
+    """
+
+    __slots__ = ("image", "failed", "detail")
+
+    def __init__(self, image: bytes | None = None, *, failed: bool = False,
+                 detail: str | None = None):
+        self.image = image
+        self.failed = failed
+        self.detail = detail
+
 
 def _config() -> dict:
     return {
@@ -35,8 +57,12 @@ def _config() -> dict:
     }
 
 
-def recommend_meme(cfg: dict, context_text: str) -> bytes | None:
-    """把「對方講的話」當上下文 → 下載 top 梗圖 bytes；找不到回 None。"""
+def recommend_meme(cfg: dict, context_text: str) -> RecommendOutcome:
+    """把「對方講的話」當上下文 → 下載 top 梗圖 bytes。
+
+    回 :class:`RecommendOutcome`，把「呼叫失敗」與「查無結果」分開——這兩件事對使用者
+    和對維運的意義完全不同，不能共用一個 ``None``。
+    """
     auth = tuple(cfg["admin"].split(":", 1)) if cfg["admin"] else None
     body = {
         "input_type": "text",
@@ -44,16 +70,29 @@ def recommend_meme(cfg: dict, context_text: str) -> bytes | None:
         "fast_mode": True,  # 秒回；精準模式太慢不適合聊天
         "client_id": "telegram-bot",
     }
-    resp = requests.post(f"{cfg['api']}/recommend", json=body, auth=auth, timeout=30)
+    try:
+        resp = requests.post(f"{cfg['api']}/recommend", json=body, auth=auth, timeout=30)
+    except requests.RequestException as exc:
+        detail = f"連不上 API：{type(exc).__name__}"
+        print(f"[recommend] {detail}", file=sys.stderr)
+        return RecommendOutcome(failed=True, detail=detail)
     if resp.status_code != 200:
-        print(f"[recommend] HTTP {resp.status_code}: {resp.text[:160]}", file=sys.stderr)
-        return None
+        # 401 幾乎都是 MEMERADAR_ADMIN 沒設或不對——講明白，免得下次又要翻 log 猜
+        hint = "（檢查 MEMERADAR_ADMIN）" if resp.status_code == 401 else ""
+        detail = f"HTTP {resp.status_code}{hint}: {resp.text[:160]}"
+        print(f"[recommend] {detail}", file=sys.stderr)
+        return RecommendOutcome(failed=True, detail=detail)
     results = resp.json().get("results", [])
     if not results:
-        return None
-    img = requests.get(f"{cfg['api']}{results[0]['image_url']}?dl=1", timeout=30)
-    img.raise_for_status()
-    return img.content
+        return RecommendOutcome()  # 真的沒有適合的梗圖，不是故障
+    try:
+        img = requests.get(f"{cfg['api']}{results[0]['image_url']}?dl=1", timeout=30)
+        img.raise_for_status()
+    except requests.RequestException as exc:
+        detail = f"下載圖片失敗：{type(exc).__name__}"
+        print(f"[recommend] {detail}", file=sys.stderr)
+        return RecommendOutcome(failed=True, detail=detail)
+    return RecommendOutcome(img.content)
 
 
 def context_for(msg: dict, me: dict) -> str | None:
@@ -90,16 +129,16 @@ def process_update(cfg: dict, me: dict, update: dict) -> None:
     try:
         requests.post(f"{tg}/sendChatAction",
                       json={"chat_id": chat_id, "action": "upload_photo"}, timeout=20)
-        image = recommend_meme(cfg, context)
-        if image is None:
+        outcome = recommend_meme(cfg, context)
+        if outcome.image is None:
             requests.post(f"{tg}/sendMessage", timeout=20, json={
                 "chat_id": chat_id, "reply_to_message_id": reply_id,
-                "text": "找不到合適的梗圖 😅 換句話再試？"})
+                "text": FAILURE_REPLY if outcome.failed else NO_MATCH_REPLY})
             return
         requests.post(
             f"{tg}/sendPhoto", timeout=60,
             data={"chat_id": chat_id, "reply_to_message_id": reply_id},
-            files={"photo": ("meme.jpg", image)},
+            files={"photo": ("meme.jpg", outcome.image)},
         )
     except Exception as exc:  # noqa: BLE001 單則失敗不中斷服務
         print(f"[reply] {exc!r}", file=sys.stderr)

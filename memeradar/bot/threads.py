@@ -50,7 +50,26 @@ def _config() -> dict:
     }
 
 
-def recommend_meme_url(cfg: dict, context_text: str) -> str | None:
+class UrlOutcome:
+    """URL / 查無結果 / 呼叫失敗三態。
+
+    與 Telegram 版的 RecommendOutcome 各自定義而不共用：兩支 bot 是刻意獨立的輕量模組
+    （各自的映像只跑一支），為了八行程式互相 import 反而綁住彼此。
+
+    Threads 這邊**兩種情況都不回話**——公開版面上貼「我壞了」比安靜更糟。所以分辨的意義
+    在 log：維運要能一眼看出是「後端掛了」還是「這句話真的沒有對應的梗」。
+    """
+
+    __slots__ = ("url", "failed", "detail")
+
+    def __init__(self, url: str | None = None, *, failed: bool = False,
+                 detail: str | None = None):
+        self.url = url
+        self.failed = failed
+        self.detail = detail
+
+
+def recommend_meme_url(cfg: dict, context_text: str) -> UrlOutcome:
     """context → top 梗圖的「公開圖片網址」（R2）。Threads image_url 要能被 Meta 直接抓。"""
     auth = tuple(cfg["admin"].split(":", 1)) if cfg["admin"] else None
     body = {
@@ -59,20 +78,36 @@ def recommend_meme_url(cfg: dict, context_text: str) -> str | None:
         "fast_mode": True,
         "client_id": "threads-bot",
     }
-    resp = requests.post(f"{cfg['api']}/recommend", json=body, auth=auth, timeout=30)
+    try:
+        resp = requests.post(f"{cfg['api']}/recommend", json=body, auth=auth, timeout=30)
+    except requests.RequestException as exc:
+        detail = f"連不上 API：{type(exc).__name__}"
+        print(f"[recommend] {detail}", file=sys.stderr)
+        return UrlOutcome(failed=True, detail=detail)
     if resp.status_code != 200:
-        print(f"[recommend] HTTP {resp.status_code}: {resp.text[:160]}", file=sys.stderr)
-        return None
+        # 401 幾乎都是 MEMERADAR_ADMIN 沒設或不對——講明白，免得下次又要翻 log 猜
+        hint = "（檢查 MEMERADAR_ADMIN）" if resp.status_code == 401 else ""
+        detail = f"HTTP {resp.status_code}{hint}: {resp.text[:160]}"
+        print(f"[recommend] {detail}", file=sys.stderr)
+        return UrlOutcome(failed=True, detail=detail)
     results = resp.json().get("results", [])
     if not results:
-        return None
+        print("[recommend] 查無結果（不是故障）", file=sys.stderr)
+        return UrlOutcome()
     # 圖片端點會 302 導向 R2 公開網址；取 Location 當 image_url（別給 302 端點本身，Meta 不一定跟）
-    r = requests.get(f"{cfg['api']}{results[0]['image_url']}", allow_redirects=False, timeout=20)
+    try:
+        r = requests.get(f"{cfg['api']}{results[0]['image_url']}",
+                         allow_redirects=False, timeout=20)
+    except requests.RequestException as exc:
+        detail = f"取圖片轉址失敗：{type(exc).__name__}"
+        print(f"[recommend] {detail}", file=sys.stderr)
+        return UrlOutcome(failed=True, detail=detail)
     if r.status_code in (301, 302, 307, 308):
-        return r.headers.get("Location")
-    print(f"[recommend] 圖片端點沒 302（status={r.status_code}）——需 R2 公開網址才能貼 Threads",
-          file=sys.stderr)
-    return None
+        return UrlOutcome(r.headers.get("Location"))
+    detail = (f"圖片端點沒 302（status={r.status_code}）"
+              "——需 R2 公開網址才能貼 Threads（檢查 R2_PUBLIC_BASE_URL）")
+    print(f"[recommend] {detail}", file=sys.stderr)
+    return UrlOutcome(failed=True, detail=detail)
 
 
 def post_image_reply(cfg: dict, reply_to_id: str, image_url: str) -> None:
@@ -124,10 +159,14 @@ def process(cfg: dict, payload: dict) -> None:
         if not context:
             continue
         try:
-            image_url = recommend_meme_url(cfg, context)
-            if not image_url:
+            outcome = recommend_meme_url(cfg, context)
+            if outcome.url is None:
+                # 兩種都不回話（公開版面貼錯誤訊息更糟），但 log 要分得出是哪一種
+                print(f"[process] {post_id} 不回覆："
+                      f"{'呼叫失敗 → ' + (outcome.detail or '') if outcome.failed else '查無結果'}",
+                      file=sys.stderr)
                 continue
-            post_image_reply(cfg, post_id, image_url)
+            post_image_reply(cfg, post_id, outcome.url)
         except Exception as exc:  # noqa: BLE001 單則失敗不中斷
             print(f"[process] {exc!r}", file=sys.stderr)
 
